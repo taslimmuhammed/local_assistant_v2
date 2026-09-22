@@ -42,6 +42,10 @@ android {
         compose = true
     }
 
+    testOptions {
+        unitTests.isReturnDefaultValues = true
+    }
+
     packaging {
         resources.excludes += setOf(
             "/META-INF/{AL2.0,LGPL2.1}",
@@ -79,4 +83,6 @@ dependencies {
 
     // On-device LLM runtime.
     implementation(libs.litertlm.android)
+
+    testImplementation(libs.junit)
 }

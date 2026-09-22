@@ -71,11 +71,7 @@ fun AssistantMessage(
 ) {
     Column(modifier = modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp)) {
         SelectionContainer {
-            Text(
-                text = text,
-                style = MaterialTheme.typography.bodyLarge,
-                color = AppColors.TextPrimary,
-            )
+            MarkdownText(text)
         }
         if (incomplete) {
             Text(

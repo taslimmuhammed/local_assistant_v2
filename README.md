@@ -127,14 +127,37 @@ URLs, hashes, base64, long random IDs — and the loop is self-reinforcing once 
 | Sliding-window or summarised context | `LlmService.conversationFor` — it currently replays full history |
 | Tool / function calling | `ConversationConfig(tools = ...)` — LiteRT-LM has first-class support |
 | Images or audio in | `EngineConfig(visionBackend/audioBackend)` and `Content.ImageFile` etc. |
-| Markdown rendering | `ui/chat/ChatComponents.kt` — `AssistantMessage` is a plain `Text` today |
+| More Markdown (tables, images, nested quotes) | `ui/chat/Markdown.kt` — parser; `MarkdownText.kt` — renderer |
 | Download surviving process death | `ModelManager` runs on an app-scoped coroutine; promote to a foreground service |
+
+## Markdown rendering
+
+Model replies render through a small hand-written renderer in `ui/chat/Markdown.kt` (parser) and
+`ui/chat/MarkdownText.kt` (composables). Supported: `#`–`######` headings, `**bold**`, `*italic*`,
+`***both***`, `~~strikethrough~~`, `` `inline code` ``, fenced code blocks with a language label
+and a copy button, bullet and numbered lists with nesting, blockquotes, `---` rules, and
+`[links](url)`.
+
+It is hand-written rather than a library for one reason: it renders text that is **still
+arriving**. Half of a `**bold**` span is a normal intermediate state, so every unmatched delimiter
+falls back to literal text instead of swallowing the rest of the message, and an unclosed code
+fence renders as an open code block. `app/src/test/.../MarkdownTest.kt` covers those cases,
+including parsing every prefix of a rich message.
+
+Two deliberate choices worth knowing:
+
+- **Single `_` is never emphasis.** Only `__double__` is. This keeps `max_output_token` and
+  `snake_case` intact, which matters when the model is writing code.
+- **Single newlines are preserved** rather than collapsed into spaces as strict Markdown would,
+  because chat models use them to mean a line break.
 
 ## Known limitations
 
 These are deliberate omissions, not bugs:
 
-- Replies render as plain text; no Markdown or code-block formatting
+- Markdown covers the common subset; no tables, images or footnotes
+- The renderer re-parses the whole message on every streamed token — fine at chat length, but it
+  is the first thing to optimise if very long replies feel sluggish
 - Downloads stop if the process is killed (they resume on the next attempt)
 - Text only — the model supports vision and audio, the app does not wire them up
 - No editing or regenerating messages, no search, no export
