@@ -93,6 +93,39 @@ strings and roles, never raw template text.
 `chats` and `messages`, with `messages.chatId` cascading on delete. A message carries an
 `incomplete` flag so a stopped reply is stored and shown as what it is.
 
+## Images and voice
+
+Both are gated on what the model file itself reports via `Capabilities(modelPath).inputModalities()`
+— read from the file, not assumed — so the image and mic buttons only appear if the installed model
+actually has those encoders. `EngineConfig` only declares `visionBackend` / `audioBackend` when they
+are supported; the encoders load lazily, so declaring them costs nothing until an attachment is sent.
+
+**Images** come from the system photo picker, which needs no permission. On import they are rotated
+upright from EXIF and scaled so the longest edge is 768 px (`MediaLimits.MAX_IMAGE_EDGE_PX`) — a full
+camera photo would spend memory and vision tokens without showing the model more.
+
+**Voice** follows the WhatsApp convention: the button is a mic while the composer is empty and turns
+into send as soon as there is text or an attachment. Recording replaces the composer with elapsed
+time, remaining seconds, discard and finish.
+
+Audio format is dictated by the runtime, not chosen:
+
+| Constraint | Value | Where it comes from |
+|---|---|---|
+| Channels | mono | native lib: *"Only mono audio is supported."* |
+| Sample rate | 16 kHz | conventional for speech; the runtime decodes via miniaudio, which resamples |
+| Encoding | 16-bit PCM WAV | miniaudio decodes WAV directly |
+| Max length | 30 s (`MediaLimits.MAX_RECORDING_SECONDS`) | see below |
+
+Recording uses `AudioRecord` rather than `MediaRecorder` so the sample rate and channel count are
+exactly what we declare, and writes the WAV header itself (`media/Wav.kt`, unit-tested — a wrong
+field there fails silently at decode time).
+
+**On the 30 s cap:** the model enforces its own ceiling
+(`valid_audio_length <= max_audio_seq_length`), but that value lives in the model file rather than
+the library, so it cannot be read ahead of time. 30 s is the conservative side of it. The recorder
+stops hard at the cap rather than letting the runtime reject the clip.
+
 ## Tuning generation
 
 All four live in `SettingsStore` and are read on the next engine load / message:
@@ -126,7 +159,8 @@ URLs, hashes, base64, long random IDs — and the loop is self-reinforcing once 
 | Sampling, system prompt, thinking budget | `LlmService.conversationFor` + `SettingsStore` |
 | Sliding-window or summarised context | `LlmService.conversationFor` — it currently replays full history |
 | Tool / function calling | `ConversationConfig(tools = ...)` — LiteRT-LM has first-class support |
-| Images or audio in | `EngineConfig(visionBackend/audioBackend)` and `Content.ImageFile` etc. |
+| Camera capture | `ui/chat/ChatScreen.kt` — only the photo picker is wired up; camera needs a FileProvider |
+| Longer voice notes | `media/MediaLimits.kt`, once you know the model's real audio ceiling |
 | More Markdown (tables, images, nested quotes) | `ui/chat/Markdown.kt` — parser; `MarkdownText.kt` — renderer |
 | Download surviving process death | `ModelManager` runs on an app-scoped coroutine; promote to a foreground service |
 
@@ -159,6 +193,7 @@ These are deliberate omissions, not bugs:
 - The renderer re-parses the whole message on every streamed token — fine at chat length, but it
   is the first thing to optimise if very long replies feel sluggish
 - Downloads stop if the process is killed (they resume on the next attempt)
-- Text only — the model supports vision and audio, the app does not wire them up
 - No editing or regenerating messages, no search, no export
+- Images come from the gallery only; no camera capture
+- One attachment per message
 - Light theme only

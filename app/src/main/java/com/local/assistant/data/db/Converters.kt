@@ -8,4 +8,10 @@ class Converters {
 
     @TypeConverter
     fun stringToRole(value: String): Role = Role.valueOf(value)
+
+    @TypeConverter
+    fun attachmentKindToString(kind: AttachmentKind?): String? = kind?.name
+
+    @TypeConverter
+    fun stringToAttachmentKind(value: String?): AttachmentKind? = value?.let(AttachmentKind::valueOf)
 }

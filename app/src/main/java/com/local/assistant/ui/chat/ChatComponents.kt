@@ -10,7 +10,9 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
@@ -26,6 +28,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.unit.dp
+import com.local.assistant.data.db.AttachmentKind
 import com.local.assistant.data.db.MessageEntity
 import com.local.assistant.data.db.Role
 import com.local.assistant.ui.theme.AppColors
@@ -37,28 +40,39 @@ import com.local.assistant.ui.theme.AppColors
 @Composable
 fun MessageRow(message: MessageEntity, modifier: Modifier = Modifier) {
     when (message.role) {
-        Role.USER -> UserMessage(message.text, modifier)
+        Role.USER -> UserMessage(message, modifier)
         Role.ASSISTANT -> AssistantMessage(message.text, message.incomplete, modifier)
     }
 }
 
 @Composable
-fun UserMessage(text: String, modifier: Modifier = Modifier) {
-    Row(
+fun UserMessage(message: MessageEntity, modifier: Modifier = Modifier) {
+    Column(
         modifier = modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp),
-        horizontalArrangement = Arrangement.End,
+        horizontalAlignment = Alignment.End,
     ) {
-        SelectionContainer {
-            Text(
-                text = text,
-                style = MaterialTheme.typography.bodyLarge,
-                color = AppColors.TextPrimary,
-                modifier = Modifier
-                    .widthIn(max = 300.dp)
-                    .clip(RoundedCornerShape(20.dp))
-                    .background(AppColors.SurfaceMuted)
-                    .padding(horizontal = 16.dp, vertical = 10.dp),
-            )
+        when (message.attachmentKind) {
+            AttachmentKind.IMAGE -> message.attachmentPath?.let { AttachedImage(it) }
+            AttachmentKind.AUDIO -> message.attachmentPath?.let {
+                AudioAttachment(it, message.attachmentDurationMs)
+            }
+            null -> Unit
+        }
+
+        if (message.text.isNotBlank()) {
+            if (message.attachmentKind != null) Spacer(Modifier.height(6.dp))
+            SelectionContainer {
+                Text(
+                    text = message.text,
+                    style = MaterialTheme.typography.bodyLarge,
+                    color = AppColors.TextPrimary,
+                    modifier = Modifier
+                        .widthIn(max = 300.dp)
+                        .clip(RoundedCornerShape(20.dp))
+                        .background(AppColors.SurfaceMuted)
+                        .padding(horizontal = 16.dp, vertical = 10.dp),
+                )
+            }
         }
     }
 }

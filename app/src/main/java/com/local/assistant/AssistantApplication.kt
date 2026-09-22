@@ -6,6 +6,8 @@ import com.local.assistant.data.db.AppDatabase
 import com.local.assistant.data.prefs.SettingsStore
 import com.local.assistant.data.repo.ChatRepository
 import com.local.assistant.llm.LlmService
+import com.local.assistant.media.AttachmentStore
+import com.local.assistant.media.AudioRecorder
 import com.local.assistant.model.ModelManager
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.SupervisorJob
@@ -28,6 +30,10 @@ class AppContainer(context: Context) {
     val modelManager = ModelManager(context, settings, appScope)
 
     val llmService = LlmService(context, settings, appScope)
+
+    val attachmentStore = AttachmentStore(context)
+
+    val audioRecorder = AudioRecorder(appScope)
 }
 
 class AssistantApplication : Application() {

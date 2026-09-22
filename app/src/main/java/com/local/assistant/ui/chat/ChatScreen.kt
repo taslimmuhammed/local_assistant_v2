@@ -1,6 +1,11 @@
 package com.local.assistant.ui.chat
 
 import androidx.compose.foundation.background
+import android.Manifest
+import android.content.pm.PackageManager
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.PickVisualMediaRequest
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -10,6 +15,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
@@ -21,7 +27,12 @@ import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.Send
 import androidx.compose.material.icons.outlined.Add
+import androidx.compose.material.icons.outlined.Check
+import androidx.compose.material.icons.outlined.Close
+import androidx.compose.material.icons.outlined.DeleteOutline
+import androidx.compose.material.icons.outlined.Image
 import androidx.compose.material.icons.outlined.Menu
+import androidx.compose.material.icons.outlined.Mic
 import androidx.compose.material.icons.outlined.Stop
 import androidx.compose.material3.DrawerValue
 import androidx.compose.material3.HorizontalDivider
@@ -48,13 +59,17 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.local.assistant.data.db.AttachmentKind
 import com.local.assistant.data.repo.ChatRepository
 import com.local.assistant.llm.LlmService
+import com.local.assistant.media.RecordingState
 import com.local.assistant.ui.theme.AppColors
 import kotlinx.coroutines.launch
 
@@ -71,11 +86,25 @@ fun ChatScreen(
     val engineState by viewModel.engineState.collectAsStateWithLifecycle()
     val error by viewModel.error.collectAsStateWithLifecycle()
     val contextUsage by viewModel.contextUsage.collectAsStateWithLifecycle()
+    val supportsImages by viewModel.supportsImages.collectAsStateWithLifecycle()
+    val supportsAudio by viewModel.supportsAudio.collectAsStateWithLifecycle()
+    val pendingAttachment by viewModel.pendingAttachment.collectAsStateWithLifecycle()
+    val recording by viewModel.recordingState.collectAsStateWithLifecycle()
 
     val drawerState = rememberDrawerState(DrawerValue.Closed)
     val scope = rememberCoroutineScope()
     val snackbarHostState = remember { SnackbarHostState() }
     val listState = rememberLazyListState()
+    val context = LocalContext.current
+
+    val imagePicker = rememberLauncherForActivityResult(
+        ActivityResultContracts.PickVisualMedia(),
+    ) { uri -> uri?.let(viewModel::attachImage) }
+
+    // Recording only starts once the permission is actually granted, never optimistically.
+    val micPermission = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission(),
+    ) { granted -> if (granted) viewModel.startRecording() }
 
     // Keep the newest content in view while tokens stream in.
     LaunchedEffect(messages.size, streamingText) {
@@ -166,8 +195,31 @@ fun ChatScreen(
                     enabled = engineState is LlmService.State.Ready ||
                         engineState is LlmService.State.Loading,
                     isGenerating = isGenerating,
+                    supportsImages = supportsImages,
+                    supportsAudio = supportsAudio,
+                    pendingAttachment = pendingAttachment,
+                    recording = recording,
                     onSend = viewModel::send,
                     onStop = viewModel::stop,
+                    onPickImage = {
+                        imagePicker.launch(
+                            PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly),
+                        )
+                    },
+                    onDiscardAttachment = viewModel::discardPendingAttachment,
+                    onStartRecording = {
+                        val granted = ContextCompat.checkSelfPermission(
+                            context,
+                            Manifest.permission.RECORD_AUDIO,
+                        ) == PackageManager.PERMISSION_GRANTED
+                        if (granted) {
+                            viewModel.startRecording()
+                        } else {
+                            micPermission.launch(Manifest.permission.RECORD_AUDIO)
+                        }
+                    },
+                    onStopRecording = viewModel::stopRecording,
+                    onCancelRecording = viewModel::cancelRecording,
                 )
             }
         }
@@ -267,21 +319,53 @@ private fun EmptyState(modifier: Modifier = Modifier) {
 private fun Composer(
     enabled: Boolean,
     isGenerating: Boolean,
+    supportsImages: Boolean,
+    supportsAudio: Boolean,
+    pendingAttachment: ChatViewModel.PendingAttachment?,
+    recording: RecordingState?,
     onSend: (String) -> Unit,
     onStop: () -> Unit,
+    onPickImage: () -> Unit,
+    onDiscardAttachment: () -> Unit,
+    onStartRecording: () -> Unit,
+    onStopRecording: () -> Unit,
+    onCancelRecording: () -> Unit,
 ) {
     var text by remember { mutableStateOf("") }
-    val canSend = enabled && !isGenerating && text.isNotBlank()
 
     Column(Modifier.navigationBarsPadding()) {
         HorizontalDivider(color = AppColors.Border)
+
+        if (recording != null) {
+            RecordingBar(recording, onCancelRecording, onStopRecording)
+            return@Column
+        }
+
+        pendingAttachment?.let { PendingAttachmentChip(it, onDiscardAttachment) }
+
+        // WhatsApp's rule: the mic turns into send as soon as there is something to send.
+        val hasContent = text.isNotBlank() || pendingAttachment != null
+        val showMic = supportsAudio && !hasContent && !isGenerating
+
         Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 12.dp, vertical = 10.dp),
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 10.dp),
             verticalAlignment = Alignment.Bottom,
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            horizontalArrangement = Arrangement.spacedBy(4.dp),
         ) {
+            if (supportsImages) {
+                IconButton(
+                    onClick = onPickImage,
+                    enabled = enabled && !isGenerating,
+                    modifier = Modifier.size(44.dp),
+                ) {
+                    Icon(
+                        Icons.Outlined.Image,
+                        contentDescription = "Attach image",
+                        tint = if (enabled && !isGenerating) AppColors.TextSecondary else AppColors.Border,
+                    )
+                }
+            }
+
             Box(
                 modifier = Modifier
                     .weight(1f)
@@ -312,29 +396,117 @@ private fun Composer(
                 )
             }
 
-            val buttonEnabled = isGenerating || canSend
+            val actionEnabled = isGenerating || showMic || (enabled && hasContent)
             IconButton(
                 onClick = {
-                    if (isGenerating) {
-                        onStop()
-                    } else {
-                        onSend(text)
-                        text = ""
+                    when {
+                        isGenerating -> onStop()
+                        showMic -> onStartRecording()
+                        else -> {
+                            onSend(text)
+                            text = ""
+                        }
                     }
                 },
-                enabled = buttonEnabled,
+                enabled = actionEnabled,
                 modifier = Modifier
                     .size(44.dp)
                     .clip(CircleShape)
-                    .background(if (buttonEnabled) AppColors.Accent else AppColors.Border),
+                    .background(if (actionEnabled) AppColors.Accent else AppColors.Border),
             ) {
                 Icon(
-                    imageVector = if (isGenerating) Icons.Outlined.Stop else Icons.AutoMirrored.Outlined.Send,
-                    contentDescription = if (isGenerating) "Stop" else "Send",
+                    imageVector = when {
+                        isGenerating -> Icons.Outlined.Stop
+                        showMic -> Icons.Outlined.Mic
+                        else -> Icons.AutoMirrored.Outlined.Send
+                    },
+                    contentDescription = when {
+                        isGenerating -> "Stop"
+                        showMic -> "Record voice message"
+                        else -> "Send"
+                    },
                     tint = AppColors.OnAccent,
                     modifier = Modifier.size(20.dp),
                 )
             }
+        }
+    }
+}
+
+/** Replaces the composer while recording: elapsed time, a cancel, and a stop that keeps it. */
+@Composable
+private fun RecordingBar(
+    recording: RecordingState,
+    onCancel: () -> Unit,
+    onStop: () -> Unit,
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        IconButton(onClick = onCancel, modifier = Modifier.size(44.dp)) {
+            Icon(
+                Icons.Outlined.DeleteOutline,
+                contentDescription = "Discard recording",
+                tint = AppColors.TextSecondary,
+            )
+        }
+
+        RecordingDot()
+
+        Text(
+            text = formatDuration(recording.elapsedMs),
+            style = MaterialTheme.typography.bodyLarge,
+            color = AppColors.TextPrimary,
+        )
+
+        // The cap is a hard stop, so say how much room is left rather than cutting off silently.
+        Text(
+            text = "${recording.remainingSeconds}s left",
+            style = MaterialTheme.typography.bodyMedium,
+            color = if (recording.isNearlyOutOfTime) AppColors.Danger else AppColors.TextSecondary,
+            modifier = Modifier.weight(1f),
+        )
+
+        IconButton(
+            onClick = onStop,
+            modifier = Modifier
+                .size(44.dp)
+                .clip(CircleShape)
+                .background(AppColors.Accent),
+        ) {
+            Icon(
+                Icons.Outlined.Check,
+                contentDescription = "Finish recording",
+                tint = AppColors.OnAccent,
+                modifier = Modifier.size(20.dp),
+            )
+        }
+    }
+}
+
+@Composable
+private fun PendingAttachmentChip(
+    attachment: ChatViewModel.PendingAttachment,
+    onDiscard: () -> Unit,
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth().padding(start = 16.dp, end = 8.dp, top = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        when (attachment.kind) {
+            AttachmentKind.IMAGE -> AttachedImage(attachment.path, maxHeight = 96)
+            AttachmentKind.AUDIO -> AudioAttachment(attachment.path, attachment.durationMs)
+        }
+        Spacer(Modifier.weight(1f))
+        IconButton(onClick = onDiscard, modifier = Modifier.size(36.dp)) {
+            Icon(
+                Icons.Outlined.Close,
+                contentDescription = "Remove attachment",
+                tint = AppColors.TextSecondary,
+                modifier = Modifier.size(18.dp),
+            )
         }
     }
 }

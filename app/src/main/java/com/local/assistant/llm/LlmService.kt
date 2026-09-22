@@ -3,6 +3,8 @@ package com.local.assistant.llm
 import android.content.Context
 import android.util.Log
 import com.google.ai.edge.litertlm.Backend
+import com.google.ai.edge.litertlm.Capabilities
+import com.google.ai.edge.litertlm.Content
 import com.google.ai.edge.litertlm.Contents
 import com.google.ai.edge.litertlm.Conversation
 import com.google.ai.edge.litertlm.ConversationConfig
@@ -14,6 +16,8 @@ import com.google.ai.edge.litertlm.LogSeverity
 import com.google.ai.edge.litertlm.Message
 import com.google.ai.edge.litertlm.RepetitionPenaltyConfig
 import com.google.ai.edge.litertlm.SamplerConfig
+import com.google.ai.edge.litertlm.SupportedModalities
+import com.local.assistant.data.db.AttachmentKind
 import com.local.assistant.data.db.MessageEntity
 import com.local.assistant.data.db.Role
 import com.local.assistant.data.prefs.SettingsStore
@@ -47,6 +51,9 @@ class LlmService(
     private val scope: CoroutineScope,
 ) {
 
+    /** A file to send with the next prompt. */
+    data class PromptAttachment(val path: String, val kind: AttachmentKind)
+
     sealed interface State {
         /** No model file installed yet. */
         data object NoModel : State
@@ -75,6 +82,13 @@ class LlmService(
 
     private val _contextUsage = MutableStateFlow<ContextUsage?>(null)
     val contextUsage: StateFlow<ContextUsage?> = _contextUsage.asStateFlow()
+
+    /**
+     * What the installed model file actually accepts, read from the file itself rather than
+     * assumed. The composer uses this to decide whether to offer the image and mic buttons.
+     */
+    private val _modalities = MutableStateFlow<SupportedModalities?>(null)
+    val modalities: StateFlow<SupportedModalities?> = _modalities.asStateFlow()
 
     private val loadMutex = Mutex()
 
@@ -114,11 +128,13 @@ class LlmService(
         }
 
         _state.value = State.Loading
+        val modalities = withContext(Dispatchers.IO) { probeModalities(modelPath) }
+        _modalities.value = modalities
         val failures = mutableListOf<String>()
 
         for (attempt in attempts()) {
             try {
-                val loaded = withContext(Dispatchers.IO) { attempt.load(modelPath) }
+                val loaded = withContext(Dispatchers.IO) { attempt.load(modelPath, modalities) }
                 engine = loaded
                 _state.value = State.Ready(attempt.label)
                 return@withLock loaded
@@ -153,7 +169,7 @@ class LlmService(
         private val backend: () -> Backend,
     ) {
         @OptIn(ExperimentalApi::class)
-        fun load(modelPath: String): Engine {
+        fun load(modelPath: String, modalities: SupportedModalities?): Engine {
             // Multi-token prediction is a global flag, so it has to be set before initialize().
             ExperimentalFlags.enableSpeculativeDecoding = speculative
             return Engine(
@@ -163,6 +179,10 @@ class LlmService(
                     // Left unset this defaults to the runtime's own (small) context window, so
                     // set it explicitly. It sizes the KV cache, so it is a memory/length trade.
                     maxNumTokens = settings.maxContextTokens,
+                    // Only declared when the model actually has the encoder. They are loaded
+                    // lazily, so naming them costs nothing until an attachment is sent.
+                    visionBackend = backend().takeIf { modalities?.vision == true },
+                    audioBackend = Backend.CPU().takeIf { modalities?.audio == true },
                     // A writable cache dir lets the runtime reuse compiled kernels on later loads.
                     cacheDir = context.cacheDir.absolutePath,
                 ),
@@ -170,12 +190,22 @@ class LlmService(
         }
     }
 
+    /** Reads the model file's own declaration of what it accepts. Cheap: it does not load it. */
+    private fun probeModalities(modelPath: String): SupportedModalities? = runCatching {
+        Capabilities(modelPath).use { it.inputModalities() }
+    }.onFailure { Log.w(TAG, "Could not read model capabilities", it) }.getOrNull()
+
     /**
      * Streams a reply to [prompt]. Emitted values are incremental chunks, not the running total.
      *
      * [history] is the conversation as stored, excluding [prompt] itself.
      */
-    fun generate(chatId: Long, history: List<MessageEntity>, prompt: String): Flow<String> = flow {
+    fun generate(
+        chatId: Long,
+        history: List<MessageEntity>,
+        prompt: String,
+        attachment: PromptAttachment? = null,
+    ): Flow<String> = flow {
         val engine = ensureEngine() ?: error(failureMessage())
         val conversation = loadMutex.withLock { conversationFor(engine, chatId, history) }
         activeConversation = conversation
@@ -183,7 +213,7 @@ class LlmService(
         var completed = false
         try {
             conversation.sendMessageAsync(
-                prompt,
+                contentsOf(prompt, attachment?.path, attachment?.kind),
                 repetitionPenaltyConfig = RepetitionPenaltyConfig(
                     repetitionPenalty = settings.repetitionPenalty,
                     windowSize = settings.repetitionWindow,
@@ -284,8 +314,29 @@ class LlmService(
         (state.value as? State.Failed)?.message ?: "The model is not loaded."
 
     private fun MessageEntity.toLiteRtMessage(): Message = when (role) {
-        Role.USER -> Message.user(text)
+        Role.USER -> Message.user(contentsOf(text, attachmentPath, attachmentKind))
         Role.ASSISTANT -> Message.model(text)
+    }
+
+    /**
+     * Media first, then text — the order the runtime's own examples use.
+     *
+     * A missing attachment file degrades to text rather than failing the whole turn: the chat is
+     * still readable, and the alternative is a chat that can never be reopened.
+     */
+    private fun contentsOf(text: String, attachmentPath: String?, kind: AttachmentKind?): Contents {
+        val file = attachmentPath?.let(::File)?.takeIf { it.isFile }
+        if (file == null || kind == null) return Contents.of(text)
+
+        val media = when (kind) {
+            AttachmentKind.IMAGE -> Content.ImageFile(file.absolutePath)
+            AttachmentKind.AUDIO -> Content.AudioFile(file.absolutePath)
+        }
+        return if (text.isBlank()) {
+            Contents.of(media)
+        } else {
+            Contents.of(media, Content.Text(text))
+        }
     }
 
     companion object {

@@ -17,6 +17,9 @@ data class ChatEntity(
 /** Persisted author of a message. Kept as a string column so adding roles later is a no-op. */
 enum class Role { USER, ASSISTANT }
 
+/** What kind of file a message carries alongside its text. */
+enum class AttachmentKind { IMAGE, AUDIO }
+
 @Entity(
     tableName = "messages",
     foreignKeys = [
@@ -37,4 +40,9 @@ data class MessageEntity(
     val createdAt: Long,
     /** True when generation was stopped or failed part-way; the text is still what we got. */
     val incomplete: Boolean = false,
+    /** Absolute path inside the app's attachments directory, or null for a text-only message. */
+    val attachmentPath: String? = null,
+    val attachmentKind: AttachmentKind? = null,
+    /** Recording length, for the duration label on a voice message. */
+    val attachmentDurationMs: Long? = null,
 )

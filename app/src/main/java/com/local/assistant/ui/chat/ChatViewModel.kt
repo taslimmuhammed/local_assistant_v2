@@ -5,12 +5,17 @@ import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
+import android.net.Uri
 import com.local.assistant.AppContainer
+import com.local.assistant.data.db.AttachmentKind
 import com.local.assistant.data.db.ChatEntity
 import com.local.assistant.data.db.MessageEntity
 import com.local.assistant.data.db.Role
 import com.local.assistant.data.repo.ChatRepository
 import com.local.assistant.llm.LlmService
+import com.local.assistant.media.AttachmentStore
+import com.local.assistant.media.AudioRecorder
+import com.local.assistant.media.RecordingState
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
@@ -20,6 +25,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -27,7 +33,16 @@ import kotlinx.coroutines.withContext
 class ChatViewModel(
     private val repository: ChatRepository,
     private val llm: LlmService,
+    private val attachments: AttachmentStore,
+    private val recorder: AudioRecorder,
 ) : ViewModel() {
+
+    /** A file staged for the next send, shown as a chip above the composer. */
+    data class PendingAttachment(
+        val path: String,
+        val kind: AttachmentKind,
+        val durationMs: Long? = null,
+    )
 
     val chats: StateFlow<List<ChatEntity>> = repository.observeChats()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
@@ -59,6 +74,20 @@ class ChatViewModel(
     /** Real context consumption reported by the runtime, for the indicator above the composer. */
     val contextUsage: StateFlow<LlmService.ContextUsage?> = llm.contextUsage
 
+    /** Drives whether the composer offers the image and mic buttons at all. */
+    val supportsImages: StateFlow<Boolean> = llm.modalities
+        .map { it?.vision == true }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), false)
+
+    val supportsAudio: StateFlow<Boolean> = llm.modalities
+        .map { it?.audio == true }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), false)
+
+    private val _pendingAttachment = MutableStateFlow<PendingAttachment?>(null)
+    val pendingAttachment: StateFlow<PendingAttachment?> = _pendingAttachment.asStateFlow()
+
+    val recordingState: StateFlow<RecordingState?> = recorder.state
+
     private var generationJob: Job? = null
     private var stopRequested = false
 
@@ -80,6 +109,8 @@ class ChatViewModel(
         viewModelScope.launch {
             repository.deleteChat(chatId)
             llm.forget(chatId)
+            // The rows are gone, so any file they referenced is now orphaned.
+            attachments.pruneExcept(repository.attachmentPaths())
             if (_activeChatId.value == chatId) _activeChatId.value = null
         }
     }
@@ -88,9 +119,43 @@ class ChatViewModel(
         _error.value = null
     }
 
+    fun attachImage(uri: Uri) {
+        viewModelScope.launch {
+            discardPendingAttachment()
+            runCatching { attachments.importImage(uri) }
+                .onSuccess {
+                    _pendingAttachment.value = PendingAttachment(it.absolutePath, AttachmentKind.IMAGE)
+                }
+                .onFailure { _error.value = it.message ?: "Could not attach that image" }
+        }
+    }
+
+    fun discardPendingAttachment() {
+        _pendingAttachment.value?.let { attachments.delete(it.path) }
+        _pendingAttachment.value = null
+    }
+
+    /** Caller must already hold RECORD_AUDIO permission. */
+    fun startRecording() {
+        if (_isGenerating.value || recorder.isRecording) return
+        discardPendingAttachment()
+        val destination = attachments.newAudioFile()
+        recorder.start(destination) { recording ->
+            _pendingAttachment.value = recording?.let {
+                PendingAttachment(it.file.absolutePath, AttachmentKind.AUDIO, it.durationMs)
+            }
+        }
+    }
+
+    fun stopRecording() = recorder.stop()
+
+    fun cancelRecording() = recorder.cancel()
+
     fun send(text: String) {
         val prompt = text.trim()
-        if (prompt.isEmpty() || _isGenerating.value) return
+        val attachment = _pendingAttachment.value
+        if ((prompt.isEmpty() && attachment == null) || _isGenerating.value) return
+        _pendingAttachment.value = null
 
         stopRequested = false
         _isGenerating.value = true
@@ -103,13 +168,31 @@ class ChatViewModel(
             // Snapshot the history before the new turn is stored: the engine needs the prior
             // turns as context and the prompt separately.
             val history = repository.messagesFor(chatId)
-            repository.addMessage(chatId, Role.USER, prompt)
-            repository.titleFromFirstMessage(chatId, prompt)
+            repository.addMessage(
+                chatId = chatId,
+                role = Role.USER,
+                text = prompt,
+                attachmentPath = attachment?.path,
+                attachmentKind = attachment?.kind,
+                attachmentDurationMs = attachment?.durationMs,
+            )
+            repository.titleFromFirstMessage(
+                chatId = chatId,
+                firstMessage = prompt,
+                fallback = when (attachment?.kind) {
+                    AttachmentKind.IMAGE -> "Image"
+                    AttachmentKind.AUDIO -> "Voice message"
+                    null -> ChatRepository.DEFAULT_TITLE
+                },
+            )
 
             val reply = StringBuilder()
             var failure: String? = null
             try {
-                llm.generate(chatId, history, prompt).collect { chunk ->
+                val promptAttachment = attachment?.let {
+                    LlmService.PromptAttachment(it.path, it.kind)
+                }
+                llm.generate(chatId, history, prompt, promptAttachment).collect { chunk ->
                     reply.append(chunk)
                     _streamingText.value = reply.toString()
                 }
@@ -142,7 +225,14 @@ class ChatViewModel(
 
     companion object {
         fun factory(container: AppContainer): ViewModelProvider.Factory = viewModelFactory {
-            initializer { ChatViewModel(container.chatRepository, container.llmService) }
+            initializer {
+                ChatViewModel(
+                    repository = container.chatRepository,
+                    llm = container.llmService,
+                    attachments = container.attachmentStore,
+                    recorder = container.audioRecorder,
+                )
+            }
         }
     }
 }
