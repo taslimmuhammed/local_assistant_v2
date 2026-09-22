@@ -1,0 +1,10 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- A simple chat bubble, matching the app's monochrome look. -->
+    <path
+        android:fillColor="#18181B"
+        android:pathData="M34,32h40a10,10 0 0 1 10,10v22a10,10 0 0 1 -10,10H52l-14,10v-10h-4a10,10 0 0 1 -10,-10V42a10,10 0 0 1 10,-10z" />
+</vector>

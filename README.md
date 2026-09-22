@@ -1,0 +1,141 @@
+# Local Assistant
+
+A small, white-themed, ChatGPT-style Android chat app that runs **Gemma 4 E4B** entirely on
+device via [LiteRT-LM](https://ai.google.dev/edge/litert-lm/android). No account, no server, no
+network at inference time.
+
+This is intentionally a **base** to build on: one model, one screen, persistent chats, nothing else.
+
+## What it does
+
+- Streams replies token-by-token from a local `.litertlm` model
+- Multiple chats — create, switch, resume, delete; everything persists across restarts
+- Gets the model either by **downloading** it (resumable) or **importing** one already on the device
+- Falls back GPU + MTP → GPU → CPU if a backend fails to start
+- Stop button that interrupts generation and keeps the partial reply
+
+## Requirements
+
+| | |
+|---|---|
+| Android | 8.0 (API 26) or newer, `arm64-v8a` |
+| Free storage | ~4.2 GB |
+| RAM | 8 GB+ recommended (GPU backend peaks around 0.7–1 GB, CPU around 3.3 GB) |
+| JDK (to build) | 17 |
+
+The LiteRT-LM AAR only ships `arm64-v8a` and `x86_64` native libraries, so `abiFilters` is set to
+match. There is no 32-bit build.
+
+## Build
+
+```bash
+./gradlew :app:assembleDebug
+```
+
+`local.properties` needs `sdk.dir` pointing at your Android SDK (already generated locally).
+
+## Getting the model
+
+On first launch the app shows the model screen. Two ways in:
+
+**Download** — pulls `gemma-4-E4B-it.litertlm` (3.66 GB) from the LiteRT community repo on
+Hugging Face. The file is public, so no token is needed. Downloads resume from wherever they
+stopped, which matters at this size.
+
+> **Use the unsuffixed file.** The same repo also has `-gpu.litertlm` and `-web.litertlm`. Despite
+> the name, `-gpu` is the **WebGPU** build — it is the same size as `-web` (2.97 GB) and matches the
+> "Web" row of the model card. On Android it loads without error and then emits raw vocab tokens
+> (`<unused30>`, `[multimodal]`, `<mask>`) instead of text. The backend is chosen at runtime in
+> `EngineConfig`, not by the filename; one file serves both CPU and GPU.
+
+**Load from device storage** — pick a `.litertlm` file you already have. LiteRT-LM needs a real
+filesystem path, and a `content://` URI from the picker is not one, so the file is **copied** into
+the app's private storage. Budget room for both copies while the copy runs.
+
+Sideloading is usually faster than downloading on the phone:
+
+```bash
+adb push gemma-4-E4B-it.litertlm /sdcard/Download/
+```
+
+Then pick it from the file picker.
+
+## Architecture
+
+```
+AssistantApplication
+└── AppContainer                  manual DI; one instance per process
+    ├── SettingsStore             model path, backend prefs, system prompt
+    ├── AppDatabase (Room)        chats + messages
+    │   └── ChatRepository
+    ├── ModelManager              download / import / delete the model file
+    └── LlmService                owns the LiteRT-LM Engine
+```
+
+### LlmService
+
+The piece worth understanding before extending anything.
+
+- **One `Engine` per process.** Loading costs seconds and gigabytes, so it is shared across all
+  chats and kept alive until the model is deleted.
+- **One `Conversation` per chat.** The `Conversation` is what holds the KV cache for a thread.
+- **The active conversation is cached.** Continuing the current chat only prefills the new turn.
+  Switching chats, or resuming one after a process restart, rebuilds the conversation from stored
+  history through `ConversationConfig.initialMessages`.
+- **Interrupted turns invalidate the cache.** If generation is stopped or fails, the native cache
+  no longer matches what was persisted, so it is dropped and rebuilt from the database next turn.
+
+Prompt templating, BOS tokens and turn markers are handled inside LiteRT-LM — the app passes plain
+strings and roles, never raw template text.
+
+### Data
+
+`chats` and `messages`, with `messages.chatId` cascading on delete. A message carries an
+`incomplete` flag so a stopped reply is stored and shown as what it is.
+
+## Tuning generation
+
+All four live in `SettingsStore` and are read on the next engine load / message:
+
+| Setting | Default | Notes |
+|---|---|---|
+| `maxContextTokens` | 4096 | Context window. Sizes the KV cache, so it costs memory. The model supports up to 32k. **Changing it needs an engine reload.** |
+| `maxOutputTokens` | 2048 | Ceiling on one reply, so a runaway answer cannot eat the whole context. |
+| `repetitionPenalty` | 1.1 | Damps degenerate loops. 1.0 disables. Keep it low — generated code and markup legitimately repeat. |
+| `repetitionWindow` | 256 | How many recent tokens the penalty looks at. |
+
+Leaving `maxNumTokens` unset in `EngineConfig` falls back to the runtime's own small default, which
+is why it is now set explicitly.
+
+The line above the composer shows real context consumption from `Conversation.getTokenCount()` —
+not an estimate. If a chat misbehaves, look there first to tell a genuine context overflow apart
+from a sampling problem.
+
+### Degenerate repetition
+
+If output collapses into a repeating fragment (`G4wG4wG4w…`), that is usually **not** context
+exhaustion. It happens in high-entropy stretches where the model has no real signal — hallucinated
+URLs, hashes, base64, long random IDs — and the loop is self-reinforcing once started. Raise
+`repetitionPenalty` toward 1.2, and check the token meter to rule out context before assuming it.
+
+## Where to extend
+
+| Want to add | Start at |
+|---|---|
+| A different or second model | `model/ModelCatalog.kt` |
+| Sampling, system prompt, thinking budget | `LlmService.conversationFor` + `SettingsStore` |
+| Sliding-window or summarised context | `LlmService.conversationFor` — it currently replays full history |
+| Tool / function calling | `ConversationConfig(tools = ...)` — LiteRT-LM has first-class support |
+| Images or audio in | `EngineConfig(visionBackend/audioBackend)` and `Content.ImageFile` etc. |
+| Markdown rendering | `ui/chat/ChatComponents.kt` — `AssistantMessage` is a plain `Text` today |
+| Download surviving process death | `ModelManager` runs on an app-scoped coroutine; promote to a foreground service |
+
+## Known limitations
+
+These are deliberate omissions, not bugs:
+
+- Replies render as plain text; no Markdown or code-block formatting
+- Downloads stop if the process is killed (they resume on the next attempt)
+- Text only — the model supports vision and audio, the app does not wire them up
+- No editing or regenerating messages, no search, no export
+- Light theme only
