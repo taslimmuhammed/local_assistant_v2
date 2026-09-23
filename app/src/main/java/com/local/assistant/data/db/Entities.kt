@@ -45,4 +45,8 @@ data class MessageEntity(
     val attachmentKind: AttachmentKind? = null,
     /** Recording length, for the duration label on a voice message. */
     val attachmentDurationMs: Long? = null,
+    /** Decode speed reported by the runtime for this reply. Null for user turns. */
+    val tokensPerSecond: Double? = null,
+    /** Prefill latency: how long the model took before the first token appeared. */
+    val timeToFirstTokenMs: Long? = null,
 )

@@ -1,7 +1,9 @@
 package com.local.assistant.llm
 
+import android.app.ActivityManager
 import android.content.Context
 import android.util.Log
+import androidx.core.content.getSystemService
 import com.google.ai.edge.litertlm.Backend
 import com.google.ai.edge.litertlm.Capabilities
 import com.google.ai.edge.litertlm.Content
@@ -35,6 +37,7 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import java.io.File
+import kotlin.math.max
 
 /**
  * Wraps the LiteRT-LM engine.
@@ -51,6 +54,13 @@ class LlmService(
     private val scope: CoroutineScope,
 ) {
 
+    /** Decode speed for one reply, as measured by the runtime rather than timed from outside. */
+    data class GenerationStats(
+        val decodeTokens: Int,
+        val tokensPerSecond: Double,
+        val timeToFirstTokenMs: Long,
+    )
+
     /** A file to send with the next prompt. */
     data class PromptAttachment(val path: String, val kind: AttachmentKind)
 
@@ -62,7 +72,7 @@ class LlmService(
 
         data object Loading : State
 
-        data class Ready(val backend: String) : State
+        data class Ready(val backend: String, val contextTokens: Int) : State
 
         data class Failed(val message: String) : State
     }
@@ -89,6 +99,36 @@ class LlmService(
      */
     private val _modalities = MutableStateFlow<SupportedModalities?>(null)
     val modalities: StateFlow<SupportedModalities?> = _modalities.asStateFlow()
+
+    private val calibrator = ContextCalibrator(
+        settings = settings,
+        activityManager = requireNotNull(context.getSystemService<ActivityManager>()),
+    )
+
+    /** Non-null only while the device's context ceiling is being measured. */
+    val calibrationProgress: StateFlow<CalibrationProgress?> = calibrator.progress
+
+    /** Backend currently being attempted, for the startup screen's commentary. */
+    private val _loadingBackend = MutableStateFlow<String?>(null)
+    val loadingBackend: StateFlow<String?> = _loadingBackend.asStateFlow()
+
+    /** The window the loaded engine is actually running with. 0 until an engine is loaded. */
+    private val _activeContextTokens = MutableStateFlow(0)
+    val activeContextTokens: StateFlow<Int> = _activeContextTokens.asStateFlow()
+
+    /** How many stored messages the current conversation had to drop to fit the window. */
+    private val _droppedFromContext = MutableStateFlow(0)
+    val droppedFromContext: StateFlow<Int> = _droppedFromContext.asStateFlow()
+
+    /**
+     * Stats for the reply that just finished. Held here rather than emitted through the text
+     * flow so a stopped generation still reports what it managed.
+     */
+    private val _lastGenerationStats = MutableStateFlow<GenerationStats?>(null)
+    val lastGenerationStats: StateFlow<GenerationStats?> = _lastGenerationStats.asStateFlow()
+
+    /** Vision tokens an image costs, read from the model so the budget maths is not a guess. */
+    private var visionTokensPerImage = DEFAULT_VISION_TOKENS
 
     private val loadMutex = Mutex()
 
@@ -130,24 +170,30 @@ class LlmService(
         _state.value = State.Loading
         val modalities = withContext(Dispatchers.IO) { probeModalities(modelPath) }
         _modalities.value = modalities
-        val failures = mutableListOf<String>()
+        visionTokensPerImage = withContext(Dispatchers.IO) { probeVisionTokens(modelPath) }
+        calibrator.beginSession()
 
         for (attempt in attempts()) {
-            try {
-                val loaded = withContext(Dispatchers.IO) { attempt.load(modelPath, modalities) }
-                engine = loaded
-                _state.value = State.Ready(attempt.label)
-                return@withLock loaded
-            } catch (e: Throwable) {
-                Log.w(TAG, "Engine load failed on ${attempt.label}", e)
-                failures += e.message ?: e::class.java.simpleName
+            // Each backend has its own memory profile, so the ceiling is calibrated per backend
+            // rather than shared. Falling back to CPU on a context failure would otherwise hide
+            // the fact that the GPU could have managed a smaller window.
+            val key = "${File(modelPath).name}:${File(modelPath).length()}:${attempt.label}"
+            _loadingBackend.value = attempt.label
+            val outcome = withContext(Dispatchers.IO) {
+                calibrator.obtainEngine(key) { tokens -> attempt.load(modelPath, modalities, tokens) }
+            }
+            if (outcome != null) {
+                _loadingBackend.value = null
+                engine = outcome.engine
+                _activeContextTokens.value = outcome.tokens
+                _state.value = State.Ready(attempt.label, outcome.tokens)
+                return@withLock outcome.engine
             }
         }
 
-        // Every backend usually fails for the same underlying reason (a corrupt or wrong file),
-        // so show each distinct reason once rather than repeating it per attempt.
+        _loadingBackend.value = null
         _state.value = State.Failed(
-            "Could not start the model. " + failures.distinct().joinToString(" "),
+            "Could not start the model on any backend or context size.",
         )
         null
     }
@@ -169,16 +215,18 @@ class LlmService(
         private val backend: () -> Backend,
     ) {
         @OptIn(ExperimentalApi::class)
-        fun load(modelPath: String, modalities: SupportedModalities?): Engine {
-            // Multi-token prediction is a global flag, so it has to be set before initialize().
+        fun load(modelPath: String, modalities: SupportedModalities?, contextTokens: Int): Engine {
+            // Both are global flags, so they have to be set before initialize().
             ExperimentalFlags.enableSpeculativeDecoding = speculative
+            // Timing instrumentation only; this is what makes per-reply speed reportable.
+            ExperimentalFlags.enableBenchmark = true
             return Engine(
                 EngineConfig(
                     modelPath = modelPath,
                     backend = backend(),
-                    // Left unset this defaults to the runtime's own (small) context window, so
-                    // set it explicitly. It sizes the KV cache, so it is a memory/length trade.
-                    maxNumTokens = settings.maxContextTokens,
+                    // Left unset this defaults to the runtime's own (small) context window.
+                    // The value comes from calibration, which measured what this device holds.
+                    maxNumTokens = contextTokens,
                     // Only declared when the model actually has the encoder. They are loaded
                     // lazily, so naming them costs nothing until an attachment is sent.
                     visionBackend = backend().takeIf { modalities?.vision == true },
@@ -189,6 +237,11 @@ class LlmService(
             ).apply { initialize() }
         }
     }
+
+    /** The model's own vision token budget, used when costing images against the window. */
+    private fun probeVisionTokens(modelPath: String): Int = runCatching {
+        Capabilities(modelPath).use { it.maxVisionTokenBudget() }
+    }.getOrNull()?.takeIf { it > 0 } ?: DEFAULT_VISION_TOKENS
 
     /** Reads the model file's own declaration of what it accepts. Cheap: it does not load it. */
     private fun probeModalities(modelPath: String): SupportedModalities? = runCatching {
@@ -210,6 +263,10 @@ class LlmService(
         val conversation = loadMutex.withLock { conversationFor(engine, chatId, history) }
         activeConversation = conversation
 
+        // Same crash guard as calibration: if a real chat is what finally exhausts memory, the
+        // marker is the only trace left after the process is killed.
+        settings.generationInFlightTokens = _activeContextTokens.value
+        _lastGenerationStats.value = null
         var completed = false
         try {
             conversation.sendMessageAsync(
@@ -226,8 +283,11 @@ class LlmService(
             completed = true
         } finally {
             activeConversation = null
+            settings.generationInFlightTokens = 0
             withContext(NonCancellable) {
                 loadMutex.withLock {
+                    // Must run before closeConversation() below, which would drop the numbers.
+                    _lastGenerationStats.value = readGenerationStats()
                     reportContextUsage()
                     if (completed && conversationChatId == chatId) {
                         // The conversation now also holds this user turn and the model's reply.
@@ -248,6 +308,37 @@ class LlmService(
             .onFailure { Log.w(TAG, "cancelProcess failed", it) }
     }
 
+    /** Forgets the measured ceiling so the next load measures again. Caller should unload first. */
+    fun invalidateCalibration() = calibrator.invalidate()
+
+    /**
+     * Abandons measurement and settles for a window known to be modest enough to just work.
+     *
+     * Measuring means filling the window for real, which is slow by nature. This is the way out
+     * for someone who would rather start chatting than wait for the largest possible answer.
+     */
+    fun useSafeWindow() {
+        settings.manualContextTokens = SAFE_CONTEXT_TOKENS
+        calibrator.cancel()
+        scope.launch {
+            unload()
+            ensureEngine()
+        }
+    }
+
+    /** Clears any manual choice and measures again from scratch. */
+    fun retryLoad(remeasure: Boolean) {
+        calibrator.cancel()
+        scope.launch {
+            unload()
+            if (remeasure) {
+                settings.manualContextTokens = 0
+                calibrator.invalidate()
+            }
+            ensureEngine()
+        }
+    }
+
     /** Drops the cached conversation for [chatId], e.g. after its messages were deleted. */
     suspend fun forget(chatId: Long) = loadMutex.withLock {
         if (conversationChatId == chatId) closeConversation()
@@ -258,6 +349,7 @@ class LlmService(
         closeConversation()
         runCatching { engine?.close() }
         engine = null
+        _activeContextTokens.value = 0
         _state.value = if (settings.modelPath == null) State.NoModel else State.Idle
     }
 
@@ -272,18 +364,32 @@ class LlmService(
         }
 
         closeConversation()
+
+        // Older turns are dropped rather than letting the window overflow, which the runtime
+        // would reject outright with "Input token ids are too long".
+        val trimmed = ContextWindow.trimToBudget(
+            history = history,
+            budgetTokens = ContextWindow.budgetFor(
+                contextTokens = _activeContextTokens.value,
+                maxOutputTokens = effectiveMaxOutputTokens(),
+                systemPrompt = settings.systemPrompt,
+            ),
+            visionTokensPerImage = visionTokensPerImage,
+        )
+        _droppedFromContext.value = trimmed.droppedCount
+
         val fresh = engine.createConversation(
             ConversationConfig(
                 systemInstruction = settings.systemPrompt
                     .takeIf { it.isNotBlank() }
                     ?.let { Contents.of(it) },
-                initialMessages = history.map { it.toLiteRtMessage() },
+                initialMessages = trimmed.messages.map { it.toLiteRtMessage() },
                 samplerConfig = SamplerConfig(
                     topK = TOP_K,
                     topP = TOP_P,
                     temperature = TEMPERATURE,
                 ),
-                maxOutputToken = settings.maxOutputTokens,
+                maxOutputToken = effectiveMaxOutputTokens(),
             ),
         )
         conversation = fresh
@@ -292,14 +398,38 @@ class LlmService(
         return fresh
     }
 
+    /** Must be called with [loadMutex] held, and before the conversation is closed. */
+    @OptIn(ExperimentalApi::class)
+    private fun readGenerationStats(): GenerationStats? {
+        val current = conversation ?: return null
+        return runCatching {
+            val info = current.getBenchmarkInfo()
+            GenerationStats(
+                decodeTokens = info.lastDecodeTokenCount,
+                tokensPerSecond = info.lastDecodeTokensPerSecond,
+                timeToFirstTokenMs = (info.timeToFirstTokenInSecond * 1000).toLong(),
+            ).takeIf { it.decodeTokens > 0 && it.tokensPerSecond > 0 }
+        }.getOrNull()
+    }
+
     /** Must be called with [loadMutex] held. */
     private fun reportContextUsage() {
         val current = conversation
         _contextUsage.value = if (current == null) {
             null
         } else {
-            runCatching { ContextUsage(current.getTokenCount(), settings.maxContextTokens) }.getOrNull()
+            runCatching { ContextUsage(current.getTokenCount(), _activeContextTokens.value) }.getOrNull()
         }
+    }
+
+    /**
+     * A reply may not claim more than a quarter of the window, so a long answer cannot leave the
+     * next turn with nowhere to go.
+     */
+    private fun effectiveMaxOutputTokens(): Int {
+        val window = _activeContextTokens.value
+        if (window <= 0) return settings.maxOutputTokens
+        return settings.maxOutputTokens.coerceAtMost(max(MIN_OUTPUT_TOKENS, window / 4))
     }
 
     private fun closeConversation() {
@@ -308,6 +438,7 @@ class LlmService(
         conversationChatId = null
         conversationMessageCount = 0
         _contextUsage.value = null
+        _droppedFromContext.value = 0
     }
 
     private fun failureMessage(): String =
@@ -345,5 +476,10 @@ class LlmService(
         private const val TOP_P = 0.95
         private const val TEMPERATURE = 1.0
         private const val NEARLY_FULL_FRACTION = 0.85f
+        private const val DEFAULT_VISION_TOKENS = 256
+        private const val MIN_OUTPUT_TOKENS = 256
+
+        /** Small enough that essentially any device that can hold the model can hold this too. */
+        const val SAFE_CONTEXT_TOKENS = 4096
     }
 }

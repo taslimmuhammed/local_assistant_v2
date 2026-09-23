@@ -41,7 +41,13 @@ import com.local.assistant.ui.theme.AppColors
 fun MessageRow(message: MessageEntity, modifier: Modifier = Modifier) {
     when (message.role) {
         Role.USER -> UserMessage(message, modifier)
-        Role.ASSISTANT -> AssistantMessage(message.text, message.incomplete, modifier)
+        Role.ASSISTANT -> AssistantMessage(
+            text = message.text,
+            incomplete = message.incomplete,
+            tokensPerSecond = message.tokensPerSecond,
+            timeToFirstTokenMs = message.timeToFirstTokenMs,
+            modifier = modifier,
+        )
     }
 }
 
@@ -81,16 +87,24 @@ fun UserMessage(message: MessageEntity, modifier: Modifier = Modifier) {
 fun AssistantMessage(
     text: String,
     incomplete: Boolean = false,
+    tokensPerSecond: Double? = null,
+    timeToFirstTokenMs: Long? = null,
     modifier: Modifier = Modifier,
 ) {
     Column(modifier = modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp)) {
         SelectionContainer {
             MarkdownText(text)
         }
-        if (incomplete) {
+
+        val footnote = listOfNotNull(
+            "Stopped".takeIf { incomplete },
+            tokensPerSecond?.let { "%.1f tok/s".format(it) },
+            timeToFirstTokenMs?.takeIf { it > 0 }?.let { "%.1fs to first token".format(it / 1000.0) },
+        )
+        if (footnote.isNotEmpty()) {
             Text(
-                text = "Stopped",
-                style = MaterialTheme.typography.bodyMedium,
+                text = footnote.joinToString(" · "),
+                style = MaterialTheme.typography.bodySmall,
                 color = AppColors.TextSecondary,
                 modifier = Modifier.padding(top = 4.dp),
             )

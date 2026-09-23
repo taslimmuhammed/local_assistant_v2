@@ -40,6 +40,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.local.assistant.llm.CalibrationProgress
 import com.local.assistant.llm.LlmService
 import com.local.assistant.model.InstalledModel
 import com.local.assistant.model.ModelCatalog
@@ -65,6 +66,8 @@ fun ModelScreen(
     val transfer by modelManager.transfer.collectAsStateWithLifecycle()
     val error by modelManager.error.collectAsStateWithLifecycle()
     val engineState by llmService.state.collectAsStateWithLifecycle()
+    val calibration by llmService.calibrationProgress.collectAsStateWithLifecycle()
+    val contextTokens by llmService.activeContextTokens.collectAsStateWithLifecycle()
     val scope = rememberCoroutineScope()
 
     val picker = rememberLauncherForActivityResult(
@@ -123,6 +126,11 @@ fun ModelScreen(
                 installed != null -> InstalledSection(
                     installed = installed!!,
                     engineState = engineState,
+                    calibration = calibration,
+                    contextTokens = contextTokens,
+                    // Also clears a manual override, so "skip" on the startup screen is not a
+                    // one-way door out of ever measuring properly.
+                    onRecalibrate = { llmService.retryLoad(remeasure = true) },
                     onDelete = {
                         scope.launch {
                             llmService.unload()
@@ -209,6 +217,9 @@ private fun TransferSection(transfer: Transfer, onCancel: () -> Unit) {
 private fun InstalledSection(
     installed: InstalledModel,
     engineState: LlmService.State,
+    calibration: CalibrationProgress?,
+    contextTokens: Int,
+    onRecalibrate: () -> Unit,
     onDelete: () -> Unit,
 ) {
     Column(Modifier.padding(top = 28.dp)) {
@@ -238,6 +249,13 @@ private fun InstalledSection(
             color = AppColors.TextSecondary,
             modifier = Modifier.padding(top = 4.dp),
         )
+        ContextSection(
+            calibration = calibration,
+            contextTokens = contextTokens,
+            enabled = engineState !is LlmService.State.Loading && calibration == null,
+            onRecalibrate = onRecalibrate,
+        )
+
         (engineState as? LlmService.State.Failed)?.let {
             Text(
                 text = it.message,
@@ -274,6 +292,85 @@ private fun InstalledSection(
             ) {
                 Text("Delete model", color = AppColors.Danger)
             }
+        }
+    }
+}
+
+/**
+ * The context window is measured, not configured: nothing in the runtime reports how much this
+ * device can hold, so the app finds out by trying and keeping what survives.
+ */
+@Composable
+private fun ContextSection(
+    calibration: CalibrationProgress?,
+    contextTokens: Int,
+    enabled: Boolean,
+    onRecalibrate: () -> Unit,
+) {
+    Column(Modifier.padding(top = 24.dp)) {
+        Text(
+            text = "Context window",
+            style = MaterialTheme.typography.labelLarge,
+            color = AppColors.TextPrimary,
+        )
+
+        when {
+            calibration != null -> {
+                Row(
+                    Modifier.padding(top = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(14.dp),
+                        strokeWidth = 2.dp,
+                        color = AppColors.TextSecondary,
+                    )
+                    Text(
+                        text = when (calibration) {
+                            is CalibrationProgress.Trying ->
+                                "Trying ${calibration.tokens} tokens " +
+                                    "(${calibration.step}/${calibration.steps})…"
+                            is CalibrationProgress.Confirming ->
+                                "Filling ${calibration.tokens} tokens: " +
+                                    "${calibration.reached} so far…"
+                        },
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = AppColors.TextSecondary,
+                        modifier = Modifier.padding(start = 8.dp),
+                    )
+                }
+                Text(
+                    text = "This fills the window for real, so it takes a while. " +
+                        "The app may restart if a size turns out to be too large — that is " +
+                        "expected, and the next attempt will be smaller.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = AppColors.TextSecondary,
+                    modifier = Modifier.padding(top = 8.dp),
+                )
+            }
+
+            contextTokens > 0 -> Text(
+                text = "$contextTokens tokens, measured on this device",
+                style = MaterialTheme.typography.bodyMedium,
+                color = AppColors.TextSecondary,
+                modifier = Modifier.padding(top = 4.dp),
+            )
+
+            else -> Text(
+                text = "Not measured yet",
+                style = MaterialTheme.typography.bodyMedium,
+                color = AppColors.TextSecondary,
+                modifier = Modifier.padding(top = 4.dp),
+            )
+        }
+
+        OutlinedButton(
+            onClick = onRecalibrate,
+            enabled = enabled,
+            modifier = Modifier.padding(top = 12.dp),
+            shape = RoundedCornerShape(12.dp),
+        ) {
+            Text("Recalibrate")
         }
     }
 }

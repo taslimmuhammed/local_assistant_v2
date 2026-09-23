@@ -74,6 +74,9 @@ class ChatViewModel(
     /** Real context consumption reported by the runtime, for the indicator above the composer. */
     val contextUsage: StateFlow<LlmService.ContextUsage?> = llm.contextUsage
 
+    /** How many older turns fell out of the context window for the active chat. */
+    val droppedFromContext: StateFlow<Int> = llm.droppedFromContext
+
     /** Drives whether the composer offers the image and mic buttons at all. */
     val supportsImages: StateFlow<Boolean> = llm.modalities
         .map { it?.vision == true }
@@ -90,10 +93,6 @@ class ChatViewModel(
 
     private var generationJob: Job? = null
     private var stopRequested = false
-
-    init {
-        llm.warmUp()
-    }
 
     fun startNewChat() {
         if (_isGenerating.value) return
@@ -205,7 +204,15 @@ class ChatViewModel(
                 withContext(NonCancellable) {
                     val incomplete = stopRequested || failure != null
                     if (reply.isNotEmpty()) {
-                        repository.addMessage(chatId, Role.ASSISTANT, reply.toString(), incomplete)
+                        val stats = llm.lastGenerationStats.value
+                        repository.addMessage(
+                            chatId = chatId,
+                            role = Role.ASSISTANT,
+                            text = reply.toString(),
+                            incomplete = incomplete,
+                            tokensPerSecond = stats?.tokensPerSecond,
+                            timeToFirstTokenMs = stats?.timeToFirstTokenMs,
+                        )
                     }
                     _error.value = failure
                     _streamingText.value = null

@@ -13,7 +13,9 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.local.assistant.ui.chat.ChatScreen
 import com.local.assistant.ui.chat.ChatViewModel
+import com.local.assistant.llm.LlmService
 import com.local.assistant.ui.setup.ModelScreen
+import com.local.assistant.ui.startup.LoadingScreen
 import com.local.assistant.ui.theme.LocalAssistantTheme
 
 class MainActivity : ComponentActivity() {
@@ -45,6 +47,17 @@ private fun AppRoot(container: AppContainer) {
             } else {
                 null
             },
+        )
+        return
+    }
+
+    // The first load measures the context window, which takes real time. Doing it here rather
+    // than behind the chat means nobody watches an idle composer wondering if it hung.
+    val engineState by container.llmService.state.collectAsStateWithLifecycle()
+    if (engineState !is LlmService.State.Ready) {
+        LoadingScreen(
+            llmService = container.llmService,
+            onOpenModelSettings = { showModelScreen = true },
         )
         return
     }

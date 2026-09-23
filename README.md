@@ -126,19 +126,96 @@ field there fails silently at decode time).
 the library, so it cannot be read ahead of time. 30 s is the conservative side of it. The recorder
 stops hard at the cap rather than letting the runtime reject the clip.
 
+## Per-reply speed
+
+Each model reply carries a small footnote: `19.4 tok/s · 0.5s to first token`.
+
+The numbers come from the runtime's own `Conversation.getBenchmarkInfo()`, not from timing the
+stream from outside. That matters because multi-token prediction emits several tokens per
+callback, so counting stream emissions would undercount the decode rate. Enabling it costs only
+timing instrumentation (`ExperimentalFlags.enableBenchmark`).
+
+They are stored on the message (`tokensPerSecond`, `timeToFirstTokenMs`), so they survive a
+restart, and they are read before the conversation can be recycled — including after a stopped
+generation, which still reports what it managed.
+
 ## Tuning generation
 
 All four live in `SettingsStore` and are read on the next engine load / message:
 
 | Setting | Default | Notes |
 |---|---|---|
-| `maxContextTokens` | 4096 | Context window. Sizes the KV cache, so it costs memory. The model supports up to 32k. **Changing it needs an engine reload.** |
-| `maxOutputTokens` | 2048 | Ceiling on one reply, so a runaway answer cannot eat the whole context. |
+| `manualContextTokens` | 0 (auto) | Override the measured window. 0 means calibrate. **Changing it needs an engine reload.** |
+| `maxOutputTokens` | 2048 | Ceiling on one reply, clamped to a quarter of the window. |
 | `repetitionPenalty` | 1.1 | Damps degenerate loops. 1.0 disables. Keep it low — generated code and markup legitimately repeat. |
 | `repetitionWindow` | 256 | How many recent tokens the penalty looks at. |
 
 Leaving `maxNumTokens` unset in `EngineConfig` falls back to the runtime's own small default, which
-is why it is now set explicitly.
+is why calibration sets it explicitly.
+
+## Startup
+
+`ui/startup/LoadingScreen.kt` sits between "model installed" and the chat. The first load can
+genuinely take minutes because measuring the context window means filling it for real, and a bare
+spinner is indistinguishable from a hang — so the screen names the current stage, counts elapsed
+time, and after 20 seconds offers **Skip — use 4096 tokens** to stop measuring and start chatting.
+Failures land here too, with *Try again* and *Measure again from scratch*.
+
+The chat is only composed once the engine reports `Ready`, so nobody waits at an idle composer.
+
+## Context window calibration
+
+Nothing in the runtime reports how large a context the device can hold. `Capabilities` has
+`maxVisionTokenBudget()` but no context equivalent, and the real limit depends on device RAM, the
+backend, and whether the model's KV cache is preallocated or grown lazily. So the app measures it.
+
+`llm/ContextCalibrator.kt` walks a descending ladder (32768 → 2048, `llm/ContextLadder.kt`),
+starting at a rung narrowed by free RAM. A size is only accepted once it has **survived a real
+generation that fills the window** — a token or two of warm-up proves nothing if the cache grows
+as it goes. The result is cached per model-and-backend and never measured again unless either
+changes, or you press **Recalibrate** on the model screen.
+
+Two shortcuts make this cheaper than a blind search:
+
+- Before filling anything, calibration sends a deliberately over-long prompt. The runtime rejects
+  it on a length check — cheap — and names its own ceiling in the error
+  (`"Exceeding the maximum number of tokens allowed: N"`). That is parsed and the search jumps
+  straight there, so the usual path is one load, one cheap question and one confirmation rather
+  than a walk down the whole ladder.
+- If the confirmation prompt fills far less of the window than we asked for, the runtime silently
+  clamped us, and the measured value is used instead of the requested one.
+
+**Measured on a real device.** A 15.5 GB phone confirms **16384** and is killed while filling
+24576. Init succeeded at 24576 and the process still died during the fill, which settles the open
+question from the design: this model's KV cache grows as the window fills, so `initialize()`
+returning is no evidence at all. The confirmation generation is what actually finds the ceiling.
+
+The starting rung is chosen from **total** RAM, not free RAM — Android reclaims cached pages on
+demand, so a 15.5 GB phone can report under 3 GB available purely because other apps are warm, and
+keying off that made the result a lottery decided by whatever else was open.
+
+**The crash guard.** A native out-of-memory kills the process outright: no exception, no
+`finally`. So the size being attempted is written to preferences *before* each attempt — with
+`commit`, not `apply`, since an async write may not reach disk before the process dies — and
+cleared afterwards. A marker still present at the next launch is the only evidence that a size was
+fatal, and the ladder resumes strictly below it. The same guard wraps ordinary generation, so a
+real chat that exhausts memory also steps the window down rather than looping on a crash.
+
+An init-time death is unambiguous and rules the size out at once. A death *mid-generation* is
+weaker evidence: swiping the app away or force-stopping it while it is replying leaves exactly the
+same trace, so the first one only earns a re-check at the same size, and it takes a repeat to
+shrink the window. Otherwise closing the app mid-reply would quietly shrink it every time.
+
+This state machine is unit-tested (`CalibrationPlannerTest`) precisely because it exists for the
+case where no code of ours gets to run.
+
+### Overflow
+
+When a chat outgrows the window, `llm/ContextWindow.kt` drops the oldest turns rather than letting
+the runtime reject the input. Budget is the window less the reply allowance and the system prompt;
+images are charged at the model's own `maxVisionTokenBudget()`. The newest message is never
+dropped. Dropping is silent by nature, so the chat shows a quiet "N earlier messages no longer fit
+the context window" marker.
 
 The line above the composer shows real context consumption from `Conversation.getTokenCount()` —
 not an estimate. If a chat misbehaves, look there first to tell a genuine context overflow apart
@@ -157,7 +234,7 @@ URLs, hashes, base64, long random IDs — and the loop is self-reinforcing once 
 |---|---|
 | A different or second model | `model/ModelCatalog.kt` |
 | Sampling, system prompt, thinking budget | `LlmService.conversationFor` + `SettingsStore` |
-| Sliding-window or summarised context | `LlmService.conversationFor` — it currently replays full history |
+| Summarising dropped turns instead of discarding | `llm/ContextWindow.kt` |
 | Tool / function calling | `ConversationConfig(tools = ...)` — LiteRT-LM has first-class support |
 | Camera capture | `ui/chat/ChatScreen.kt` — only the photo picker is wired up; camera needs a FileProvider |
 | Longer voice notes | `media/MediaLimits.kt`, once you know the model's real audio ceiling |

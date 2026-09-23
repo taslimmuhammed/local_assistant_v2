@@ -29,6 +29,8 @@ class ChatRepository(private val dao: ChatDao) {
         attachmentPath: String? = null,
         attachmentKind: AttachmentKind? = null,
         attachmentDurationMs: Long? = null,
+        tokensPerSecond: Double? = null,
+        timeToFirstTokenMs: Long? = null,
     ): Long = dao.appendMessage(
         MessageEntity(
             chatId = chatId,
@@ -39,6 +41,8 @@ class ChatRepository(private val dao: ChatDao) {
             attachmentPath = attachmentPath,
             attachmentKind = attachmentKind,
             attachmentDurationMs = attachmentDurationMs,
+            tokensPerSecond = tokensPerSecond,
+            timeToFirstTokenMs = timeToFirstTokenMs,
         ),
     )
 

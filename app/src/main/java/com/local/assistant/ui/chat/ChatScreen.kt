@@ -62,6 +62,7 @@ import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
@@ -90,6 +91,7 @@ fun ChatScreen(
     val supportsAudio by viewModel.supportsAudio.collectAsStateWithLifecycle()
     val pendingAttachment by viewModel.pendingAttachment.collectAsStateWithLifecycle()
     val recording by viewModel.recordingState.collectAsStateWithLifecycle()
+    val droppedFromContext by viewModel.droppedFromContext.collectAsStateWithLifecycle()
 
     val drawerState = rememberDrawerState(DrawerValue.Closed)
     val scope = rememberCoroutineScope()
@@ -175,6 +177,9 @@ fun ChatScreen(
                             modifier = Modifier.fillMaxSize(),
                             contentPadding = PaddingValues(vertical = 12.dp),
                         ) {
+                            if (droppedFromContext > 0) {
+                                item(key = TRIMMED_NOTICE_KEY) { TrimmedNotice(droppedFromContext) }
+                            }
                             items(messages, key = { it.id }) { MessageRow(it) }
                             streamingText?.let { partial ->
                                 item(key = STREAMING_ITEM_KEY) {
@@ -302,6 +307,22 @@ private fun ContextMeter(usage: LlmService.ContextUsage?) {
         modifier = Modifier
             .fillMaxWidth()
             .padding(horizontal = 16.dp, vertical = 4.dp),
+    )
+}
+
+/**
+ * Dropping old turns is silent by design, which is the one thing wrong with it — so say so
+ * rather than letting the model appear to forget for no reason.
+ */
+@Composable
+private fun TrimmedNotice(droppedCount: Int) {
+    Text(
+        text = "$droppedCount earlier message${if (droppedCount == 1) "" else "s"} " +
+            "no longer fit the context window",
+        style = MaterialTheme.typography.bodyMedium,
+        color = AppColors.TextSecondary,
+        textAlign = TextAlign.Center,
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 32.dp, vertical = 10.dp),
     )
 }
 
@@ -512,3 +533,4 @@ private fun PendingAttachmentChip(
 }
 
 private const val STREAMING_ITEM_KEY = "streaming"
+private const val TRIMMED_NOTICE_KEY = "trimmed-notice"
