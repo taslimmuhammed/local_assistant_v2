@@ -48,6 +48,7 @@ fun MemoryChips(
     chips: List<ChatViewModel.ChipItem>,
     onUndo: (Long) -> Unit,
     onEditTime: (Long, Long) -> Unit,
+    onOpenClock: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     if (chips.isEmpty()) return
@@ -59,6 +60,7 @@ fun MemoryChips(
                 item = item,
                 onUndo = { onUndo(item.recordId) },
                 onEdit = { editing = item },
+                onOpenClock = onOpenClock,
             )
         }
     }
@@ -76,9 +78,11 @@ fun MemoryChips(
 }
 
 @Composable
-private fun MemoryChipRow(item: ChatViewModel.ChipItem, onUndo: () -> Unit, onEdit: () -> Unit) {
+private fun MemoryChipRow(item: ChatViewModel.ChipItem, onUndo: () -> Unit, onEdit: () -> Unit, onOpenClock: () -> Unit) {
     val chip = item.chip
-    val text = listOfNotNull(chip.label, chip.detail, chip.at?.let { formatWhen(it, chip.allDay) }).joinToString(" · ")
+    val text = listOfNotNull(chip.label, chip.detail, chip.at?.let { formatWhen(it, chip.allDay) })
+        .filter { it.isNotBlank() }
+        .joinToString(" · ")
     Row(
         modifier = Modifier
             .clip(RoundedCornerShape(12.dp))
@@ -103,6 +107,8 @@ private fun MemoryChipRow(item: ChatViewModel.ChipItem, onUndo: () -> Unit, onEd
         } else {
             if (chip.editable) ChipAction("Edit", onEdit)
             if (item.canUndo) ChipAction("Undo", onUndo)
+            // A clock alarm is the clock app's once set: that is where it is changed or deleted.
+            if (chip.kind == MemoryChip.Kind.ALARM) ChipAction("Open clock", onOpenClock)
         }
     }
 }

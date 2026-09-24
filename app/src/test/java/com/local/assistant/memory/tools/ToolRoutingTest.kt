@@ -31,7 +31,8 @@ class ToolRoutingTest {
     private val store = FakeMemoryStore { now.toInstant().toEpochMilli() }
     private val reminders = FakeReminders()
     private val log = FakeToolLog()
-    private val executor = ToolExecutor(store, reminders, log, now = { now })
+    private val clock = FakeSystemAlarms()
+    private val executor = ToolExecutor(store, reminders, clock, log, now = { now })
     private val loop = ToolLoop(executor, maxRounds = 3, isOverflow = { "too long" in it.message.orEmpty() })
     private val context = ToolContext(chatId = 1, userMessageId = 10)
 
@@ -273,6 +274,58 @@ class ToolRoutingTest {
         val next = EventTimes.nextAlert(standup, at(9, 22, 9, 45), zone, WhenDefaults().dateOnly)!!
         assertEquals(at(9, 23, 9, 30), next.at)
         assertEquals(at(9, 23, 10), next.startsAt)
+    }
+
+    // ---- Clock alarms ----
+
+    @Test
+    fun `wake me up at 6 sets a clock alarm for the next 6 o'clock`() {
+        val (session, events) = turn(call("set_alarm", "when" to "6am", "label" to "wake up"))
+        assertEquals(listOf(FakeSystemAlarms.Set(6, 0, emptySet(), "Wake up")), clock.set)
+        assertEquals("Tue 22 Sep 06:00", result(session)["alarm"])
+        val chip = events.filterIsInstance<LoopEvent.Memory>().single().chip
+        assertEquals(MemoryChip.Kind.ALARM, chip.kind)
+        assertEquals(at(9, 22, 6), chip.at)
+        assertNull("the clock app owns it; no undo from here", log.records.values.single().undo)
+    }
+
+    @Test
+    fun `wake me up at 5 30 tomorrow means the morning, and a label that just says alarm is dropped`() {
+        turn(call("set_alarm", "when" to "tomorrow at 5:30", "label" to "Alarm"))
+        assertEquals(listOf(FakeSystemAlarms.Set(5, 30, emptySet(), null)), clock.set)
+    }
+
+    @Test
+    fun `a weekday alarm repeats on those days`() {
+        val (session, events) = turn(call("set_alarm", "when" to "7am", "repeat" to "weekdays"))
+        val days = java.time.DayOfWeek.entries.take(5).toSet()
+        assertEquals(listOf(FakeSystemAlarms.Set(7, 0, days, null)), clock.set)
+        assertEquals("Mon, Tue, Wed, Thu, Fri", result(session)["repeats"])
+        assertEquals(at(9, 22, 7), events.filterIsInstance<LoopEvent.Memory>().single().chip.at)
+    }
+
+    @Test
+    fun `what the clock app cannot do is refused, so the model can offer a reminder`() {
+        val (farOff, _) = turn(call("set_alarm", "when" to "friday 6am"))
+        assertTrue(result(farOff)["error"].toString().contains("24 hours"))
+
+        val (noTime, _) = turn(call("set_alarm", "when" to "tomorrow"))
+        assertTrue(result(noTime)["error"].toString().contains("What time"))
+
+        val (oddRepeat, _) = turn(call("set_alarm", "when" to "6am", "repeat" to "every other day"))
+        assertTrue(result(oddRepeat)["error"].toString().contains("days of the week"))
+        assertTrue(clock.set.isEmpty())
+    }
+
+    @Test
+    fun `no clock app, or one that cannot be reached, is an error rather than a false promise`() {
+        clock.reachable = false
+        val (unreachable, _) = turn(call("set_alarm", "when" to "6am"))
+        assertEquals(false, result(unreachable)["ok"])
+
+        clock.present = false
+        val (absent, _) = turn(call("set_alarm", "when" to "6am"))
+        assertTrue(result(absent)["error"].toString().contains("reminder"))
     }
 
     @Test

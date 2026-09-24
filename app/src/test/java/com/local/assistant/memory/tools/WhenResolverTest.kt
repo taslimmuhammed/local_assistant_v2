@@ -120,6 +120,19 @@ class WhenResolverTest {
     }
 
     @Test
+    fun `for alarms a bare hour is whichever comes first, and the morning when a day is named`() {
+        fun alarm(phrase: String, at: ZonedDateTime = now) = resolver.resolve(phrase, at, soonestBareHour = true)!!.at
+        assertEquals(at(9, 22, 5, 30), alarm("tomorrow at 5:30"))
+        assertEquals(at(9, 21, 18), alarm("6"))
+        val lateEvening = ZonedDateTime.of(2026, 9, 21, 23, 0, 0, 0, zone)
+        assertEquals(at(9, 22, 6), alarm("6", lateEvening))
+        assertEquals(at(9, 22, 5, 30), alarm("5:30", lateEvening))
+        // Anything that says am or pm, or a part of the day, is taken at its word.
+        assertEquals(at(9, 21, 17, 30), alarm("5:30 pm"))
+        assertEquals(at(9, 22, 6), alarm("subah 6 baje"))
+    }
+
+    @Test
     fun `whether a day was named is reported`() {
         assertEquals(false, resolver.resolve("at 3", now)!!.daySaid)
         assertEquals(false, resolver.resolve("shaam 7 baje", now)!!.daySaid)

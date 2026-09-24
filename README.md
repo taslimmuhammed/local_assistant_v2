@@ -113,8 +113,8 @@ user's response preferences.
 
 ### Tools and reminders
 
-The model can call seven tools — `add_task`, `update_task`, `add_event`, `save_fact`,
-`get_upcoming`, `search_memory`, `forget` — declared in `memory/tools/ToolCatalog.kt` with short
+The model can call eight tools — `add_task`, `update_task`, `add_event`, `save_fact`,
+`get_upcoming`, `search_memory`, `forget`, `set_alarm` — declared in `memory/tools/ToolCatalog.kt` with short
 routing-style descriptions. Tool calling is manual (`automaticToolCalling = false`): the runtime
 reports a call, and `ToolLoop` hands it to `ToolExecutor`, which validates the arguments, ignores
 a repeat of the same call within two minutes, applies it and its TOOL-row record in one
@@ -133,12 +133,22 @@ moves a reminder or event. Reminders fire through AlarmManager — exact if the 
 alarms, otherwise `setAndAllowWhileIdle` and the chip says it may be a few minutes late — with
 Done and Snooze 1 h on the notification, and are set again after a reboot, a clock or time-zone
 change, or an update. Events notify 30 minutes before they start (all-day ones at 8:00 AM on the
-day), and a repeating event's next alert is set as each one fires. Notifications are asked for the
+day), and a repeating event's next alert is set as each one fires. Reminders and event alerts play
+the phone's alarm tone, on the notification stream so silent mode is respected; the tone can be
+changed in the system's settings for the "Reminders" channel. Notifications are asked for the
 first time a timed reminder is made.
+
+Alarms ("wake me up at 5:30", "subah 6 baje ka alarm laga do") are different: `set_alarm` hands
+them to the phone's own clock app (`AlarmClock.ACTION_SET_ALARM`, without opening it), where they
+ring like any other alarm and are changed or deleted. The clock app only knows times of day, so an
+alarm is either one-off within the next 24 hours or repeating on days of the week; anything else
+is refused and the model offers a reminder. For alarms a bare hour means whichever comes first —
+"5:30" set at night is 5:30 AM — rather than the daytime rule reminders use.
 
 Routing is measured, not assumed: `RoutingEvalTest` runs 30 requests — reminders, reschedules,
 facts, events, Hinglish, and negatives that must not save anything — through the real model. On
-the target phone it scores 30/30 at temperature 1.0, with the tool declarations costing 626 tokens.
+the target phone it scores 102/102 at temperature 1.0 (34 requests, three samples each), with the
+tool declarations costing 698 tokens.
 
 Note that the model file reports `supportsFunctionCalling = false`; native tool calls work
 regardless (measured in `EngineProbeTest.toolCalling`), so the flag is not trusted.

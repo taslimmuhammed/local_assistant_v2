@@ -71,6 +71,10 @@ class RoutingEvalTest {
         Case("team meeting tomorrow from 10 to 11", setOf("add_event")),
         Case("flight to Kochi on 25 Oct at 6am", setOf("add_event")),
         Case("what's coming up this week?", setOf("get_upcoming")),
+        Case("set an alarm for 6am", setOf("set_alarm")),
+        Case("wake me up at 5:30 tomorrow", setOf("set_alarm")),
+        Case("subah 6 baje ka alarm laga do", setOf("set_alarm")),
+        Case("set an alarm for 7 on weekdays", setOf("set_alarm")) { args -> args["repeat"] != null },
         Case("what did I tell you about my CA?", setOf("search_memory")),
         Case("forget my dentist", setOf("forget")),
         Case("what's my dentist's name?", setOf(null, "search_memory")),
@@ -131,7 +135,9 @@ class RoutingEvalTest {
         val latencies = mutableListOf<Long>()
 
         val only = InstrumentationRegistry.getArguments().getString("only")
-        val selected = if (only == null) cases else cases.filter { only in it.prompt }
+        // At temperature 1.0 one sample per prompt is noisy; "-e samples 3" asks each three times.
+        val samples = InstrumentationRegistry.getArguments().getString("samples")?.toIntOrNull() ?: 1
+        val selected = (if (only == null) cases else cases.filter { only in it.prompt }).flatMap { case -> List(samples) { case } }
         for (case in selected) {
             val conversation = engine.createConversation(
                 ConversationConfig(

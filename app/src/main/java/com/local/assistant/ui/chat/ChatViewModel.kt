@@ -23,6 +23,7 @@ import com.local.assistant.memory.prompt.TurnEvent
 import com.local.assistant.memory.prompt.TurnRunner
 import com.local.assistant.memory.tools.ChatToolLog
 import com.local.assistant.memory.tools.MemoryChip
+import com.local.assistant.memory.tools.SystemAlarms
 import com.local.assistant.memory.tools.ToolExecutor
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
@@ -44,6 +45,7 @@ class ChatViewModel(
     private val conversations: ConversationManager,
     private val turns: TurnRunner,
     private val tools: ToolExecutor,
+    private val clockAlarms: SystemAlarms,
     private val settings: SettingsStore,
     private val attachments: AttachmentStore,
     private val recorder: AudioRecorder,
@@ -289,6 +291,8 @@ class ChatViewModel(
         }
     }
 
+    fun openClock() = clockAlarms.openClock()
+
     fun notificationsAsked() {
         settings.askedForNotifications = true
         _askForNotifications.value = false
@@ -347,6 +351,7 @@ class ChatViewModel(
                     conversations = container.conversations,
                     turns = container.turnRunner,
                     tools = container.toolExecutor,
+                    clockAlarms = container.clockAlarms,
                     settings = container.settings,
                     attachments = container.attachmentStore,
                     recorder = container.audioRecorder,

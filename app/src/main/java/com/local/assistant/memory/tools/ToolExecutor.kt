@@ -13,10 +13,12 @@ import com.local.assistant.memory.db.TaskEntity
 import com.local.assistant.memory.db.TaskStatus
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import java.time.DayOfWeek
 import java.time.Instant
 import java.time.LocalTime
 import java.time.ZonedDateTime
 import java.time.format.DateTimeFormatter
+import java.time.format.TextStyle
 import java.util.Locale
 
 /**
@@ -34,6 +36,7 @@ import java.util.Locale
 class ToolExecutor(
     private val store: MemoryStore,
     private val reminders: ReminderScheduler,
+    private val alarms: SystemAlarms,
     private val log: ToolLog,
     private val now: () -> ZonedDateTime,
     private val resolver: WhenResolver = WhenResolver(),
@@ -109,6 +112,7 @@ class ToolExecutor(
             ToolCatalog.GET_UPCOMING -> getUpcoming(args)
             ToolCatalog.SEARCH_MEMORY -> searchMemory(args)
             ToolCatalog.FORGET -> forget(args)
+            ToolCatalog.SET_ALARM -> setAlarm(args)
             else -> throw ToolError("There is no tool called ${call.name}.")
         }
     }
@@ -301,6 +305,67 @@ class ToolExecutor(
             changedPrefix = true,
             alarms = listOfNotNull(alert?.let { AlarmChange.ScheduleEvent(id, it) }),
         )
+    }
+
+    // ---- Clock alarms ----
+
+    /**
+     * An alarm in the phone's clock app. The clock app only knows times of day: an alarm rings
+     * the next time its time comes round, or repeats on days of the week. So anything further
+     * off than a day, or repeating some other way, is refused — the model can offer a reminder.
+     */
+    private fun setAlarm(args: Args): Applied {
+        if (!alarms.available()) throw ToolError("This phone's clock app doesn't accept alarms from other apps. Offer a reminder instead.")
+        val whenText = args.required("when")
+        val now = now()
+        val resolved = resolver.resolve(whenText, now, soonestBareHour = true)
+            ?: throw ToolError("I couldn't understand the time '$whenText'. Ask the user when.")
+        if (resolved.dateOnly) throw ToolError("What time should the alarm ring? Ask the user.")
+
+        val days = args.text("repeat")?.let { text ->
+            val rule = RepeatRule.parse(text) ?: throw ToolError("I couldn't understand repeat '$text'.")
+            when {
+                rule.freq == RepeatRule.Freq.DAILY && rule.interval == 1 -> DayOfWeek.entries.toSet()
+                rule.freq == RepeatRule.Freq.WEEKLY && rule.interval == 1 && rule.byDay.isNotEmpty() -> rule.byDay
+                else -> throw ToolError("Clock alarms can only repeat daily or on days of the week.")
+            }
+        }.orEmpty()
+
+        val at = resolved.at
+        if (days.isEmpty()) {
+            if (!at.isAfter(now)) throw ToolError("'$whenText' has already passed. Ask for a later time.")
+            if (at.isAfter(now.plusDays(1))) {
+                throw ToolError("The clock app can only set a one-off alarm for the next 24 hours. Offer a reminder for that day instead.")
+            }
+        }
+        val label = args.text("label")?.let(::tidyTitle)?.takeUnless { it.equals("alarm", ignoreCase = true) }
+        if (!alarms.set(at.hour, at.minute, days, label)) {
+            throw ToolError("The clock app couldn't be reached. Offer a reminder instead.")
+        }
+
+        val next = if (days.isEmpty()) at else nextOn(days, at, now)
+        return Applied(
+            result = ok("alarm" to modelTime(next), "repeats" to days.takeIf { it.isNotEmpty() }?.let(::describeDays)),
+            chip = MemoryChip(
+                kind = MemoryChip.Kind.ALARM,
+                label = "Alarm",
+                detail = label.orEmpty(),
+                at = next.millis(),
+                note = days.takeIf { it.isNotEmpty() }?.let { "Repeats " + describeDays(it) },
+            ),
+        )
+    }
+
+    /** The first of [days] at [at]'s time, after [now]. */
+    private fun nextOn(days: Set<DayOfWeek>, at: ZonedDateTime, now: ZonedDateTime): ZonedDateTime {
+        var candidate = now.toLocalDate().atTime(at.toLocalTime()).atZone(now.zone)
+        while (!candidate.isAfter(now) || candidate.dayOfWeek !in days) candidate = candidate.plusDays(1)
+        return candidate
+    }
+
+    private fun describeDays(days: Set<DayOfWeek>): String = when (days.size) {
+        7 -> "every day"
+        else -> days.sorted().joinToString(", ") { it.getDisplayName(TextStyle.SHORT, Locale.ENGLISH) }
     }
 
     // ---- Facts ----

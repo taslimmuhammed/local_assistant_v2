@@ -7,6 +7,8 @@ import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.media.AudioAttributes
+import android.media.RingtoneManager
 import android.os.Build
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
@@ -22,14 +24,37 @@ import java.time.format.DateTimeFormatter
 /** The reminder notification: the task's title, with Done and Snooze 1 h. */
 object ReminderNotifications {
 
-    private const val CHANNEL = "reminders"
+    /**
+     * A channel's sound cannot be changed once it exists, so the musical one is a new channel;
+     * the first, which played the plain notification ding, is removed.
+     */
+    private const val CHANNEL = "reminder_alerts"
+    private const val FIRST_CHANNEL = "reminders"
 
+    /**
+     * Reminders play the phone's alarm tone — music, rather than a ding that is easy to miss —
+     * on the notification stream, so silent and vibrate mode are still respected. The user can
+     * pick another tone for the channel in the system's notification settings.
+     */
     fun createChannel(context: Context) {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
+        val manager = context.getSystemService(NotificationManager::class.java)
+        manager.deleteNotificationChannel(FIRST_CHANNEL)
+        val tone = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_ALARM)
+            ?: RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION)
         val channel = NotificationChannel(CHANNEL, "Reminders", NotificationManager.IMPORTANCE_HIGH).apply {
-            description = "Reminders you asked the assistant for"
+            description = "Reminders and event alerts you asked the assistant for"
+            setSound(
+                tone,
+                AudioAttributes.Builder()
+                    .setUsage(AudioAttributes.USAGE_NOTIFICATION_EVENT)
+                    .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
+                    .build(),
+            )
+            enableVibration(true)
+            vibrationPattern = longArrayOf(0, 400, 200, 400)
         }
-        context.getSystemService(NotificationManager::class.java).createNotificationChannel(channel)
+        manager.createNotificationChannel(channel)
     }
 
     fun canPost(context: Context): Boolean =

@@ -1,5 +1,7 @@
 package com.local.assistant.memory.tools
 
+import java.time.DayOfWeek
+
 import com.local.assistant.memory.db.EventEntity
 import com.local.assistant.memory.db.FactEntity
 import com.local.assistant.memory.db.ForgetResult
@@ -24,7 +26,7 @@ data class MemoryChip(
     /** Whether the time can be changed from the chip. */
     val editable: Boolean = false,
 ) {
-    enum class Kind { FACT, TASK, EVENT, FORGET }
+    enum class Kind { FACT, TASK, EVENT, FORGET, ALARM }
 }
 
 /**
@@ -65,6 +67,23 @@ interface ToolLog {
     suspend fun read(id: Long): ToolRecord?
 
     suspend fun update(id: Long, record: ToolRecord)
+}
+
+/**
+ * Alarms in the phone's own clock app — the ones that ring loudly and on time — as opposed to the
+ * app's reminders. They belong to the clock app once set: it is where they are changed or deleted.
+ */
+interface SystemAlarms {
+    /** Whether there is a clock app that accepts alarms from other apps. */
+    fun available(): Boolean
+
+    /**
+     * Sets an alarm at [hour]:[minute]. With no [days] it rings once, the next time that time
+     * comes round; with days it repeats on them. False if the clock app could not be reached.
+     */
+    fun set(hour: Int, minute: Int, days: Set<DayOfWeek>, label: String?): Boolean
+
+    fun openClock()
 }
 
 /** Makes reminders and event alerts go off. The Android implementation uses AlarmManager. */

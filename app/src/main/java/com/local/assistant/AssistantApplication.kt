@@ -26,6 +26,7 @@ import com.local.assistant.memory.work.AppForeground
 import com.local.assistant.memory.work.ModelScheduler
 import com.local.assistant.model.ModelManager
 import com.local.assistant.reminders.AlarmReminderScheduler
+import com.local.assistant.reminders.ClockAlarms
 import com.local.assistant.reminders.ReminderNotifications
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.SupervisorJob
@@ -80,9 +81,13 @@ class AppContainer(context: Context) {
 
     val reminderScheduler = AlarmReminderScheduler(context)
 
+    /** Alarms in the phone's own clock app, for "wake me up at 6". */
+    val clockAlarms = ClockAlarms(context, inForeground = { appForeground.isForeground })
+
     val toolExecutor = ToolExecutor(
         store = memoryRepository,
         reminders = reminderScheduler,
+        alarms = clockAlarms,
         log = ChatToolLog(chatRepository),
         now = ZonedDateTime::now,
     )

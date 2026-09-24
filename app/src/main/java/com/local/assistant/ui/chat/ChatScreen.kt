@@ -224,6 +224,7 @@ fun ChatScreen(
                                         chips = chips[message.id].orEmpty(),
                                         onUndo = viewModel::undo,
                                         onEditTime = viewModel::editTime,
+                                        onOpenClock = viewModel::openClock,
                                     )
                                 }
                             }
@@ -239,6 +240,7 @@ fun ChatScreen(
                                             chips = chips[it.id].orEmpty(),
                                             onUndo = viewModel::undo,
                                             onEditTime = viewModel::editTime,
+                                            onOpenClock = viewModel::openClock,
                                         )
                                     }
                                 }

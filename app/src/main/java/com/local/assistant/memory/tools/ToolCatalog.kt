@@ -17,14 +17,15 @@ object ToolCatalog {
     const val GET_UPCOMING = "get_upcoming"
     const val SEARCH_MEMORY = "search_memory"
     const val FORGET = "forget"
+    const val SET_ALARM = "set_alarm"
 
-    /** Tools that change what is stored, as opposed to reading it. */
-    val WRITES = setOf(ADD_TASK, UPDATE_TASK, ADD_EVENT, SAVE_FACT, FORGET)
+    /** Tools that change something, as opposed to reading it. */
+    val WRITES = setOf(ADD_TASK, UPDATE_TASK, ADD_EVENT, SAVE_FACT, FORGET, SET_ALARM)
 
     val declarations: List<String> = listOf(
         function(
             ADD_TASK,
-            "Use when the user wants to be reminded or to do something later (\\\"remind me\\\", \\\"don't let me forget\\\", \\\"I need to … tomorrow\\\"). Put the user's own time words in when, copied exactly; the app converts them.",
+            "Use when the user wants to be reminded or to do something later (\\\"remind me\\\", \\\"don't let me forget\\\"). Put the user's own time words in when, copied exactly.",
             required = listOf("title"),
             "title" to "string",
             "when" to "string",
@@ -50,7 +51,7 @@ object ToolCatalog {
         ),
         function(
             SAVE_FACT,
-            "Use when the user states a lasting fact about themselves or people and places in their life (\\\"my dentist is …\\\"), and when they tell you how to reply from now on (\\\"reply in short answers\\\": attribute pref.reply_style, core=true). subject is user or who it is about; attribute is short, like dentist or birthday. core=true only for how to reply. Not for plans, moods or questions.",
+            "Use when the user states a lasting fact about themselves or people and places in their life (\\\"my dentist is …\\\"), and when they tell you how to reply from now on (\\\"reply in short answers\\\": attribute pref.reply_style, core=true). subject is user or who it is about; attribute is short, like dentist or birthday. Not for plans, moods or questions.",
             required = listOf("subject", "attribute", "value"),
             "subject" to "string",
             "attribute" to "string",
@@ -59,7 +60,7 @@ object ToolCatalog {
         ),
         function(
             GET_UPCOMING,
-            "Use when the user asks what's coming up, their schedule, or pending reminders beyond the agenda already shown.",
+            "Use when the user asks what's coming up or for their schedule, beyond the agenda shown.",
             required = emptyList(),
             "days" to "integer",
         ),
@@ -68,6 +69,14 @@ object ToolCatalog {
             "Use when the user asks about something they told you before or a past conversation, and it isn't already in context. Not for advice, hypotheticals or general questions.",
             required = listOf("query"),
             "query" to "string",
+        ),
+        function(
+            SET_ALARM,
+            "Use when the user asks for an alarm (\\\"wake me up at 5:30\\\"). It rings in the phone's clock app. Put the user's own time words in when, copied exactly.",
+            required = listOf("when"),
+            "when" to "string",
+            "label" to "string",
+            "repeat" to "string",
         ),
         function(
             FORGET,
@@ -82,6 +91,7 @@ object ToolCatalog {
     val RULES = """
         Tools — call them rather than only saying you will:
         - Reminders and to-dos → add_task, with the user's own time words in when.
+        - Alarms ("set an alarm", "wake me up") → set_alarm, which rings in the phone's clock app.
         - Changing, finishing or moving an existing reminder → update_task.
         - Appointments, meetings, birthdays, trips → add_event.
         - Lasting facts about the user or their people and places → save_fact. How they want you to reply from now on ("keep answers short", "reply in Hindi") → save_fact with core=true, then follow it. Never for questions, hypotheticals, other people's opinions, passing moods or jokes.

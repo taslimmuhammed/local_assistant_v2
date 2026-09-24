@@ -43,7 +43,12 @@ data class WhenDefaults(
  */
 class WhenResolver(private val defaults: WhenDefaults = WhenDefaults()) {
 
-    fun resolve(phrase: String, now: ZonedDateTime): ResolvedWhen? {
+    /**
+     * [soonestBareHour]: read a bare hour ("at 6", "5:30") as whichever of am or pm comes first —
+     * the morning one if a day was named — instead of the fixed daytime rule. Right for alarms,
+     * where "wake me up at 5:30" set at night means the coming morning.
+     */
+    fun resolve(phrase: String, now: ZonedDateTime, soonestBareHour: Boolean = false): ResolvedWhen? {
         var text = " " + normalise(phrase) + " "
         // Read before "tonight" is consumed as a day word below: it is also a part of the day.
         val tonight = TONIGHT.containsMatchIn(text)
@@ -136,6 +141,15 @@ class WhenResolver(private val defaults: WhenDefaults = WhenDefaults()) {
         if (nextDay) day = day.plusDays(1)
 
         var at = day.atTime(time).atZone(now.zone)
+        if (soonestBareHour && clock?.bare == true) {
+            val morning = day.atTime(time.withHour(time.hour % 12)).atZone(now.zone)
+            val evening = morning.plusHours(12)
+            at = when {
+                dayWasSaid -> if (morning.isAfter(now)) morning else evening
+                else -> listOf(morning, evening, morning.plusDays(1)).first { it.isAfter(now) }
+            }
+            return ResolvedWhen(at, dateOnly = false, daySaid = dayWasSaid)
+        }
         // A time with no day that has already gone means the next time it comes round.
         if (!dayWasSaid && !at.isAfter(now)) at = at.plusDays(1)
         return ResolvedWhen(at, dateOnly = clock == null && part == null, daySaid = dayWasSaid)
@@ -152,7 +166,8 @@ class WhenResolver(private val defaults: WhenDefaults = WhenDefaults()) {
         }
     }
 
-    private data class Clock(val time: LocalTime, val nextDay: Boolean = false)
+    /** [bare]: an hour with nothing to say whether it is am or pm. */
+    private data class Clock(val time: LocalTime, val nextDay: Boolean = false, val bare: Boolean = false)
 
     private fun partOfDay(text: String): Part? = when {
         MORNING.containsMatchIn(text) -> Part.MORNING
@@ -186,8 +201,8 @@ class WhenResolver(private val defaults: WhenDefaults = WhenDefaults()) {
                 else -> Clock(LocalTime.of(hour + 12, minute))
             }
             // Bare hour: 7–11 morning, 12 noon, 1–6 afternoon.
-            hour in 7..11 || hour == 12 -> Clock(LocalTime.of(hour, minute))
-            else -> Clock(LocalTime.of(hour + 12, minute))
+            hour in 7..11 || hour == 12 -> Clock(LocalTime.of(hour, minute), bare = true)
+            else -> Clock(LocalTime.of(hour + 12, minute), bare = true)
         }
     }
 

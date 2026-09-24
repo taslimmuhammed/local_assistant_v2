@@ -108,6 +108,18 @@ class FakeReminders(var exact: Boolean = true) : ReminderScheduler {
     override fun cancelEvent(eventId: Long) { eventAlerts.remove(eventId) }
 }
 
+class FakeSystemAlarms(var present: Boolean = true, var reachable: Boolean = true) : SystemAlarms {
+    data class Set(val hour: Int, val minute: Int, val days: kotlin.collections.Set<java.time.DayOfWeek>, val label: String?)
+    val set = mutableListOf<Set>()
+    override fun available() = present
+    override fun set(hour: Int, minute: Int, days: kotlin.collections.Set<java.time.DayOfWeek>, label: String?): Boolean {
+        if (!reachable) return false
+        set += Set(hour, minute, days, label)
+        return true
+    }
+    override fun openClock() = Unit
+}
+
 class FakeToolLog : ToolLog {
     val records = linkedMapOf<Long, ToolRecord>()
     private var nextId = 1_000L
