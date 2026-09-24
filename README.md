@@ -19,7 +19,7 @@ This is intentionally a **base** to build on: one model, one screen, persistent 
 | | |
 |---|---|
 | Android | 8.0 (API 26) or newer, `arm64-v8a` |
-| Free storage | ~4.2 GB, plus ~0.35 GB for the optional search model |
+| Free storage | ~4.2 GB, plus ~0.35 GB for the search model |
 | RAM | 8 GB+ recommended (GPU backend peaks around 0.7–1 GB, CPU around 3.3 GB) |
 | JDK (to build) | 17 |
 | NDK and CMake (to build) | NDK 28.2.13676358, CMake 3.22.1 (SDK Manager), for sqlite-vec |
@@ -143,13 +143,24 @@ on a device where it fails to load, `KotlinVectorIndex` scores the same bytes wi
 arithmetic (`VectorParityTest` checks both return identical neighbours). Vectors from different
 models are never compared: changing the embedder sends the archive back to the backlog.
 
-The embedder is optional and installed from the Model screen ("Memory search"): a download of
+The embedder is optional and installed from the Model screen ("Memory search"). The one to use
+is **EmbeddingGemma 300M**: on public per-language benchmarks it retrieves clearly better than the
+alternatives in English, Hindi, romanized Hindi, Malayalam, Tamil and Telugu. Google does not
+publish it in a form LiteRT-LM's `EmbeddingEngine` loads, so it is built from the original weights
+with `tools/embedder` (see its README; about 15 minutes on a Mac) and loaded from storage. As a
+no-account alternative the screen downloads
 [Granite Embedding 311M multilingual](https://huggingface.co/litert-community/granite-embedding-311m-multilingual-r2)
-(332 MB, Apache-2.0, no account needed), or any `.litertlm` embedding bundle from storage. Without
-it, recall still works on keywords and rare words. Measured on the target phone:
+(332 MB, Apache-2.0). Without either, recall still works on keywords and rare words.
+
+EmbeddingGemma's similarities run lower than the usual 0.6 rule of thumb: calibrated on 60
+labelled pairs (`tools/embedder/calibrate_threshold.py`), its inject threshold is 0.42 — 73% of
+related pairs recalled at 95% precision. Measured on the target phone:
 
 | | |
 |---|---|
+| EmbeddingGemma load (once, on CPU) | 2.7 s |
+| Embedding the user's message before a reply | 20 ms median, 25 ms p95 |
+| Embedding an archived exchange | 38 ms |
 | Recall without vectors (FTS, fusion, facts) | 44 ms |
 | KNN over 55,000 chunks, k = 40 | 18–31 ms sqlite-vec, 30–51 ms Kotlin |
 
@@ -366,7 +377,7 @@ URLs, hashes, base64, long random IDs — and the loop is self-reinforcing once 
 | Summarising dropped turns instead of discarding | `memory/prompt/ConversationManager.kt` |
 | A new tool | `memory/tools/ToolCatalog.kt` (declaration + routing rule) and `ToolExecutor` |
 | Time words the resolver misses | `memory/tools/WhenResolver.kt`, with a row in `WhenResolverTest` |
-| Another embedding model | `memory/embed/EmbedderCatalog.kt` (prompts, threshold); run `EmbedderProbeTest` to calibrate |
+| Another embedding model | `memory/embed/EmbedderCatalog.kt` (prompts, threshold); `tools/embedder/calibrate_threshold.py`, then `EmbedderProbeTest` on the phone |
 | What counts as trivial, or a rare word | `memory/retrieval/QueryText.kt` |
 | Camera capture | `ui/chat/ChatScreen.kt` — only the photo picker is wired up; camera needs a FileProvider |
 | Longer voice notes | `media/MediaLimits.kt`, once you know the model's real audio ceiling |

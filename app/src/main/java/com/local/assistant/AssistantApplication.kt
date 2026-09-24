@@ -192,7 +192,7 @@ class AppContainer(context: Context) {
         manager = embedderManager,
         remaining = embeddingQueue.remaining,
         installedName = { EmbedderCatalog.byKey(settings.embedderKey)?.displayName },
-        downloadName = EmbedderCatalog.DEFAULT.displayName,
+        downloadName = "Granite",
         downloadBytes = EmbedderCatalog.DEFAULT.sizeBytes,
         delete = {
             embedder.unload()

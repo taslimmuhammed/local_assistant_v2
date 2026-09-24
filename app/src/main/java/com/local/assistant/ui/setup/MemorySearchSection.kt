@@ -118,27 +118,28 @@ fun MemorySearchSection(controls: MemorySearchControls) {
 
             else -> Column(Modifier.padding(top = 20.dp)) {
                 OutlinedButton(
-                    onClick = manager::download,
+                    onClick = { picker.launch(arrayOf("*/*")) },
                     modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(12.dp),
+                ) { Text("Load from device storage") }
+                OutlinedButton(
+                    onClick = manager::download,
+                    modifier = Modifier.fillMaxWidth().padding(top = 10.dp),
                     shape = RoundedCornerShape(12.dp),
                 ) {
                     val resumable = manager.partialBytes()
                     Text(
                         if (resumable > 0) {
-                            "Resume download (${formatBytes(controls.downloadBytes - resumable)} left)"
+                            "Resume ${controls.downloadName} (${formatBytes(controls.downloadBytes - resumable)} left)"
                         } else {
-                            "Download (${formatBytes(controls.downloadBytes)})"
+                            "Download ${controls.downloadName} (${formatBytes(controls.downloadBytes)})"
                         },
                     )
                 }
-                OutlinedButton(
-                    onClick = { picker.launch(arrayOf("*/*")) },
-                    modifier = Modifier.fillMaxWidth().padding(top = 10.dp),
-                    shape = RoundedCornerShape(12.dp),
-                ) { Text("Load from device storage") }
                 Text(
-                    text = "The download is ${controls.downloadName}. Any .litertlm embedding bundle made " +
-                        "for LiteRT-LM also works; changing model re-indexes past conversations.",
+                    text = "EmbeddingGemma finds more, especially in Indian languages, but has to be " +
+                        "built on a computer (tools/embedder) and loaded from storage. The download " +
+                        "needs no account. Changing model re-indexes past conversations.",
                     style = MaterialTheme.typography.bodyMedium,
                     color = AppColors.TextSecondary,
                     modifier = Modifier.padding(top = 8.dp),

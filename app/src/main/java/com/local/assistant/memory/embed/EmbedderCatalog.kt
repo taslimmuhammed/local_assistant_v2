@@ -43,7 +43,29 @@ object EmbedderCatalog {
         sha256 = "beb2be205abc766a670522e651be5713cecb4e4c33e5ef5c30f6a710d4226db5",
     )
 
-    /** What is offered for download. */
+    /**
+     * Google's EmbeddingGemma 300M, the better of the two for this app's languages (see
+     * `tools/embedder/README.md` for the comparison). Google ships it for LiteRT only as a gated
+     * `.tflite` that `EmbeddingEngine` cannot load, so there is no download: the bundle is built
+     * from the original weights with `tools/embedder` and imported. Recognised by its file name.
+     *
+     * Its similarities sit lower than the brief's 0.6 assumed: on 60 labelled pairs through this
+     * bundle, as the app scores them (`tools/embedder/calibrate_threshold.py`), related pairs had
+     * a median of 0.47 and unrelated ones 0.25. At 0.42, 73% of related pairs are recalled at 95%
+     * precision; at 0.6 only 8% would be.
+     */
+    val EMBEDDING_GEMMA = EmbedderSpec(
+        key = "embeddinggemma-300m-wi8",
+        displayName = "EmbeddingGemma 300M",
+        downloadUrl = null,
+        sizeBytes = 0,
+        sha256 = null,
+        queryPrefix = GEMMA_QUERY,
+        documentPrefix = GEMMA_DOCUMENT,
+        similarityThreshold = 0.42f,
+    )
+
+    /** What is offered for download: the only one of the two that can be. */
     val DEFAULT = GRANITE
 
     /**
@@ -59,17 +81,10 @@ object EmbedderCatalog {
         requiredFreeBytes = DEFAULT.sizeBytes + 256L * 1024 * 1024,
     )
 
-    /**
-     * EmbeddingGemma's task prompts, from its model card. Google publishes it for LiteRT only as a
-     * gated `.tflite` plus tokenizer, which `EmbeddingEngine` cannot load, so it has no download
-     * here; a bundle built from those files can be imported.
-     */
-    private const val GEMMA_QUERY = "task: search result | query: "
-    private const val GEMMA_DOCUMENT = "title: none | text: "
-
     fun byKey(key: String?): EmbedderSpec? = when {
         key == null -> null
         key == GRANITE.key -> GRANITE
+        key == EMBEDDING_GEMMA.key -> EMBEDDING_GEMMA
         key.startsWith(IMPORTED) -> forImport(key.removePrefix(IMPORTED))
         else -> null
     }
@@ -82,6 +97,7 @@ object EmbedderCatalog {
     fun forImport(fileName: String): EmbedderSpec {
         val name = fileName.lowercase(Locale.ROOT)
         if (name == GRANITE_FILE) return GRANITE
+        if (name == EMBEDDING_GEMMA_FILE) return EMBEDDING_GEMMA
         val gemma = "embeddinggemma" in name || "embedding-gemma" in name || "embedding_gemma" in name
         return EmbedderSpec(
             key = IMPORTED + fileName.filter { it.isLetterOrDigit() || it in "._-" }.take(80),
@@ -96,4 +112,11 @@ object EmbedderCatalog {
 
     private const val IMPORTED = "import:"
     private const val GRANITE_FILE = "granite-embedding-311m-r2_wi8fc.litertlm"
+
+    /** What `tools/embedder/convert_embeddinggemma.py` names its bundle. */
+    private const val EMBEDDING_GEMMA_FILE = "embeddinggemma-300m_wi8.litertlm"
 }
+
+/** EmbeddingGemma's task prompts for retrieval, from its model card and sentence-transformers config. */
+private const val GEMMA_QUERY = "task: search result | query: "
+private const val GEMMA_DOCUMENT = "title: none | text: "
