@@ -85,7 +85,7 @@ class MemoryStoreTest {
     fun forgettingLeavesATombstoneThatOlderMessagesCannotCross() = runBlocking {
         memory.saveFact("user", "dentist", "Dr. Rao", FactOrigin.CHAT, statedAt = 100)
         now = 2_000_000L
-        val removed = memory.forget("user", "dentist")
+        val removed = memory.forgetFacts("user", "dentist").removed
         assertEquals(listOf("Dr. Rao"), removed.map { it.value })
 
         val fromOldMessage = memory.saveFact("user", "dentist", "Dr. Rao", FactOrigin.EXTRACTED, statedAt = 150)
@@ -102,7 +102,7 @@ class MemoryStoreTest {
         memory.saveFact("amma", "birthday", "12 May", FactOrigin.CHAT, statedAt = 1)
         memory.saveFact("mom", "phone", "98450 00000", FactOrigin.CHAT, statedAt = 1)
         now = 10
-        assertEquals(2, memory.forget("mother").size)
+        assertEquals(2, memory.forgetFacts("mother", null).removed.size)
         val relearned = memory.saveFact("mummy", "birthday", "12 May", FactOrigin.EXTRACTED, statedAt = 5)
         assertEquals(FactDecision.Skip(SkipReason.FORGOTTEN), relearned.decision)
     }

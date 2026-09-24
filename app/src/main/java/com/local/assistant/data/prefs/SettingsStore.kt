@@ -60,6 +60,16 @@ class SettingsStore(context: Context) {
         }
     }
 
+    /** Notifications are asked for once, the first time a timed reminder is made. */
+    var askedForNotifications: Boolean
+        get() = prefs.getBoolean(KEY_ASKED_NOTIFICATIONS, false)
+        set(value) = prefs.edit { putBoolean(KEY_ASKED_NOTIFICATIONS, value) }
+
+    /** Exact alarms are offered once, the first time a reminder could only be scheduled inexactly. */
+    var offeredExactAlarms: Boolean
+        get() = prefs.getBoolean(KEY_OFFERED_EXACT_ALARMS, false)
+        set(value) = prefs.edit { putBoolean(KEY_OFFERED_EXACT_ALARMS, value) }
+
     /** Largest context confirmed to work on this device, or 0 if never calibrated. */
     var calibratedContextTokens: Int
         get() = prefs.getInt(KEY_CALIBRATED_CONTEXT, 0)
@@ -150,6 +160,8 @@ class SettingsStore(context: Context) {
         private const val KEY_MAX_OUTPUT = "max_output_tokens"
         private const val KEY_CONTEXT_CEILING = "context_ceiling_tokens"
         private const val KEY_TOKEN_RATE = "latin_chars_per_token"
+        private const val KEY_ASKED_NOTIFICATIONS = "asked_for_notifications"
+        private const val KEY_OFFERED_EXACT_ALARMS = "offered_exact_alarms"
         private const val KEY_TOKEN_RATE_MODEL = "latin_chars_per_token_model"
         private const val KEY_REPETITION_PENALTY = "repetition_penalty"
         private const val KEY_REPETITION_WINDOW = "repetition_window"

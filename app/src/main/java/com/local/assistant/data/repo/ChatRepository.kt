@@ -33,6 +33,8 @@ class ChatRepository(
 
     suspend fun chat(chatId: Long): ChatEntity? = dao.chat(chatId)
 
+    suspend fun message(messageId: Long): MessageEntity? = dao.message(messageId)
+
     suspend fun createChat(title: String = DEFAULT_TITLE): Long {
         val now = System.currentTimeMillis()
         return dao.insertChat(ChatEntity(title = title, createdAt = now, updatedAt = now))

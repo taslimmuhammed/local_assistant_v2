@@ -53,6 +53,8 @@ class ConversationManager(
     private val scheduler: ModelScheduler,
     private val scope: CoroutineScope,
     private val estimator: MeasuredTokenEstimator,
+    /** OpenAPI declarations for the tools the model may call; part of the stable prefix. */
+    private val tools: List<String> = emptyList(),
     private val zone: () -> ZoneId = ZoneId::systemDefault,
     private val clock: () -> Long = System::currentTimeMillis,
 ) {
@@ -73,7 +75,14 @@ class ConversationManager(
         /** The newest stored message this conversation contains. */
         var lastMessageId: Long,
         var lastNowShown: ZonedDateTime? = null,
+        /** The runtime's count just before the turn in flight, to measure what the turn cost. */
+        var tokensBeforeTurn: Int? = null,
     )
+
+    /** Plain turns' text and real cost, gathered until there is enough to learn from. */
+    private var turnSample = TurnSample()
+
+    private data class TurnSample(val counts: ScriptCounts = ScriptCounts.ZERO, val messages: Int = 0, val tokens: Int = 0)
 
     private val mutex = Mutex()
     private var live: Live? = null
@@ -130,6 +139,7 @@ class ConversationManager(
             envelope = assembler.buildEnvelope(inputs.copy(showNow = true))
         }
         if (envelope.showedNow) current.lastNowShown = now
+        current.tokensBeforeTurn = current.session.tokenCount()
         PreparedTurn(current.session, envelope, budget)
     }
 
@@ -162,11 +172,36 @@ class ConversationManager(
             .buildPrefix(prefixInputs(chatId, current.budget)).text
     }
 
+    /**
+     * Something changed what the prefix would say, outside the conversation — an undo, an edit,
+     * a reminder done from its notification. Rebuild once the chat has gone quiet.
+     */
+    fun prefixMayHaveChanged() = scheduleMaintenance()
+
     /** The user switched chats: the meter and notice should stop describing the old one. */
     fun onChatSelected(chatId: Long?) {
         if (live?.chatId != chatId) {
             _contextUsage.value = null
             _droppedFromContext.value = 0
+        }
+    }
+
+    /**
+     * Learns from a finished plain turn — no tools, no attachments — what text really costs: the
+     * runtime's count went up by exactly the envelope and the reply. Turns are pooled until there
+     * is enough text to say something (see [MeasuredTokenEstimator.MIN_LATIN_CHARS]).
+     */
+    suspend fun learnFromTurn(chatId: Long, envelope: String, reply: String) = mutex.withLock {
+        val current = live?.takeIf { it.chatId == chatId } ?: return@withLock
+        val before = current.tokensBeforeTurn ?: return@withLock
+        val after = current.session.tokenCount() ?: return@withLock
+        if (after <= before) return@withLock
+        val counts = HeuristicTokenEstimator.countScripts(envelope) + HeuristicTokenEstimator.countScripts(reply)
+        turnSample = TurnSample(turnSample.counts + counts, turnSample.messages + 2, turnSample.tokens + (after - before))
+        if (turnSample.counts.latin >= MeasuredTokenEstimator.MIN_LATIN_CHARS) {
+            estimator.observe(turnSample.counts, turnSample.messages, turnSample.tokens)
+            Log.i(TAG, "Learned from turns: ${turnSample.tokens} tokens for ${turnSample.counts.total} chars; Latin rate now ${"%.2f".format(estimator.latinCharsPerToken)}")
+            turnSample = TurnSample()
         }
     }
 
@@ -234,12 +269,18 @@ class ConversationManager(
         live?.let(::close)
         val prefixInputs = prefixInputs(chatId, budget)
 
+        val declared = tools.takeIf { capabilities.tools }.orEmpty()
+        // The runtime renders declarations in its own template format; the JSON is a fair,
+        // conservative stand-in for what they cost.
+        val toolTokens = if (declared.isEmpty()) 0 else estimator.estimate(declared.joinToString("\n"))
+
         suspend fun open(): Pair<PromptPlan, ChatSession> {
-            val plan = assemblerFor(budget, capabilities).plan(prefixInputs, history, next, toolTokens = 0)
+            val plan = assemblerFor(budget, capabilities).plan(prefixInputs, history, next, toolTokens)
             if (plan.shed.isNotEmpty()) Log.i(TAG, "Shed ${plan.shed} to fit ${plan.totalTokens} tokens")
             val spec = ChatSpec(
                 systemPrefix = plan.prefix.text,
                 history = plan.history.messages,
+                toolDeclarations = declared,
                 maxOutputTokens = minOf(settings.maxOutputTokens, budget.generationReserve),
                 prefillOnOpen = true,
             )
@@ -255,7 +296,7 @@ class ConversationManager(
             estimator.onOverflow()
             open()
         }
-        learnFrom(plan, session)
+        learnFrom(plan, session, toolTokens)
         _droppedFromContext.value = plan.history.droppedCount
         return Live(
             chatId = chatId,
@@ -267,7 +308,10 @@ class ConversationManager(
     }
 
     /** Tells the estimator what the runtime counted for what was planned. */
-    private fun learnFrom(plan: PromptPlan, session: ChatSession) {
+    private fun learnFrom(plan: PromptPlan, session: ChatSession, toolTokens: Int) {
+        // Declarations are rendered by the runtime's template, not as the text planned here, so a
+        // conversation carrying them says nothing clean about the Latin rate.
+        if (toolTokens > 0) return
         val real = session.tokenCount() ?: return
         // Images and audio cost tokens that have nothing to do with text.
         if (plan.history.messages.any { it.attachmentKind != null }) return
@@ -285,7 +329,7 @@ class ConversationManager(
             ?.let { SummaryBlock(SummaryBlock.Kind.EARLIER_IN_CHAT, it) }
             ?: memory.latestSessionSummary()?.let { SummaryBlock(SummaryBlock.Kind.LAST_SESSION, it) }
         return PrefixInputs(
-            instructions = Instructions.render(settings.systemPrompt),
+            instructions = Instructions.render(settings.systemPrompt, withTools = tools.isNotEmpty() && backend.capabilities?.tools == true),
             coreFacts = memory.coreFacts(),
             summary = summary,
             agendaDate = now().toLocalDate(),

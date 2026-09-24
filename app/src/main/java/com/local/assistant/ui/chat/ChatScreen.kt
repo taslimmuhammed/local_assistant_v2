@@ -2,7 +2,11 @@ package com.local.assistant.ui.chat
 
 import androidx.compose.foundation.background
 import android.Manifest
+import android.content.Intent
 import android.content.pm.PackageManager
+import android.net.Uri
+import android.os.Build
+import android.provider.Settings
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
@@ -44,6 +48,7 @@ import androidx.compose.material3.ModalNavigationDrawer
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.SnackbarResult
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
@@ -68,6 +73,7 @@ import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.local.assistant.data.db.AttachmentKind
+import com.local.assistant.data.db.Role
 import com.local.assistant.data.repo.ChatRepository
 import com.local.assistant.llm.LlmService
 import com.local.assistant.media.RecordingState
@@ -92,6 +98,9 @@ fun ChatScreen(
     val pendingAttachment by viewModel.pendingAttachment.collectAsStateWithLifecycle()
     val recording by viewModel.recordingState.collectAsStateWithLifecycle()
     val droppedFromContext by viewModel.droppedFromContext.collectAsStateWithLifecycle()
+    val chips by viewModel.chips.collectAsStateWithLifecycle()
+    val askForNotifications by viewModel.askForNotifications.collectAsStateWithLifecycle()
+    val offerExactAlarms by viewModel.offerExactAlarms.collectAsStateWithLifecycle()
 
     val drawerState = rememberDrawerState(DrawerValue.Closed)
     val scope = rememberCoroutineScope()
@@ -118,6 +127,31 @@ fun ChatScreen(
         error?.let {
             snackbarHostState.showSnackbar(it)
             viewModel.dismissError()
+        }
+    }
+
+    // Asked the first time a reminder is made, not at install: that is when it makes sense.
+    val notificationPermission = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission(),
+    ) { viewModel.notificationsAsked() }
+    LaunchedEffect(askForNotifications) {
+        if (!askForNotifications) return@LaunchedEffect
+        val needed = Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+            ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
+        if (needed) notificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS) else viewModel.notificationsAsked()
+    }
+
+    LaunchedEffect(offerExactAlarms) {
+        if (!offerExactAlarms || Build.VERSION.SDK_INT < Build.VERSION_CODES.S) return@LaunchedEffect
+        viewModel.exactAlarmsOffered()
+        val result = snackbarHostState.showSnackbar(
+            message = "Reminders may arrive a few minutes late.",
+            actionLabel = "Allow exact",
+        )
+        if (result == SnackbarResult.ActionPerformed) {
+            context.startActivity(
+                Intent(Settings.ACTION_REQUEST_SCHEDULE_EXACT_ALARM, Uri.parse("package:${context.packageName}")),
+            )
         }
     }
 
@@ -180,13 +214,32 @@ fun ChatScreen(
                             if (droppedFromContext > 0) {
                                 item(key = TRIMMED_NOTICE_KEY) { TrimmedNotice(droppedFromContext) }
                             }
-                            items(messages, key = { it.id }) { MessageRow(it) }
+                            // While a reply streams, the chips its tool calls made belong under it,
+                            // not under the question.
+                            val asking = messages.lastOrNull()?.takeIf { streamingText != null && it.role == Role.USER }
+                            items(messages, key = { it.id }) { message ->
+                                MessageRow(message)
+                                if (message != asking) {
+                                    MemoryChips(
+                                        chips = chips[message.id].orEmpty(),
+                                        onUndo = viewModel::undo,
+                                        onEditTime = viewModel::editTime,
+                                    )
+                                }
+                            }
                             streamingText?.let { partial ->
                                 item(key = STREAMING_ITEM_KEY) {
                                     if (partial.isEmpty()) {
                                         ThinkingIndicator()
                                     } else {
                                         AssistantMessage(partial)
+                                    }
+                                    asking?.let {
+                                        MemoryChips(
+                                            chips = chips[it.id].orEmpty(),
+                                            onUndo = viewModel::undo,
+                                            onEditTime = viewModel::editTime,
+                                        )
                                     }
                                 }
                             }

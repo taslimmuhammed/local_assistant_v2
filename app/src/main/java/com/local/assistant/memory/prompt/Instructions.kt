@@ -1,5 +1,7 @@
 package com.local.assistant.memory.prompt
 
+import com.local.assistant.memory.tools.ToolCatalog
+
 /**
  * Section A: the constant part of the system instruction.
  *
@@ -8,14 +10,19 @@ package com.local.assistant.memory.prompt
  */
 object Instructions {
 
-    const val VERSION = 1
+    const val VERSION = 2
 
-    fun render(persona: String): String = buildString {
+    /** [withTools] adds the routing rules for the declared tools. */
+    fun render(persona: String, withTools: Boolean = false): String = buildString {
         if (persona.isNotBlank()) {
             append(persona.trim())
             append("\n\n")
         }
         append(MEMORY_RULES)
+        if (withTools) {
+            append("\n\n")
+            append(ToolCatalog.RULES)
+        }
     }
 
     private val MEMORY_RULES = """

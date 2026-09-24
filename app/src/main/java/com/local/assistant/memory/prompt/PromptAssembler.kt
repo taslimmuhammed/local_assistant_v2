@@ -81,7 +81,8 @@ class PromptAssembler(
         val heading = "Agenda as of ${AGENDA_DATE.format(inputs.agendaDate)}:"
         val lines = mutableListOf<String>()
         for (item in inputs.agenda.take(budget.agendaItems)) {
-            val line = "- ${formatWhen(item)} · ${FactLabels.inline(item.title)}"
+            val ref = item.ref?.let { " ($it)" }.orEmpty()
+            val line = "- ${formatWhen(item)} · ${FactLabels.inline(item.title)}$ref"
             val candidate = (listOf(heading) + lines + line).joinToString("\n")
             if (estimator.estimate(candidate) > budget.agendaCap) break
             lines += line

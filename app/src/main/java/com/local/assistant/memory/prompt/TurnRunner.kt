@@ -1,10 +1,11 @@
 package com.local.assistant.memory.prompt
 
-import android.util.Log
-import com.local.assistant.llm.GenEvent
 import com.local.assistant.llm.GenStats
-import com.local.assistant.llm.LlmBackend
 import com.local.assistant.llm.PromptAttachment
+import com.local.assistant.memory.tools.LoopEvent
+import com.local.assistant.memory.tools.MemoryChip
+import com.local.assistant.memory.tools.ToolContext
+import com.local.assistant.memory.tools.ToolLoop
 import com.local.assistant.memory.work.ModelScheduler
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
@@ -13,11 +14,15 @@ import kotlinx.coroutines.flow.flow
 sealed interface TurnEvent {
     data class Text(val delta: String) : TurnEvent
 
+    /** Something was saved, scheduled or forgotten; its chip is also stored with the chat. */
+    data class Memory(val recordId: Long, val chip: MemoryChip) : TurnEvent
+
     data class Done(val stats: GenStats?) : TurnEvent
 }
 
 /**
- * Runs one user turn: prepare the conversation, send the envelope, stream the reply.
+ * Runs one user turn: prepare the conversation, send the envelope, run any tool calls, stream
+ * the reply.
  *
  * This is the seam the chat screen talks to. The user's message is stored before [run] is
  * called and the reply after it finishes, so a crash at any point loses nothing the user wrote;
@@ -26,7 +31,7 @@ sealed interface TurnEvent {
 class TurnRunner(
     private val conversations: ConversationManager,
     private val scheduler: ModelScheduler,
-    private val backend: LlmBackend,
+    private val tools: ToolLoop,
 ) {
 
     /**
@@ -46,21 +51,28 @@ class TurnRunner(
             var retried = false
             while (true) {
                 val turn = conversations.prepareTurn(chatId, userMessageId, userText)
-                var spoke = false
                 var overflowed = false
-                turn.session.send(turn.envelope.text, attachment).collect { event ->
+                val reply = StringBuilder()
+                tools.run(turn.session, turn.envelope.text, attachment, ToolContext(chatId, userMessageId)).collect { event ->
                     when (event) {
-                        is GenEvent.TextDelta -> {
-                            spoke = true
-                            emit(TurnEvent.Text(event.text))
+                        is LoopEvent.Text -> {
+                            reply.append(event.delta)
+                            emit(TurnEvent.Text(event.delta))
                         }
-                        is GenEvent.Done -> emit(TurnEvent.Done(event.stats))
-                        is GenEvent.Error -> {
-                            if (spoke || retried || !backend.isContextOverflow(event.cause)) throw event.cause
+                        is LoopEvent.Memory -> emit(TurnEvent.Memory(event.recordId, event.chip))
+                        is LoopEvent.Done -> {
+                            // The model saw the change in its own history, so it needs no rebuild.
+                            if (event.changedPrefix) conversations.acknowledgePrefixChange(chatId)
+                            // A plain text turn is a clean sample of what text costs.
+                            if (event.toolRounds == 0 && attachment == null) {
+                                conversations.learnFromTurn(chatId, turn.envelope.text, reply.toString())
+                            }
+                            emit(TurnEvent.Done(event.stats))
+                        }
+                        LoopEvent.Overflow -> {
+                            if (retried) error("That message is too long for the model's window.")
                             overflowed = true
                         }
-                        // No tools are declared yet, so the model has nothing to call.
-                        is GenEvent.ToolCalls -> Log.w(TAG, "Ignoring unexpected tool calls: ${event.calls}")
                     }
                 }
                 if (!overflowed) break
@@ -76,8 +88,4 @@ class TurnRunner(
 
     /** The user is typing: background model work should get out of the way. */
     fun onUserActivity() = scheduler.onUserActivity()
-
-    private companion object {
-        const val TAG = "TurnRunner"
-    }
 }

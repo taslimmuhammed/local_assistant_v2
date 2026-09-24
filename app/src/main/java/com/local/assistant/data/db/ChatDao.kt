@@ -28,6 +28,9 @@ interface ChatDao {
     @Query("SELECT attachmentPath FROM messages WHERE attachmentPath IS NOT NULL")
     suspend fun attachmentPaths(): List<String>
 
+    @Query("SELECT * FROM messages WHERE id = :messageId")
+    suspend fun message(messageId: Long): MessageEntity?
+
     @Query("SELECT * FROM chats WHERE id = :chatId")
     suspend fun chat(chatId: Long): ChatEntity?
 

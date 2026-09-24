@@ -11,6 +11,7 @@ import com.local.assistant.data.db.AttachmentKind
 import com.local.assistant.data.db.ChatEntity
 import com.local.assistant.data.db.MessageEntity
 import com.local.assistant.data.db.Role
+import com.local.assistant.data.prefs.SettingsStore
 import com.local.assistant.data.repo.ChatRepository
 import com.local.assistant.llm.LlmService
 import com.local.assistant.llm.PromptAttachment
@@ -20,6 +21,9 @@ import com.local.assistant.media.RecordingState
 import com.local.assistant.memory.prompt.ConversationManager
 import com.local.assistant.memory.prompt.TurnEvent
 import com.local.assistant.memory.prompt.TurnRunner
+import com.local.assistant.memory.tools.ChatToolLog
+import com.local.assistant.memory.tools.MemoryChip
+import com.local.assistant.memory.tools.ToolExecutor
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
@@ -39,9 +43,14 @@ class ChatViewModel(
     private val llm: LlmService,
     private val conversations: ConversationManager,
     private val turns: TurnRunner,
+    private val tools: ToolExecutor,
+    private val settings: SettingsStore,
     private val attachments: AttachmentStore,
     private val recorder: AudioRecorder,
 ) : ViewModel() {
+
+    /** A memory chip as the chat shows it. [recordId] is the TOOL row it came from. */
+    data class ChipItem(val recordId: Long, val chip: MemoryChip, val undone: Boolean, val canUndo: Boolean)
 
     /** A file staged for the next send, shown as a chip above the composer. */
     data class PendingAttachment(
@@ -61,11 +70,29 @@ class ChatViewModel(
     val activeChatId: StateFlow<Long?> = _activeChatId.asStateFlow()
 
     @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
-    val messages: StateFlow<List<MessageEntity>> = _activeChatId
+    private val storedMessages = _activeChatId
         .flatMapLatest { id -> if (id == null) flowOf(emptyList()) else repository.observeMessages(id) }
+
+    val messages: StateFlow<List<MessageEntity>> = storedMessages
         // Tool calls are stored for the record but are not part of the conversation shown.
         .map { messages -> messages.filter { it.role != Role.TOOL } }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+
+    /**
+     * Chips by the message they sit under: the reply that followed the tool calls, or — while that
+     * reply is still streaming, or if there never was one — the user message that asked.
+     */
+    val chips: StateFlow<Map<Long, List<ChipItem>>> = storedMessages
+        .map(::chipsByMessage)
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyMap())
+
+    /** Set when a timed reminder has been made and notifications have never been asked for. */
+    private val _askForNotifications = MutableStateFlow(false)
+    val askForNotifications: StateFlow<Boolean> = _askForNotifications.asStateFlow()
+
+    /** Set once, the first time a reminder could only be scheduled inexactly. */
+    private val _offerExactAlarms = MutableStateFlow(false)
+    val offerExactAlarms: StateFlow<Boolean> = _offerExactAlarms.asStateFlow()
 
     /** The reply being streamed right now, or null when nothing is generating. */
     private val _streamingText = MutableStateFlow<String?>(null)
@@ -207,6 +234,7 @@ class ChatViewModel(
                             reply.append(event.delta)
                             _streamingText.value = reply.toString()
                         }
+                        is TurnEvent.Memory -> noticeReminder(event.chip)
                         is TurnEvent.Done -> completed = true
                     }
                 }
@@ -239,6 +267,69 @@ class ChatViewModel(
         }
     }
 
+    /** Puts back whatever the chip's tool call changed. */
+    fun undo(recordId: Long) {
+        viewModelScope.launch {
+            when (tools.undo(recordId)) {
+                ToolExecutor.UndoResult.UNDONE -> conversations.prefixMayHaveChanged()
+                ToolExecutor.UndoResult.CHANGED_SINCE -> _error.value = "That has changed since, so it was left as it is."
+                else -> Unit
+            }
+        }
+    }
+
+    /** Moves the chip's reminder or event to [at]. */
+    fun editTime(recordId: Long, at: Long) {
+        viewModelScope.launch {
+            if (tools.editTime(recordId, at)) {
+                conversations.prefixMayHaveChanged()
+            } else {
+                _error.value = "That reminder no longer exists."
+            }
+        }
+    }
+
+    fun notificationsAsked() {
+        settings.askedForNotifications = true
+        _askForNotifications.value = false
+    }
+
+    fun exactAlarmsOffered() {
+        settings.offeredExactAlarms = true
+        _offerExactAlarms.value = false
+    }
+
+    private fun noticeReminder(chip: MemoryChip) {
+        if (chip.kind != MemoryChip.Kind.TASK || chip.at == null) return
+        if (!settings.askedForNotifications) _askForNotifications.value = true
+        if (chip.note != null && !settings.offeredExactAlarms) _offerExactAlarms.value = true
+    }
+
+    private fun chipsByMessage(messages: List<MessageEntity>): Map<Long, List<ChipItem>> {
+        val byMessage = mutableMapOf<Long, List<ChipItem>>()
+        var asker: Long? = null
+        var waiting = mutableListOf<ChipItem>()
+        for (message in messages) {
+            when (message.role) {
+                Role.USER -> {
+                    asker?.let { if (waiting.isNotEmpty()) byMessage[it] = waiting }
+                    asker = message.id
+                    waiting = mutableListOf()
+                }
+                Role.TOOL -> ChatToolLog.parse(message.text)?.let { record ->
+                    record.chip?.let { waiting += ChipItem(message.id, it, record.undone, record.undo != null) }
+                }
+                Role.ASSISTANT -> {
+                    if (waiting.isNotEmpty()) byMessage[message.id] = waiting
+                    asker = null
+                    waiting = mutableListOf()
+                }
+            }
+        }
+        asker?.let { if (waiting.isNotEmpty()) byMessage[it] = waiting }
+        return byMessage
+    }
+
     fun stop() {
         if (!_isGenerating.value) return
         stopRequested = true
@@ -255,6 +346,8 @@ class ChatViewModel(
                     llm = container.llmService,
                     conversations = container.conversations,
                     turns = container.turnRunner,
+                    tools = container.toolExecutor,
+                    settings = container.settings,
                     attachments = container.attachmentStore,
                     recorder = container.audioRecorder,
                 )

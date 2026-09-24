@@ -12,6 +12,8 @@ data class AgendaItem(
     /** Null for an undated task. */
     val at: Long?,
     val allDay: Boolean = false,
+    /** "task 42" or "event 7": lets the model name exactly the item it means in a tool call. */
+    val ref: String? = null,
 )
 
 /** Section C: context carried over from before this conversation's verbatim window. */

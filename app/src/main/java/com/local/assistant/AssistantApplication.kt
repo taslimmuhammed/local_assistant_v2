@@ -16,13 +16,21 @@ import com.local.assistant.memory.db.MemoryRepository
 import com.local.assistant.memory.db.SessionTracker
 import com.local.assistant.memory.prompt.ConversationManager
 import com.local.assistant.memory.prompt.MeasuredTokenEstimator
+import com.local.assistant.memory.prompt.MemoryBudget
 import com.local.assistant.memory.prompt.TurnRunner
+import com.local.assistant.memory.tools.ChatToolLog
+import com.local.assistant.memory.tools.ToolCatalog
+import com.local.assistant.memory.tools.ToolExecutor
+import com.local.assistant.memory.tools.ToolLoop
 import com.local.assistant.memory.work.AppForeground
 import com.local.assistant.memory.work.ModelScheduler
 import com.local.assistant.model.ModelManager
+import com.local.assistant.reminders.AlarmReminderScheduler
+import com.local.assistant.reminders.ReminderNotifications
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
+import java.time.ZonedDateTime
 
 /**
  * Manual dependency container. The app has few enough moving parts that a DI framework would
@@ -67,9 +75,25 @@ class AppContainer(context: Context) {
         scheduler = modelScheduler,
         scope = appScope,
         estimator = tokenEstimator,
+        tools = ToolCatalog.declarations,
     )
 
-    val turnRunner = TurnRunner(conversations, modelScheduler, llmBackend)
+    val reminderScheduler = AlarmReminderScheduler(context)
+
+    val toolExecutor = ToolExecutor(
+        store = memoryRepository,
+        reminders = reminderScheduler,
+        log = ChatToolLog(chatRepository),
+        now = ZonedDateTime::now,
+    )
+
+    private val toolLoop = ToolLoop(
+        executor = toolExecutor,
+        maxRounds = MemoryBudget.SIXTEEN_K.maxToolRounds,
+        isOverflow = llmBackend::isContextOverflow,
+    )
+
+    val turnRunner = TurnRunner(conversations, modelScheduler, toolLoop)
 
     val attachmentStore = AttachmentStore(context)
 
@@ -85,6 +109,7 @@ class AssistantApplication : Application() {
         super.onCreate()
         container = AppContainer(this)
         ProcessLifecycleOwner.get().lifecycle.addObserver(container.appForeground)
+        ReminderNotifications.createChannel(this)
     }
 
     /**

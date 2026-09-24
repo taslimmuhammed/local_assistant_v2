@@ -111,6 +111,38 @@ chosen from the window calibration measured. The prompt is planned to stay well 
 recalled facts, then the summary, then the oldest turns, then core facts by priority — never the
 user's response preferences.
 
+### Tools and reminders
+
+The model can call seven tools — `add_task`, `update_task`, `add_event`, `save_fact`,
+`get_upcoming`, `search_memory`, `forget` — declared in `memory/tools/ToolCatalog.kt` with short
+routing-style descriptions. Tool calling is manual (`automaticToolCalling = false`): the runtime
+reports a call, and `ToolLoop` hands it to `ToolExecutor`, which validates the arguments, ignores
+a repeat of the same call within two minutes, applies it and its TOOL-row record in one
+transaction, and answers the model with compact JSON (`{"ok":true,"id":42,"due":"Tue 22 Sep 11:00"}`
+or `{"ok":false,"error":"…"}` so it asks the user). At most three tool rounds per message.
+
+The model never does date arithmetic. It copies the user's own words ("tomorrow at 11",
+"kal subah 11 baje") and `WhenResolver` turns them into a time, deterministically, in the
+device's zone. A day with no time ("remind me on Friday") means 8:00 AM that day; a request with no
+time words at all is an undated to-do with no alarm. Repeats are an RRULE subset (`RepeatRule`);
+finishing a repeating reminder moves it to its next occurrence.
+
+Every change shows as a chip under the reply ("Saved · Dentist: Dr. Rao · Undo"). The TOOL row
+holds the state before the change, so Undo works after a restart without a separate table; Edit
+moves a reminder or event. Reminders fire through AlarmManager — exact if the user allows exact
+alarms, otherwise `setAndAllowWhileIdle` and the chip says it may be a few minutes late — with
+Done and Snooze 1 h on the notification, and are set again after a reboot, a clock or time-zone
+change, or an update. Events notify 30 minutes before they start (all-day ones at 8:00 AM on the
+day), and a repeating event's next alert is set as each one fires. Notifications are asked for the
+first time a timed reminder is made.
+
+Routing is measured, not assumed: `RoutingEvalTest` runs 30 requests — reminders, reschedules,
+facts, events, Hinglish, and negatives that must not save anything — through the real model. On
+the target phone it scores 30/30 at temperature 1.0, with the tool declarations costing 626 tokens.
+
+Note that the model file reports `supportsFunctionCalling = false`; native tool calls work
+regardless (measured in `EngineProbeTest.toolCalling`), so the flag is not trusted.
+
 ### Data
 
 One database, `assistant.db`, on Room's driver API with the bundled SQLite (it can load
@@ -279,7 +311,8 @@ URLs, hashes, base64, long random IDs — and the loop is self-reinforcing once 
 | Sampling, thinking | `llm/LlmBackend.kt` (`Sampling`) + `LiteRtLmBackend.openChat` |
 | What goes into the prompt, and its limits | `memory/prompt/PromptAssembler.kt` + `MemoryBudget.kt` |
 | Summarising dropped turns instead of discarding | `memory/prompt/ConversationManager.kt` |
-| Tool / function calling | `memory/prompt/TurnRunner.kt`; declarations go through `ChatSpec.toolDeclarations` |
+| A new tool | `memory/tools/ToolCatalog.kt` (declaration + routing rule) and `ToolExecutor` |
+| Time words the resolver misses | `memory/tools/WhenResolver.kt`, with a row in `WhenResolverTest` |
 | Camera capture | `ui/chat/ChatScreen.kt` — only the photo picker is wired up; camera needs a FileProvider |
 | Longer voice notes | `media/MediaLimits.kt`, once you know the model's real audio ceiling |
 | More Markdown (tables, images, nested quotes) | `ui/chat/Markdown.kt` — parser; `MarkdownText.kt` — renderer |
