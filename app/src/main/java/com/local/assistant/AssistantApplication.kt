@@ -1,8 +1,10 @@
 package com.local.assistant
 
+import android.app.ActivityManager
 import android.app.Application
 import android.content.ComponentCallbacks2
 import android.content.Context
+import android.content.pm.ApplicationInfo
 import androidx.lifecycle.ProcessLifecycleOwner
 import com.local.assistant.data.db.AppDatabase
 import com.local.assistant.data.prefs.SettingsStore
@@ -12,8 +14,19 @@ import com.local.assistant.llm.LlmBackend
 import com.local.assistant.llm.LlmService
 import com.local.assistant.media.AttachmentStore
 import com.local.assistant.media.AudioRecorder
+import com.local.assistant.memory.db.ArchiveRepository
 import com.local.assistant.memory.db.MemoryRepository
 import com.local.assistant.memory.db.SessionTracker
+import com.local.assistant.memory.embed.EmbedderCatalog
+import com.local.assistant.memory.embed.InstalledEmbedder
+import com.local.assistant.memory.embed.LiteRtEmbedder
+import com.local.assistant.memory.prompt.Snippet
+import com.local.assistant.memory.retrieval.KotlinVectorIndex
+import com.local.assistant.memory.retrieval.Retriever
+import com.local.assistant.memory.retrieval.SqliteVec
+import com.local.assistant.memory.retrieval.SqliteVecIndex
+import com.local.assistant.memory.retrieval.VectorIndex
+import com.local.assistant.memory.tools.ArchiveSearch
 import com.local.assistant.memory.prompt.ConversationManager
 import com.local.assistant.memory.prompt.MeasuredTokenEstimator
 import com.local.assistant.memory.prompt.MemoryBudget
@@ -23,14 +36,19 @@ import com.local.assistant.memory.tools.ToolCatalog
 import com.local.assistant.memory.tools.ToolExecutor
 import com.local.assistant.memory.tools.ToolLoop
 import com.local.assistant.memory.work.AppForeground
+import com.local.assistant.memory.work.EmbeddingQueue
 import com.local.assistant.memory.work.ModelScheduler
+import com.local.assistant.model.ModelCatalog
 import com.local.assistant.model.ModelManager
+import com.local.assistant.model.TransferKind
 import com.local.assistant.reminders.AlarmReminderScheduler
 import com.local.assistant.reminders.ClockAlarms
 import com.local.assistant.reminders.ReminderNotifications
+import com.local.assistant.ui.setup.MemorySearchControls
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
+import java.io.File
 import java.time.ZonedDateTime
 
 /**
@@ -44,10 +62,16 @@ class AppContainer(context: Context) {
 
     val settings = SettingsStore(context)
 
-    /** Coming to the foreground warms the engine, so it is usually ready by the first send. */
-    val appForeground = AppForeground(onForeground = { if (settings.modelPath != null) llmService.warmUp() })
+    /** Coming to the foreground warms the engines, so they are usually ready by the first send. */
+    val appForeground: AppForeground = AppForeground(onForeground = {
+        if (settings.modelPath != null) llmService.warmUp()
+        embeddingQueue.kick()
+    })
 
-    private val database = AppDatabase.build(context)
+    /** Whether sqlite-vec loads here; if not, the archive's vectors are searched in Kotlin. */
+    val sqliteVecVersion: String? = SqliteVec.probe()
+
+    private val database = AppDatabase.build(context, withVectors = sqliteVecVersion != null)
 
     /** Learns this model's real Latin rate from the runtime's counts; shared by every estimate. */
     val tokenEstimator = MeasuredTokenEstimator(settings.tokenRates) { settings.modelPath }
@@ -58,9 +82,54 @@ class AppContainer(context: Context) {
         dao = database.chatDao(),
         sessions = SessionTracker(database.sessionDao(), appForeground),
         estimator = tokenEstimator,
+        onChatsDeleted = { archive.onChatsDeleted() },
     )
 
-    val modelManager = ModelManager(context, settings, appScope)
+    val modelManager = ModelManager(context, ModelCatalog.FILE, settings::modelPath, appScope)
+
+    /** The embedding model: downloaded, or imported from storage. */
+    val embedderManager = ModelManager(
+        context = context,
+        model = EmbedderCatalog.FILE,
+        storedPath = settings::embedderPath,
+        scope = appScope,
+        onInstalled = { kind, name ->
+            settings.embedderKey = when (kind) {
+                TransferKind.DOWNLOAD -> EmbedderCatalog.DEFAULT.key
+                TransferKind.IMPORT -> EmbedderCatalog.forImport(name ?: EmbedderCatalog.FILE.fileName).key
+            }
+            embeddingQueue.kick()
+        },
+    )
+
+    val embedder = LiteRtEmbedder(
+        installed = {
+            settings.embedderPath?.let { path ->
+                InstalledEmbedder(File(path), EmbedderCatalog.byKey(settings.embedderKey) ?: EmbedderCatalog.DEFAULT)
+            }
+        },
+        cacheDir = context.cacheDir,
+    )
+
+    private val vectorIndex: VectorIndex =
+        if (sqliteVecVersion != null) {
+            SqliteVecIndex(database)
+        } else {
+            KotlinVectorIndex {
+                embedder.modelId?.let { id -> database.chunkDao().vectors(id).map { it.id to it.embedding } }.orEmpty()
+            }
+        }
+
+    /** Every exchange, keyword-indexed and embedded, for recall across chats. */
+    val archive: ArchiveRepository = ArchiveRepository(database, vectorIndex)
+
+    private val retriever = Retriever(
+        facts = memoryRepository,
+        archive = archive,
+        embedder = embedder,
+        // Similarities in debug builds, to calibrate the threshold on real pairs.
+        logScores = (context.applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE) != 0,
+    )
 
     val llmService = LlmService(context, settings, appScope)
 
@@ -77,6 +146,16 @@ class AppContainer(context: Context) {
         scope = appScope,
         estimator = tokenEstimator,
         tools = ToolCatalog.declarations,
+        retriever = retriever,
+    )
+
+    val embeddingQueue: EmbeddingQueue = EmbeddingQueue(
+        archive = archive,
+        embedder = embedder,
+        scheduler = modelScheduler,
+        scope = appScope,
+        inForeground = { appForeground.isForeground },
+        unloadWhenDrained = totalMemoryBytes(context) <= SMALL_DEVICE_BYTES,
     )
 
     val reminderScheduler = AlarmReminderScheduler(context)
@@ -90,6 +169,9 @@ class AppContainer(context: Context) {
         alarms = clockAlarms,
         log = ChatToolLog(chatRepository),
         now = ZonedDateTime::now,
+        archive = ArchiveSearch { query, limit ->
+            retriever.search(query, limit).map { Snippet(it.chunk.text, it.chunk.createdAt) }
+        },
     )
 
     private val toolLoop = ToolLoop(
@@ -98,11 +180,46 @@ class AppContainer(context: Context) {
         isOverflow = llmBackend::isContextOverflow,
     )
 
-    val turnRunner = TurnRunner(conversations, modelScheduler, toolLoop)
+    val turnRunner = TurnRunner(conversations, modelScheduler, toolLoop, onExchangeStored = { userMessageId ->
+        if (archive.recordExchange(userMessageId)) embeddingQueue.kick()
+    })
 
     val attachmentStore = AttachmentStore(context)
 
     val audioRecorder = AudioRecorder(appScope)
+
+    fun memorySearchControls() = MemorySearchControls(
+        manager = embedderManager,
+        remaining = embeddingQueue.remaining,
+        installedName = { EmbedderCatalog.byKey(settings.embedderKey)?.displayName },
+        downloadName = EmbedderCatalog.DEFAULT.displayName,
+        downloadBytes = EmbedderCatalog.DEFAULT.sizeBytes,
+        delete = {
+            embedder.unload()
+            embedderManager.deleteInstalled()
+            settings.embedderKey = null
+        },
+    )
+
+    init {
+        // Exchanges from before the archive existed, or missed by a crash, then their vectors.
+        appScope.launch {
+            val archived = archive.backfill(beforeId = archive.lastMessageId() + 1)
+            if (archived > 0) android.util.Log.i("AppContainer", "Archived $archived earlier exchanges")
+            embeddingQueue.kick()
+        }
+    }
+
+    private companion object {
+        /** At or below this, the embedder's ~0.5 GB is given back whenever it is idle. */
+        const val SMALL_DEVICE_BYTES = 8L * 1024 * 1024 * 1024
+
+        fun totalMemoryBytes(context: Context): Long {
+            val info = ActivityManager.MemoryInfo()
+            context.getSystemService(ActivityManager::class.java).getMemoryInfo(info)
+            return info.totalMem
+        }
+    }
 }
 
 class AssistantApplication : Application() {
@@ -126,7 +243,10 @@ class AssistantApplication : Application() {
         super.onTrimMemory(level)
         val background = level >= ComponentCallbacks2.TRIM_MEMORY_BACKGROUND
         if (background && !container.appForeground.isForeground && !container.llmService.isGenerating) {
-            container.appScope.launch { container.llmService.unload() }
+            container.appScope.launch {
+                container.llmService.unload()
+                container.embedder.unload()
+            }
         }
     }
 }

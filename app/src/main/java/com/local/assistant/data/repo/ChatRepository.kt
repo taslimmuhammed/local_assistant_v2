@@ -19,6 +19,8 @@ class ChatRepository(
     private val dao: ChatDao,
     private val sessions: SessionTracker,
     private val estimator: TokenEstimator,
+    /** Chats were deleted; what hangs off them outside SQL's cascades must follow. */
+    private val onChatsDeleted: suspend () -> Unit = {},
 ) {
 
     fun observeChats(): Flow<List<ChatEntity>> = dao.observeChats()
@@ -76,9 +78,15 @@ class ChatRepository(
     /** Attachment paths still referenced by any message, for pruning orphaned files. */
     suspend fun attachmentPaths(): Set<String> = dao.attachmentPaths().toSet()
 
-    suspend fun deleteChat(chatId: Long) = dao.deleteChat(chatId)
+    suspend fun deleteChat(chatId: Long) {
+        dao.deleteChat(chatId)
+        onChatsDeleted()
+    }
 
-    suspend fun deleteAllChats() = dao.deleteAllChats()
+    suspend fun deleteAllChats() {
+        dao.deleteAllChats()
+        onChatsDeleted()
+    }
 
     suspend fun renameChat(chatId: Long, title: String) = dao.renameChat(chatId, title)
 

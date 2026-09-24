@@ -7,11 +7,11 @@ import androidx.room.RoomDatabase
 import androidx.room.TypeConverters
 import androidx.room.migration.Migration
 import androidx.sqlite.SQLiteConnection
-import androidx.sqlite.driver.bundled.BundledSQLiteDriver
 import androidx.sqlite.execSQL
 import com.local.assistant.memory.db.AgendaDao
 import com.local.assistant.memory.db.AppStateDao
 import com.local.assistant.memory.db.AppStateEntity
+import com.local.assistant.memory.db.ChunkDao
 import com.local.assistant.memory.db.ChunkEntity
 import com.local.assistant.memory.db.ChunkFts
 import com.local.assistant.memory.db.EventEntity
@@ -23,6 +23,7 @@ import com.local.assistant.memory.db.SessionDao
 import com.local.assistant.memory.db.SessionEntity
 import com.local.assistant.memory.db.SubjectAliasEntity
 import com.local.assistant.memory.db.TaskEntity
+import com.local.assistant.memory.retrieval.SqliteVec
 import kotlinx.coroutines.Dispatchers
 
 /**
@@ -60,6 +61,13 @@ abstract class AppDatabase : RoomDatabase() {
 
     abstract fun appStateDao(): AppStateDao
 
+    abstract fun chunkDao(): ChunkDao
+
+    /** The vector index is a derived table outside Room's schema, created where it can be. */
+    object VectorTableCallback : Callback() {
+        override fun onOpen(connection: SQLiteConnection) = SqliteVec.createTable(connection)
+    }
+
     companion object {
         const val FILE_NAME = "assistant.db"
 
@@ -82,14 +90,19 @@ abstract class AppDatabase : RoomDatabase() {
 
         val MIGRATIONS: Array<Migration> = arrayOf(MIGRATION_1_2, MIGRATION_2_3, Migration3To4)
 
-        fun build(context: Context): AppDatabase =
+        /**
+         * [withVectors]: sqlite-vec loaded on this device (see [SqliteVec.probe]). Its table is
+         * then made on open; without it the archive's vectors are searched in Kotlin instead.
+         */
+        fun build(context: Context, withVectors: Boolean): AppDatabase =
             Room.databaseBuilder(context, AppDatabase::class.java, FILE_NAME)
                 // Our own SQLite build rather than the platform's: same version on every device,
                 // and it can load extensions (sqlite-vec) where the framework one cannot.
-                .setDriver(BundledSQLiteDriver())
+                .setDriver(SqliteVec.driver(withVectors))
                 .setQueryCoroutineContext(Dispatchers.IO)
                 .setJournalMode(JournalMode.WRITE_AHEAD_LOGGING)
                 .addMigrations(*MIGRATIONS)
+                .apply { if (withVectors) addCallback(VectorTableCallback) }
                 .build()
     }
 }

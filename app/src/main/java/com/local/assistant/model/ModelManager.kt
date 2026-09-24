@@ -3,7 +3,6 @@ package com.local.assistant.model
 import android.content.Context
 import android.net.Uri
 import android.provider.OpenableColumns
-import com.local.assistant.data.prefs.SettingsStore
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -19,7 +18,9 @@ import java.io.File
 import java.io.IOException
 import java.io.InputStream
 import java.io.RandomAccessFile
+import java.security.MessageDigest
 import java.util.concurrent.TimeUnit
+import kotlin.reflect.KMutableProperty0
 
 /** A model file that is present on disk and ready to load. */
 data class InstalledModel(val file: File, val sizeBytes: Long)
@@ -44,19 +45,38 @@ data class Transfer(
         }
 }
 
+/** One model file a [ModelManager] looks after. */
+data class ModelFile(
+    /** Name it is stored under, whatever it was called where it came from. */
+    val fileName: String,
+    val downloadUrl: String?,
+    /** Of the published file, for progress and the free-space check. */
+    val sizeBytes: Long,
+    /** Checked after a download when known. */
+    val sha256: String? = null,
+    /** Its own directory under the app's files: anything else found there is a leftover. */
+    val directory: String,
+    val requiredFreeBytes: Long,
+)
+
 /**
- * Owns the model file on disk: downloading it, importing one the user already has, and
- * reporting what is currently installed.
+ * Owns one model file on disk: downloading it, importing one the user already has, and
+ * reporting what is currently installed. One instance per model — the chat model and the
+ * embedder each have their own, in separate directories.
  *
  * Downloads resume from wherever they stopped, which matters a lot for a ~3 GB file.
  */
 class ModelManager(
     private val context: Context,
-    private val settings: SettingsStore,
+    private val model: ModelFile,
+    /** Where the installed file's path is remembered; null when nothing is installed. */
+    private val storedPath: KMutableProperty0<String?>,
     private val scope: CoroutineScope,
+    /** A transfer finished; for an import, with the picked file's name. */
+    private val onInstalled: (TransferKind, String?) -> Unit = { _, _ -> },
 ) {
 
-    private val modelsDir: File = File(context.filesDir, "models").apply { mkdirs() }
+    private val modelsDir: File = File(context.filesDir, model.directory).apply { mkdirs() }
 
     private val http: OkHttpClient = OkHttpClient.Builder()
         .connectTimeout(30, TimeUnit.SECONDS)
@@ -84,11 +104,11 @@ class ModelManager(
         _error.value = null
     }
 
-    fun download() = start(TransferKind.DOWNLOAD) { onProgress ->
+    fun download() = start(TransferKind.DOWNLOAD, sourceName = null) { onProgress ->
         downloadInto(destinationFile(), onProgress)
     }
 
-    fun importFrom(uri: Uri) = start(TransferKind.IMPORT) { onProgress ->
+    fun importFrom(uri: Uri) = start(TransferKind.IMPORT, sourceName = displayName(uri)) { onProgress ->
         copyInto(uri, destinationFile(), onProgress)
     }
 
@@ -101,11 +121,11 @@ class ModelManager(
         cancel()
         destinationFile().delete()
         partFile().delete()
-        settings.modelPath = null
+        storedPath.set(null)
         _installed.value = null
     }
 
-    private fun start(kind: TransferKind, block: suspend ((Long, Long) -> Unit) -> Unit) {
+    private fun start(kind: TransferKind, sourceName: String?, block: suspend ((Long, Long) -> Unit) -> Unit) {
         if (isBusy) return
         _error.value = null
         job = scope.launch(Dispatchers.IO) {
@@ -113,10 +133,11 @@ class ModelManager(
                 _transfer.value = Transfer(kind, done, total, rate)
             }
             try {
-                _transfer.value = Transfer(kind, 0, ModelCatalog.SIZE_BYTES)
+                _transfer.value = Transfer(kind, 0, model.sizeBytes)
                 block { done, total -> throttle.report(done, total) }
                 val file = destinationFile()
-                settings.modelPath = file.absolutePath
+                storedPath.set(file.absolutePath)
+                onInstalled(kind, sourceName)
                 _installed.value = InstalledModel(file, file.length())
             } catch (e: CancellationException) {
                 throw e
@@ -131,12 +152,13 @@ class ModelManager(
     // --- download -------------------------------------------------------------------------
 
     private fun downloadInto(destination: File, onProgress: (Long, Long) -> Unit) {
+        val url = model.downloadUrl ?: throw IOException("This model can only be imported")
         val part = partFile()
-        ensureSpace(ModelCatalog.REQUIRED_FREE_BYTES - part.length())
+        ensureSpace(model.requiredFreeBytes - part.length())
 
         var alreadyHave = part.length()
         val request = Request.Builder()
-            .url(ModelCatalog.DOWNLOAD_URL)
+            .url(url)
             .apply { if (alreadyHave > 0) header("Range", "bytes=$alreadyHave-") }
             .build()
 
@@ -154,7 +176,7 @@ class ModelManager(
             val total = if (body.contentLength() > 0) {
                 alreadyHave + body.contentLength()
             } else {
-                ModelCatalog.SIZE_BYTES
+                model.sizeBytes
             }
 
             RandomAccessFile(part, "rw").use { out ->
@@ -168,6 +190,12 @@ class ModelManager(
             }
         }
 
+        model.sha256?.let { expected ->
+            if (sha256Of(part) != expected) {
+                part.delete()
+                throw IOException("The download was corrupted. Please try again.")
+            }
+        }
         if (!part.renameTo(destination)) {
             throw IOException("Could not move the downloaded model into place")
         }
@@ -177,7 +205,7 @@ class ModelManager(
     // --- import ---------------------------------------------------------------------------
 
     private fun copyInto(uri: Uri, destination: File, onProgress: (Long, Long) -> Unit) {
-        val total = sizeOf(uri) ?: ModelCatalog.SIZE_BYTES
+        val total = sizeOf(uri) ?: model.sizeBytes
         ensureSpace(total + FREE_SPACE_HEADROOM)
 
         val part = partFile()
@@ -201,6 +229,27 @@ class ModelManager(
             throw IOException("Could not move the imported model into place")
         }
         onProgress(destination.length(), destination.length())
+    }
+
+    private fun displayName(uri: Uri): String? =
+        runCatching {
+            context.contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { cursor ->
+                val index = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+                if (index >= 0 && cursor.moveToFirst()) cursor.getString(index) else null
+            }
+        }.getOrNull()
+
+    private fun sha256Of(file: File): String {
+        val digest = MessageDigest.getInstance("SHA-256")
+        file.inputStream().use { input ->
+            val buffer = ByteArray(BUFFER_BYTES)
+            while (true) {
+                val read = input.read(buffer)
+                if (read < 0) break
+                digest.update(buffer, 0, read)
+            }
+        }
+        return digest.digest().joinToString("") { "%02x".format(it) }
     }
 
     private fun sizeOf(uri: Uri): Long? =
@@ -242,19 +291,19 @@ class ModelManager(
         }
     }
 
-    private fun destinationFile() = File(modelsDir, ModelCatalog.FILE_NAME)
+    private fun destinationFile() = File(modelsDir, model.fileName)
 
-    private fun partFile() = File(modelsDir, ModelCatalog.FILE_NAME + PART_SUFFIX)
+    private fun partFile() = File(modelsDir, model.fileName + PART_SUFFIX)
 
     private fun readInstalled(): InstalledModel? {
-        val path = settings.modelPath
+        val path = storedPath.get()
         val expected = destinationFile()
 
         // A model installed by an earlier build can be a different file than the one we now
         // expect. Loading a mismatched .litertlm does not fail cleanly - it starts and then
         // emits raw vocab tokens - so treat anything unexpected as "not installed".
-        if (path != null && File(path).name != ModelCatalog.FILE_NAME) {
-            settings.modelPath = null
+        if (path != null && File(path).name != model.fileName) {
+            storedPath.set(null)
         }
 
         // Drop leftovers from a previous model name so they stop occupying gigabytes.
@@ -264,7 +313,7 @@ class ModelManager(
             }
         }
 
-        if (settings.modelPath == null) return null
+        if (storedPath.get() == null) return null
         return if (expected.isFile && expected.length() > 0) {
             InstalledModel(expected, expected.length())
         } else {

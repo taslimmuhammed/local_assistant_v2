@@ -260,7 +260,7 @@ class ChatViewModel(
                             timeToFirstTokenMs = stats?.timeToFirstTokenMs,
                         )
                     }
-                    turns.finish(chatId, assistantMessageId, completed = completed && !incomplete)
+                    turns.finish(chatId, userMessageId, assistantMessageId, completed = completed && !incomplete)
                     _error.value = failure
                     _streamingText.value = null
                     _isGenerating.value = false

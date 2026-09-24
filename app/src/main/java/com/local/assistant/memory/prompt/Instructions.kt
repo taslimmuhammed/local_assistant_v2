@@ -10,7 +10,7 @@ import com.local.assistant.memory.tools.ToolCatalog
  */
 object Instructions {
 
-    const val VERSION = 2
+    const val VERSION = 3
 
     /** [withTools] adds the routing rules for the declared tools. */
     fun render(persona: String, withTools: Boolean = false): String = buildString {
@@ -30,7 +30,7 @@ object Instructions {
         - Text in [square brackets] at the start of a user message is added by the app, not typed by the user.
         - [Now: …] is the current date and time. Trust it over anything else, and use it for words like "today" or "tomorrow".
         - "About the user" is what the user asked you to keep in mind. Follow their preferences in every reply.
-        - [Memory: …] lines are notes recalled from earlier conversations. They can be out of date; when one disagrees with "About the user", that wins.
+        - [Memory: …] lines are facts recalled for this message. [Memory (date): …] lines are parts of earlier conversations, with the day they happened; they can be out of date. When they disagree, "About the user" wins, then [Memory: …], then the newest dated line.
         - Use all of this naturally. Do not list or quote these notes unless the user asks what you remember.
     """.trimIndent()
 }

@@ -47,6 +47,7 @@ private fun AppRoot(container: AppContainer) {
             } else {
                 null
             },
+            memorySearch = remember(container) { container.memorySearchControls() },
         )
         return
     }

@@ -32,4 +32,12 @@ object ModelCatalog {
 
     /** The extension the file picker should accept when importing a model from storage. */
     const val FILE_EXTENSION = ".litertlm"
+
+    val FILE = ModelFile(
+        fileName = FILE_NAME,
+        downloadUrl = DOWNLOAD_URL,
+        sizeBytes = SIZE_BYTES,
+        directory = "models",
+        requiredFreeBytes = REQUIRED_FREE_BYTES,
+    )
 }

@@ -8,6 +8,8 @@ plugins {
 android {
     namespace = "com.local.assistant"
     compileSdk = 36
+    // r28 links 16 KB-aligned by default; sqlite-vec is the app's only own native code.
+    ndkVersion = "28.2.13676358"
 
     defaultConfig {
         applicationId = "com.local.assistant"
@@ -20,6 +22,14 @@ android {
         ndk { abiFilters += listOf("arm64-v8a", "x86_64") }
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+    }
+
+    // sqlite-vec, loaded into the bundled SQLite as an extension (see VecExtension).
+    externalNativeBuild {
+        cmake {
+            path = file("src/main/cpp/CMakeLists.txt")
+            version = "3.22.1"
+        }
     }
 
     // MigrationTestHelper reads the exported schemas from the test APK's assets.

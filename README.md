@@ -19,9 +19,10 @@ This is intentionally a **base** to build on: one model, one screen, persistent 
 | | |
 |---|---|
 | Android | 8.0 (API 26) or newer, `arm64-v8a` |
-| Free storage | ~4.2 GB |
+| Free storage | ~4.2 GB, plus ~0.35 GB for the optional search model |
 | RAM | 8 GB+ recommended (GPU backend peaks around 0.7–1 GB, CPU around 3.3 GB) |
 | JDK (to build) | 17 |
+| NDK and CMake (to build) | NDK 28.2.13676358, CMake 3.22.1 (SDK Manager), for sqlite-vec |
 
 The LiteRT-LM AAR only ships `arm64-v8a` and `x86_64` native libraries, so `abiFilters` is set to
 match. There is no 32-bit build.
@@ -68,13 +69,17 @@ AssistantApplication
     ├── SettingsStore             model path, backend prefs, system prompt
     ├── AppDatabase (Room)        chats, messages and memory, one file (assistant.db)
     │   ├── ChatRepository        every message written with its session and token estimate
-    │   └── MemoryRepository      facts, tombstones, agenda
-    ├── ModelManager              download / import / delete the model file
+    │   ├── MemoryRepository      facts, tombstones, agenda
+    │   └── ArchiveRepository     every exchange as a chunk: keyword index, vectors, backlog
+    ├── ModelManager (×2)         download / import / delete the chat model, and the embedder
     ├── LlmService                owns the LiteRT-LM Engine
     ├── LiteRtLmBackend           LlmBackend: conversations, streaming, one-shot completions
+    ├── LiteRtEmbedder            the embedding model (LiteRT-LM EmbeddingEngine, CPU)
     ├── ModelScheduler            one model job at a time; the user always first
+    ├── EmbeddingQueue            embeds the archive's backlog while the user is idle
+    ├── Retriever                 per-turn recall: facts, then keyword + vector search, fused
     ├── ConversationManager       the live conversation, and when to rebuild it
-    └── TurnRunner                one user turn: prepare, send, stream
+    └── TurnRunner                one user turn: prepare, send, stream, archive
 ```
 
 ### LlmService and the backend
@@ -110,6 +115,43 @@ chosen from the window calibration measured. The prompt is planned to stay well 
 (12,000 of 16,384 at most) and shed in a fixed order when it would not: recalled snippets, then
 recalled facts, then the summary, then the oldest turns, then core facts by priority — never the
 user's response preferences.
+
+### Recall and the archive
+
+Every exchange — the user's message and the first 300 characters of the reply — is stored as a
+chunk in `chunks`, keyword-indexed (FTS4) at once and embedded later by `EmbeddingQueue`, only
+while the user is neither generating nor typing. Voice notes are never archived; greetings and
+"ok thanks" are stored and keyword-searchable but not embedded. Existing chats are archived on the
+first start (`ArchiveRepository.backfill`).
+
+Before each turn, `Retriever` recalls, across all chats:
+
+1. nothing at all for trivial messages (fewer than three words, acknowledgements);
+2. non-core facts whose subject, alias or text matches the message (`[Memory: …]`);
+3. archived exchanges: the keyword top 20 (BM25 from FTS4's `matchinfo`) and the vector top 20,
+   leaving out exchanges already in the conversation, fused by reciprocal rank (k = 60, newer wins
+   ties). One goes in only if its cosine similarity reaches the model's threshold (0.6 to start)
+   or it contains one of the message's rare words — a name, an acronym, a number. They appear
+   dated, as `[Memory (3 Sep 2026): …]`, and the instructions say newer beats older and facts beat
+   both.
+
+Vectors are the embedder's first 256 dimensions (Matryoshka), L2-normalised and stored as int8 —
+256 bytes a chunk. `chunks.embedding` is the source of truth; the search index is derived and
+rebuilt whenever it might disagree. That index is [sqlite-vec](https://github.com/asg017/sqlite-vec)
+v0.1.9, compiled from source in `src/main/cpp` and loaded into the bundled SQLite as an extension;
+on a device where it fails to load, `KotlinVectorIndex` scores the same bytes with the same
+arithmetic (`VectorParityTest` checks both return identical neighbours). Vectors from different
+models are never compared: changing the embedder sends the archive back to the backlog.
+
+The embedder is optional and installed from the Model screen ("Memory search"): a download of
+[Granite Embedding 311M multilingual](https://huggingface.co/litert-community/granite-embedding-311m-multilingual-r2)
+(332 MB, Apache-2.0, no account needed), or any `.litertlm` embedding bundle from storage. Without
+it, recall still works on keywords and rare words. Measured on the target phone:
+
+| | |
+|---|---|
+| Recall without vectors (FTS, fusion, facts) | 44 ms |
+| KNN over 55,000 chunks, k = 40 | 18–31 ms sqlite-vec, 30–51 ms Kotlin |
 
 ### Tools and reminders
 
@@ -155,12 +197,13 @@ regardless (measured in `EngineProbeTest.toolCalling`), so the flag is not trust
 
 ### Data
 
-One database, `assistant.db`, on Room's driver API with the bundled SQLite (it can load
-extensions, which the vector index will need). `chats` and `messages`, with `messages.chatId`
+One database, `assistant.db`, on Room's driver API with the bundled SQLite, which loads
+sqlite-vec for the archive's vector index (`vec_chunks`, created on open where the extension
+loads and never referenced by a trigger). `chats` and `messages`, with `messages.chatId`
 cascading on delete; a message carries an `incomplete` flag so a stopped reply is stored and shown
 as what it is. Memory lives alongside: `sessions` (one foreground period within a chat), `facts`
-with an FTS4 keyword index, `forgotten` tombstones, `tasks`, `events`, and `chunks` for the
-archive. Nothing in it is included in backup or device-to-device transfer.
+with an FTS4 keyword index, `forgotten` tombstones, `tasks`, `events`, and `chunks` (with their
+own FTS4 index) for the archive. Nothing in it is included in backup or device-to-device transfer.
 
 ## Images and voice
 
@@ -323,6 +366,8 @@ URLs, hashes, base64, long random IDs — and the loop is self-reinforcing once 
 | Summarising dropped turns instead of discarding | `memory/prompt/ConversationManager.kt` |
 | A new tool | `memory/tools/ToolCatalog.kt` (declaration + routing rule) and `ToolExecutor` |
 | Time words the resolver misses | `memory/tools/WhenResolver.kt`, with a row in `WhenResolverTest` |
+| Another embedding model | `memory/embed/EmbedderCatalog.kt` (prompts, threshold); run `EmbedderProbeTest` to calibrate |
+| What counts as trivial, or a rare word | `memory/retrieval/QueryText.kt` |
 | Camera capture | `ui/chat/ChatScreen.kt` — only the photo picker is wired up; camera needs a FileProvider |
 | Longer voice notes | `media/MediaLimits.kt`, once you know the model's real audio ceiling |
 | More Markdown (tables, images, nested quotes) | `ui/chat/Markdown.kt` — parser; `MarkdownText.kt` — renderer |

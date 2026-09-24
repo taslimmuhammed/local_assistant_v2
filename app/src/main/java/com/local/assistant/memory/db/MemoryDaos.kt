@@ -5,6 +5,7 @@ import androidx.room.Insert
 import androidx.room.OnConflictStrategy
 import androidx.room.Query
 import androidx.room.Update
+import com.local.assistant.data.db.MessageEntity
 import kotlinx.coroutines.flow.Flow
 
 @Dao
@@ -92,6 +93,14 @@ interface FactDao {
 
     @Query("SELECT subject FROM subject_aliases WHERE alias = :alias")
     suspend fun subjectForAlias(alias: String): String?
+
+    /** Subjects any of [aliases] stand for ("amma" → mother). */
+    @Query("SELECT DISTINCT subject FROM subject_aliases WHERE alias IN (:aliases)")
+    suspend fun subjectsForAliases(aliases: List<String>): List<String>
+
+    /** Non-core facts about any of [subjects], freshest first. */
+    @Query("SELECT * FROM facts WHERE subject IN (:subjects) AND core = 0 ORDER BY lastConfirmedAt DESC LIMIT :limit")
+    suspend fun nonCoreAbout(subjects: List<String>, limit: Int): List<FactEntity>
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertAlias(alias: SubjectAliasEntity)
@@ -185,4 +194,92 @@ interface AppStateDao {
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun put(state: AppStateEntity)
+}
+
+/** A chunk matching a keyword search, with FTS4's `matchinfo(…, 'pcnalx')` for ranking it. */
+data class KeywordRow(
+    val id: Long,
+    val messageId: Long,
+    val chatId: Long,
+    val createdAt: Long,
+    val matchinfo: ByteArray,
+)
+
+/** A stored vector, for filling a vector index. */
+data class StoredVector(val id: Long, val embedding: ByteArray)
+
+@Dao
+interface ChunkDao {
+
+    @Insert
+    suspend fun insert(chunk: ChunkEntity): Long
+
+    @Query("SELECT * FROM chunks WHERE messageId = :messageId")
+    suspend fun forMessage(messageId: Long): ChunkEntity?
+
+    @Query("SELECT * FROM chunks WHERE id IN (:ids)")
+    suspend fun byIds(ids: List<Long>): List<ChunkEntity>
+
+    @Query("UPDATE chunks SET text = :text, embedding = NULL, modelId = :modelId WHERE id = :id")
+    suspend fun replaceText(id: Long, text: String, modelId: String?)
+
+    @Query("UPDATE chunks SET embedding = :embedding, modelId = :modelId WHERE id = :id AND text = :text")
+    suspend fun setEmbedding(id: Long, text: String, embedding: ByteArray?, modelId: String): Int
+
+    /** Chunks waiting for a vector, oldest first. */
+    @Query("SELECT * FROM chunks WHERE modelId IS NULL ORDER BY id LIMIT :limit")
+    suspend fun backlog(limit: Int): List<ChunkEntity>
+
+    @Query("SELECT COUNT(*) FROM chunks WHERE modelId IS NULL")
+    suspend fun backlogSize(): Int
+
+    @Query("SELECT COUNT(*) FROM chunks WHERE modelId = :modelId AND embedding IS NOT NULL")
+    suspend fun embeddedCount(modelId: String): Int
+
+    @Query("SELECT id, embedding FROM chunks WHERE modelId = :modelId AND embedding IS NOT NULL ORDER BY id")
+    suspend fun vectors(modelId: String): List<StoredVector>
+
+    /**
+     * Sends every chunk embedded by another model back to the backlog. [keep] are the markers
+     * that are not model ids (never embedded on purpose).
+     */
+    @Query(
+        "UPDATE chunks SET embedding = NULL, modelId = NULL " +
+            "WHERE modelId IS NOT NULL AND modelId != :current AND modelId NOT IN (:keep)",
+    )
+    suspend fun resetOtherModels(current: String, keep: List<String>): Int
+
+    /**
+     * Keyword matches, newest exchanges first, with what ranking needs. Recency decides which
+     * [limit] rows are scored when a common word matches thousands.
+     */
+    @Query(
+        """
+        SELECT chunks.id AS id, chunks.messageId AS messageId, chunks.chatId AS chatId,
+               chunks.createdAt AS createdAt, matchinfo(chunks_fts, 'pcnalx') AS matchinfo
+        FROM chunks_fts JOIN chunks ON chunks.id = chunks_fts.rowid
+        WHERE chunks_fts MATCH :match
+        ORDER BY chunks.messageId DESC
+        LIMIT :limit
+        """,
+    )
+    suspend fun keywordMatches(match: String, limit: Int): List<KeywordRow>
+
+    /** User messages from before [before] that have no chunk yet, oldest first. */
+    @Query(
+        """
+        SELECT * FROM messages
+        WHERE role = 'USER' AND id > :after AND id < :before
+          AND NOT EXISTS (SELECT 1 FROM chunks WHERE chunks.messageId = messages.id)
+        ORDER BY id LIMIT :limit
+        """,
+    )
+    suspend fun unchunkedUserMessages(after: Long, before: Long, limit: Int): List<MessageEntity>
+
+    /** The turn after [afterId] in its chat, skipping tool records: a reply, or the next question. */
+    @Query("SELECT * FROM messages WHERE chatId = :chatId AND id > :afterId AND role != 'TOOL' ORDER BY id LIMIT 1")
+    suspend fun nextTurn(chatId: Long, afterId: Long): MessageEntity?
+
+    @Query("SELECT MAX(id) FROM messages")
+    suspend fun lastMessageId(): Long?
 }

@@ -6,6 +6,7 @@ import com.local.assistant.memory.db.EventEntity
 import com.local.assistant.memory.db.FactEntity
 import com.local.assistant.memory.db.ForgetResult
 import com.local.assistant.memory.db.TaskEntity
+import com.local.assistant.memory.prompt.Snippet
 
 /**
  * The small confirmation under a reply: "Saved · Dentist: Dr. Rao · Undo".
@@ -99,4 +100,9 @@ interface ReminderScheduler {
     fun scheduleEvent(eventId: Long, alertAt: Long, startsAt: Long)
 
     fun cancelEvent(eventId: Long)
+}
+
+/** Archived exchanges matching a query, best first, for search_memory. */
+fun interface ArchiveSearch {
+    suspend fun search(query: String, limit: Int): List<Snippet>
 }

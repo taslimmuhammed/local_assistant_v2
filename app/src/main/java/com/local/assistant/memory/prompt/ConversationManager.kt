@@ -10,6 +10,8 @@ import com.local.assistant.llm.ChatSpec
 import com.local.assistant.llm.LlmBackend
 import com.local.assistant.llm.LlmService
 import com.local.assistant.memory.db.MemoryRepository
+import com.local.assistant.memory.retrieval.Recall
+import com.local.assistant.memory.retrieval.Retriever
 import com.local.assistant.memory.work.ModelScheduler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
@@ -55,6 +57,8 @@ class ConversationManager(
     private val estimator: MeasuredTokenEstimator,
     /** OpenAPI declarations for the tools the model may call; part of the stable prefix. */
     private val tools: List<String> = emptyList(),
+    /** Per-turn recall of facts and archived exchanges; none when null. */
+    private val retriever: Retriever? = null,
     private val zone: () -> ZoneId = ZoneId::systemDefault,
     private val clock: () -> Long = System::currentTimeMillis,
 ) {
@@ -74,6 +78,11 @@ class ConversationManager(
         var acknowledgedPrefix: String,
         /** The newest stored message this conversation contains. */
         var lastMessageId: Long,
+        /**
+         * The oldest message of this chat the conversation holds verbatim; everything from here on
+         * is already in front of the model, so recall leaves it out.
+         */
+        val windowStartId: Long,
         var lastNowShown: ZonedDateTime? = null,
         /** The runtime's count just before the turn in flight, to measure what the turn cost. */
         var tokensBeforeTurn: Int? = null,
@@ -124,9 +133,12 @@ class ConversationManager(
             rebuild(chatId, history, budget, capabilities)
         }
 
+        val recall = recall(chatId, userText, current.windowStartId, budget)
         val inputs = EnvelopeInputs(
             now = now,
             showNow = assembler.shouldShowNow(current.lastNowShown, now),
+            facts = recall.facts,
+            snippets = recall.snippets,
             userText = userText,
         )
         val liveTokens = current.session.tokenCount() ?: 0
@@ -141,6 +153,19 @@ class ConversationManager(
         if (envelope.showedNow) current.lastNowShown = now
         current.tokensBeforeTurn = current.session.tokenCount()
         PreparedTurn(current.session, envelope, budget)
+    }
+
+    /** Recall is best-effort: a failure costs this turn its memory lines, never the turn. */
+    private suspend fun recall(chatId: Long, userText: String, windowStartId: Long, budget: MemoryBudget): Recall {
+        val retriever = retriever ?: return Recall.NONE
+        return try {
+            retriever.recall(chatId, userText, windowStartId, budget.maxEnvelopeFacts, budget.maxSnippets)
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Log.w(TAG, "Recall failed; sending without it", e)
+            Recall.NONE
+        }
     }
 
     /**
@@ -298,12 +323,15 @@ class ConversationManager(
         }
         learnFrom(plan, session, toolTokens)
         _droppedFromContext.value = plan.history.droppedCount
+        val lastId = history.lastOrNull()?.id ?: 0L
         return Live(
             chatId = chatId,
             session = session,
             budget = budget,
             acknowledgedPrefix = plan.prefix.text,
-            lastMessageId = history.lastOrNull()?.id ?: 0L,
+            lastMessageId = lastId,
+            // With nothing kept verbatim, the window starts at the next message.
+            windowStartId = plan.history.messages.firstOrNull()?.id ?: (lastId + 1),
         ).also { live = it }
     }
 

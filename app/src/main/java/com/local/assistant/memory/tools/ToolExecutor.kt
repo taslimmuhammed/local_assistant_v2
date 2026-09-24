@@ -42,6 +42,8 @@ class ToolExecutor(
     private val resolver: WhenResolver = WhenResolver(),
     private val defaults: WhenDefaults = WhenDefaults(),
     private val dedupeWindowMs: Long = DEDUPE_WINDOW_MS,
+    /** Past conversations, for search_memory; nothing when the archive is not wired in. */
+    private val archive: ArchiveSearch = ArchiveSearch { _, _ -> emptyList() },
 ) {
 
     data class Outcome(
@@ -461,7 +463,8 @@ class ToolExecutor(
     }
 
     private suspend fun searchMemory(args: Args): Applied {
-        val words = significantWords(args.required("query"))
+        val query = args.required("query")
+        val words = significantWords(query)
         if (words.isEmpty()) throw ToolError("Search for what? Give a word or two.")
         val facts = store.searchFacts(words, MAX_FOUND).map(::describe)
         val now = now()
@@ -469,11 +472,16 @@ class ToolExecutor(
             .map { "${it.title} (task ${it.id}, ${it.status.name.lowercase(Locale.ROOT)}${it.dueAt?.let { at -> ", " + modelTime(at.atZone(now)) }.orEmpty()})" }
         val events = words.take(3).flatMap { store.eventsMentioning(it, MAX_FOUND) }.distinctBy { it.id }
             .map { "${it.title} (event ${it.id}, ${modelTime(it.startsAt.atZone(now))})" }
+        // Earlier conversations, dated so the model can tell an old note from a new one.
+        val notes = archive.search(query, MAX_NOTES).map { snippet ->
+            "(${NOTE_DATE.format(snippet.at.atZone(now))}) ${FactLabels.inline(snippet.text).take(MAX_NOTE_CHARS)}"
+        }
         return Applied(
             ok(
                 "facts" to facts.takeIf { it.isNotEmpty() },
                 "items" to (tasks + events).take(MAX_FOUND).takeIf { it.isNotEmpty() },
-                "found" to (facts.size + tasks.size + events.size),
+                "conversations" to notes.takeIf { it.isNotEmpty() },
+                "found" to (facts.size + tasks.size + events.size + notes.size),
             ),
         )
     }
@@ -656,6 +664,9 @@ class ToolExecutor(
         private const val MAX_FACT_LENGTH = 300
         private const val MAX_LISTED = 8
         private const val MAX_FOUND = 5
+        private const val MAX_NOTES = 3
+        private const val MAX_NOTE_CHARS = 360
+        private val NOTE_DATE = DateTimeFormatter.ofPattern("d MMM yyyy", Locale.ENGLISH)
 
         private val gson = Gson()
         private val MODEL_TIME = DateTimeFormatter.ofPattern("EEE d MMM HH:mm", Locale.ENGLISH)

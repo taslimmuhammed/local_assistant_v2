@@ -8,6 +8,7 @@ import com.local.assistant.memory.core.FactKeys
 import com.local.assistant.memory.core.FactUpsertPolicy
 import com.local.assistant.memory.core.FactWrite
 import com.local.assistant.memory.prompt.AgendaItem
+import com.local.assistant.memory.retrieval.FactSource
 import com.local.assistant.memory.tools.EventTimes
 import kotlinx.coroutines.flow.Flow
 import java.time.ZoneId
@@ -35,7 +36,7 @@ class MemoryRepository(
     private val database: AppDatabase,
     private val clock: () -> Long = System::currentTimeMillis,
     private val zone: () -> ZoneId = ZoneId::systemDefault,
-) : MemoryStore {
+) : MemoryStore, FactSource {
     private val facts = database.factDao()
     private val agendaDao = database.agendaDao()
     private val sessions = database.sessionDao()
@@ -121,6 +122,20 @@ class MemoryRepository(
     }
 
     override suspend fun coreFacts(): List<FactEntity> = facts.coreFacts()
+
+    override suspend fun subjectsForAliases(aliases: List<String>): List<String> =
+        if (aliases.isEmpty()) emptyList() else facts.subjectsForAliases(aliases)
+
+    override suspend fun nonCoreAbout(subjects: List<String>, limit: Int): List<FactEntity> =
+        if (subjects.isEmpty()) emptyList() else facts.nonCoreAbout(subjects, limit)
+
+    override suspend fun searchNonCore(match: String, limit: Int): List<FactEntity> =
+        try {
+            facts.search(match, limit)
+        } catch (e: Exception) {
+            // Recall is best-effort; a query the FTS parser rejects just finds nothing.
+            emptyList()
+        }
 
     fun observeCoreFacts(): Flow<List<FactEntity>> = facts.observeCoreFacts()
 

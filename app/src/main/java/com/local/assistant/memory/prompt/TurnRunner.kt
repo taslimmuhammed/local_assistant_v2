@@ -1,5 +1,6 @@
 package com.local.assistant.memory.prompt
 
+import android.util.Log
 import com.local.assistant.llm.GenStats
 import com.local.assistant.llm.PromptAttachment
 import com.local.assistant.memory.tools.LoopEvent
@@ -32,6 +33,8 @@ class TurnRunner(
     private val conversations: ConversationManager,
     private val scheduler: ModelScheduler,
     private val tools: ToolLoop,
+    /** The exchange opened by this user message is stored, reply and all: archive it. */
+    private val onExchangeStored: suspend (userMessageId: Long) -> Unit = {},
 ) {
 
     /**
@@ -82,9 +85,19 @@ class TurnRunner(
         }
     }
 
-    /** Called once the reply (if any) is stored; [assistantMessageId] is null if nothing was. */
-    suspend fun finish(chatId: Long, assistantMessageId: Long?, completed: Boolean) =
+    /**
+     * Called once the reply (if any) is stored; [assistantMessageId] is null if nothing was. A
+     * stopped or failed turn is archived too, with the part of the reply that exists.
+     */
+    suspend fun finish(chatId: Long, userMessageId: Long, assistantMessageId: Long?, completed: Boolean) {
         conversations.finishTurn(chatId, assistantMessageId, completed)
+        // The backfill catches anything missed here, so a failure must not reach the chat screen.
+        try {
+            onExchangeStored(userMessageId)
+        } catch (e: Exception) {
+            Log.w("TurnRunner", "Could not archive message $userMessageId", e)
+        }
+    }
 
     /** The user is typing: background model work should get out of the way. */
     fun onUserActivity() = scheduler.onUserActivity()

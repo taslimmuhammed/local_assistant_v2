@@ -61,6 +61,7 @@ fun ModelScreen(
     modelManager: ModelManager,
     llmService: LlmService,
     onBack: (() -> Unit)?,
+    memorySearch: MemorySearchControls? = null,
 ) {
     val installed by modelManager.installed.collectAsStateWithLifecycle()
     val transfer by modelManager.transfer.collectAsStateWithLifecycle()
@@ -156,6 +157,9 @@ fun ModelScreen(
                 TextButton(onClick = modelManager::clearError) { Text("Dismiss") }
             }
 
+            // Only once there is a chat model: the first-run screen stays about the one thing needed.
+            if (installed != null && memorySearch != null) MemorySearchSection(memorySearch)
+
             Text(
                 text = "Importing copies the file into the app's private storage, so make sure " +
                     "there is room for a second copy while the import runs.",
@@ -168,7 +172,7 @@ fun ModelScreen(
 }
 
 @Composable
-private fun TransferSection(transfer: Transfer, onCancel: () -> Unit) {
+internal fun TransferSection(transfer: Transfer, onCancel: () -> Unit) {
     Column(Modifier.padding(top = 28.dp)) {
         Text(
             text = when (transfer.kind) {

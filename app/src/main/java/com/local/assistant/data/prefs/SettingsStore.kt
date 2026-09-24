@@ -21,6 +21,16 @@ class SettingsStore(context: Context) {
         get() = prefs.getString(KEY_MODEL_PATH, null)
         set(value) = prefs.edit { if (value == null) remove(KEY_MODEL_PATH) else putString(KEY_MODEL_PATH, value) }
 
+    /** Absolute path of the installed embedding bundle, or null when there is none. */
+    var embedderPath: String?
+        get() = prefs.getString(KEY_EMBEDDER_PATH, null)
+        set(value) = prefs.edit { if (value == null) remove(KEY_EMBEDDER_PATH) else putString(KEY_EMBEDDER_PATH, value) }
+
+    /** Which embedder [embedderPath] is (an `EmbedderCatalog` key), which decides its prompts. */
+    var embedderKey: String?
+        get() = prefs.getString(KEY_EMBEDDER_KEY, null)
+        set(value) = prefs.edit { if (value == null) remove(KEY_EMBEDDER_KEY) else putString(KEY_EMBEDDER_KEY, value) }
+
     /** Prefer the GPU backend. Falls back to CPU automatically if the GPU engine fails to start. */
     var useGpu: Boolean
         get() = prefs.getBoolean(KEY_USE_GPU, true)
@@ -148,6 +158,8 @@ class SettingsStore(context: Context) {
 
     companion object {
         private const val KEY_MODEL_PATH = "model_path"
+        private const val KEY_EMBEDDER_PATH = "embedder_path"
+        private const val KEY_EMBEDDER_KEY = "embedder_key"
         private const val KEY_USE_GPU = "use_gpu"
         private const val KEY_SPECULATIVE = "speculative_decoding"
         private const val KEY_SYSTEM_PROMPT = "system_prompt"
