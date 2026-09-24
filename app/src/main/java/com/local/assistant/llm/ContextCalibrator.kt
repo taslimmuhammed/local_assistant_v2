@@ -109,6 +109,7 @@ class ContextCalibrator(
             generationInFlight = sessionGenerationInFlight,
             generationCrashStreak = settings.generationCrashStreak,
             totalMemoryBytes = memory.totalMem,
+            ceilingTokens = settings.contextCeilingTokens,
         )
     }
 

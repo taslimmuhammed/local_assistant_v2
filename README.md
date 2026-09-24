@@ -66,32 +66,59 @@ Then pick it from the file picker.
 AssistantApplication
 └── AppContainer                  manual DI; one instance per process
     ├── SettingsStore             model path, backend prefs, system prompt
-    ├── AppDatabase (Room)        chats + messages
-    │   └── ChatRepository
+    ├── AppDatabase (Room)        chats, messages and memory, one file (assistant.db)
+    │   ├── ChatRepository        every message written with its session and token estimate
+    │   └── MemoryRepository      facts, tombstones, agenda
     ├── ModelManager              download / import / delete the model file
-    └── LlmService                owns the LiteRT-LM Engine
+    ├── LlmService                owns the LiteRT-LM Engine
+    ├── LiteRtLmBackend           LlmBackend: conversations, streaming, one-shot completions
+    ├── ModelScheduler            one model job at a time; the user always first
+    ├── ConversationManager       the live conversation, and when to rebuild it
+    └── TurnRunner                one user turn: prepare, send, stream
 ```
 
-### LlmService
+### LlmService and the backend
 
 The piece worth understanding before extending anything.
 
 - **One `Engine` per process.** Loading costs seconds and gigabytes, so it is shared across all
-  chats and kept alive until the model is deleted.
-- **One `Conversation` per chat.** The `Conversation` is what holds the KV cache for a thread.
-- **The active conversation is cached.** Continuing the current chat only prefills the new turn.
-  Switching chats, or resuming one after a process restart, rebuilds the conversation from stored
-  history through `ConversationConfig.initialMessages`.
+  chats. It is kept alive while the app is in use, and released under memory pressure once the
+  app is in the background (`onTrimMemory`); coming back loads it again.
+- **Everything above the engine talks to `LlmBackend`**, not LiteRT-LM, so another runtime can be
+  added later. `LiteRtLmBackend` is the only implementation.
+- **One live `Conversation`, for the chat in use.** It holds the KV cache, so continuing the chat
+  only prefills the new turn. `ConversationManager` rebuilds it — system prefix plus the last few
+  turns through `ConversationConfig.initialMessages` — only at natural boundaries: switching
+  chats, after a restart, when a turn was interrupted, or when something outside the chat changed
+  what the prefix would say.
 - **Interrupted turns invalidate the cache.** If generation is stopped or fails, the native cache
   no longer matches what was persisted, so it is dropped and rebuilt from the database next turn.
 
 Prompt templating, BOS tokens and turn markers are handled inside LiteRT-LM — the app passes plain
 strings and roles, never raw template text.
 
+### Prompt layout
+
+The system instruction is byte-stable for a conversation's life: instructions, the "always keep
+in mind" block rendered from core facts, a summary carried over from earlier, and an agenda
+snapshot dated to the day. Anything that changes per turn — the current time, facts recalled for
+this message — goes in front of the user's words in the user turn, as `[Now: …]` and
+`[Memory: …]` lines. Only the user's own words are stored.
+
+Every token limit lives in `memory/prompt/MemoryBudget.kt`, with a 16K profile and an 8K one,
+chosen from the window calibration measured. The prompt is planned to stay well under the window
+(12,000 of 16,384 at most) and shed in a fixed order when it would not: recalled snippets, then
+recalled facts, then the summary, then the oldest turns, then core facts by priority — never the
+user's response preferences.
+
 ### Data
 
-`chats` and `messages`, with `messages.chatId` cascading on delete. A message carries an
-`incomplete` flag so a stopped reply is stored and shown as what it is.
+One database, `assistant.db`, on Room's driver API with the bundled SQLite (it can load
+extensions, which the vector index will need). `chats` and `messages`, with `messages.chatId`
+cascading on delete; a message carries an `incomplete` flag so a stopped reply is stored and shown
+as what it is. Memory lives alongside: `sessions` (one foreground period within a chat), `facts`
+with an FTS4 keyword index, `forgotten` tombstones, `tasks`, `events`, and `chunks` for the
+archive. Nothing in it is included in backup or device-to-device transfer.
 
 ## Images and voice
 
@@ -146,7 +173,8 @@ All four live in `SettingsStore` and are read on the next engine load / message:
 | Setting | Default | Notes |
 |---|---|---|
 | `manualContextTokens` | 0 (auto) | Override the measured window. 0 means calibrate. **Changing it needs an engine reload.** |
-| `maxOutputTokens` | 2048 | Ceiling on one reply, clamped to a quarter of the window. |
+| `maxOutputTokens` | 2048 | Ceiling on one reply, also capped by the memory budget's reply reserve. |
+| `contextCeilingTokens` | 8192 | Largest window the engine runs at, even where calibration confirmed more. **Needs an engine reload.** |
 | `repetitionPenalty` | 1.1 | Damps degenerate loops. 1.0 disables. Keep it low — generated code and markup legitimately repeat. |
 | `repetitionWindow` | 256 | How many recent tokens the penalty looks at. |
 
@@ -209,13 +237,28 @@ shrink the window. Otherwise closing the app mid-reply would quietly shrink it e
 This state machine is unit-tested (`CalibrationPlannerTest`) precisely because it exists for the
 case where no code of ours gets to run.
 
+**The ceiling.** Calibration finds the most the device can hold; the app deliberately runs below
+it, at `contextCeilingTokens` (8192). The LLM shares memory with the embedding model and a voice
+model, and the KV cache is sized by the window the engine is loaded with rather than by how full
+it gets — measured on the 15.5 GB phone, 16K costs about 200 MB more than 8K and prefills 10–25%
+slower. Calibration never probes above the ceiling, and a device already confirmed higher simply
+loads at the ceiling.
+
+**Token estimates.** There is no tokenizer API, so prompts are planned from an estimate. Latin
+text starts at a pessimistic 3.5 characters per token; after each rebuild the runtime's own count
+is compared with what went in, and the Latin rate is learned from it (`MeasuredTokenEstimator`,
+bounded between 3.5 and 6, quick to tighten and slow to relax). Indic scripts keep a dense 1.8. If
+the runtime ever rejects a prompt as too long, the learned rate is discarded and the turn is
+replanned and retried once.
+
 ### Overflow
 
-When a chat outgrows the window, `llm/ContextWindow.kt` drops the oldest turns rather than letting
-the runtime reject the input. Budget is the window less the reply allowance and the system prompt;
-images are charged at the model's own `maxVisionTokenBudget()`. The newest message is never
-dropped. Dropping is silent by nature, so the chat shows a quiet "N earlier messages no longer fit
-the context window" marker.
+A rebuilt conversation carries only the newest whole turns that fit the budget (at most 12 on the
+16K profile); images are charged at the model's own `maxVisionTokenBudget()` and audio by its
+length (`llm/ContextWindow.kt`). If a live conversation would pass the prompt ceiling, it is
+rebuilt smaller before the turn is sent rather than letting the runtime reject the input. Dropping
+is silent by nature, so the chat shows a quiet "N earlier messages no longer fit the context
+window" marker.
 
 The line above the composer shows real context consumption from `Conversation.getTokenCount()` —
 not an estimate. If a chat misbehaves, look there first to tell a genuine context overflow apart
@@ -233,9 +276,10 @@ URLs, hashes, base64, long random IDs — and the loop is self-reinforcing once 
 | Want to add | Start at |
 |---|---|
 | A different or second model | `model/ModelCatalog.kt` |
-| Sampling, system prompt, thinking budget | `LlmService.conversationFor` + `SettingsStore` |
-| Summarising dropped turns instead of discarding | `llm/ContextWindow.kt` |
-| Tool / function calling | `ConversationConfig(tools = ...)` — LiteRT-LM has first-class support |
+| Sampling, thinking | `llm/LlmBackend.kt` (`Sampling`) + `LiteRtLmBackend.openChat` |
+| What goes into the prompt, and its limits | `memory/prompt/PromptAssembler.kt` + `MemoryBudget.kt` |
+| Summarising dropped turns instead of discarding | `memory/prompt/ConversationManager.kt` |
+| Tool / function calling | `memory/prompt/TurnRunner.kt`; declarations go through `ChatSpec.toolDeclarations` |
 | Camera capture | `ui/chat/ChatScreen.kt` — only the photo picker is wired up; camera needs a FileProvider |
 | Longer voice notes | `media/MediaLimits.kt`, once you know the model's real audio ceiling |
 | More Markdown (tables, images, nested quotes) | `ui/chat/Markdown.kt` — parser; `MarkdownText.kt` — renderer |

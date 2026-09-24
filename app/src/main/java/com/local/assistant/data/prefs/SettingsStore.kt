@@ -2,6 +2,7 @@ package com.local.assistant.data.prefs
 
 import android.content.Context
 import androidx.core.content.edit
+import com.local.assistant.memory.prompt.TokenRateStore
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.callbackFlow
@@ -37,6 +38,27 @@ class SettingsStore(context: Context) {
     var manualContextTokens: Int
         get() = prefs.getInt(KEY_MANUAL_CONTEXT, 0)
         set(value) = prefs.edit { putInt(KEY_MANUAL_CONTEXT, value) }
+
+    /**
+     * The largest window the assistant runs at, even on a device that holds more. The LLM is not
+     * the only model in memory — the embedder and a voice model run alongside it — and the KV
+     * cache's size is set by the window, not by how full it is. Changing it needs an engine reload.
+     */
+    var contextCeilingTokens: Int
+        get() = prefs.getInt(KEY_CONTEXT_CEILING, DEFAULT_CONTEXT_CEILING)
+        set(value) = prefs.edit { putInt(KEY_CONTEXT_CEILING, value) }
+
+    /** The Latin characters-per-token rate measured for one model; see `MeasuredTokenEstimator`. */
+    val tokenRates: TokenRateStore = object : TokenRateStore {
+        override fun load(modelKey: String): Double? =
+            prefs.getFloat(KEY_TOKEN_RATE, 0f).takeIf { it > 0f && prefs.getString(KEY_TOKEN_RATE_MODEL, null) == modelKey }
+                ?.toDouble()
+
+        override fun save(modelKey: String, latinCharsPerToken: Double) = prefs.edit {
+            putFloat(KEY_TOKEN_RATE, latinCharsPerToken.toFloat())
+            putString(KEY_TOKEN_RATE_MODEL, modelKey)
+        }
+    }
 
     /** Largest context confirmed to work on this device, or 0 if never calibrated. */
     var calibratedContextTokens: Int
@@ -126,10 +148,14 @@ class SettingsStore(context: Context) {
         private const val KEY_GENERATION_IN_FLIGHT = "generation_in_flight_tokens"
         private const val KEY_GENERATION_CRASH_STREAK = "generation_crash_streak"
         private const val KEY_MAX_OUTPUT = "max_output_tokens"
+        private const val KEY_CONTEXT_CEILING = "context_ceiling_tokens"
+        private const val KEY_TOKEN_RATE = "latin_chars_per_token"
+        private const val KEY_TOKEN_RATE_MODEL = "latin_chars_per_token_model"
         private const val KEY_REPETITION_PENALTY = "repetition_penalty"
         private const val KEY_REPETITION_WINDOW = "repetition_window"
 
         const val DEFAULT_MAX_OUTPUT = 2048
+        const val DEFAULT_CONTEXT_CEILING = 8192
         const val DEFAULT_REPETITION_PENALTY = 1.1f
         const val DEFAULT_REPETITION_WINDOW = 256
 

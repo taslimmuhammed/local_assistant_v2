@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    What the assistant remembers stays on this device. allowBackup="false" already turns off cloud
+    backup, but on Android 12+ it does not stop device-to-device transfer; these rules do. Memory
+    and chats share one database, so both are excluded. Export is explicit, from the memory screen.
+-->
+<data-extraction-rules>
+    <cloud-backup>
+        <exclude domain="database" path="." />
+    </cloud-backup>
+    <device-transfer>
+        <exclude domain="database" path="." />
+    </device-transfer>
+</data-extraction-rules>

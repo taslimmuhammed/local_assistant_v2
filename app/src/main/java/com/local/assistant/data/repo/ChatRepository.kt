@@ -5,16 +5,33 @@ import com.local.assistant.data.db.ChatDao
 import com.local.assistant.data.db.ChatEntity
 import com.local.assistant.data.db.MessageEntity
 import com.local.assistant.data.db.Role
+import com.local.assistant.memory.db.SessionTracker
+import com.local.assistant.memory.prompt.TokenEstimator
 import kotlinx.coroutines.flow.Flow
 
-/** Single entry point for chat persistence. */
-class ChatRepository(private val dao: ChatDao) {
+/**
+ * Single entry point for chat persistence.
+ *
+ * Every message is written with its session and its token estimate, so nothing downstream ever
+ * has to reconstruct either.
+ */
+class ChatRepository(
+    private val dao: ChatDao,
+    private val sessions: SessionTracker,
+    private val estimator: TokenEstimator,
+) {
 
     fun observeChats(): Flow<List<ChatEntity>> = dao.observeChats()
 
     fun observeMessages(chatId: Long): Flow<List<MessageEntity>> = dao.observeMessages(chatId)
 
     suspend fun messagesFor(chatId: Long): List<MessageEntity> = dao.messagesFor(chatId)
+
+    /** User and assistant turns before [beforeId]: the history a conversation is built from. */
+    suspend fun turnsBefore(chatId: Long, beforeId: Long): List<MessageEntity> =
+        dao.turnsBefore(chatId, beforeId)
+
+    suspend fun chat(chatId: Long): ChatEntity? = dao.chat(chatId)
 
     suspend fun createChat(title: String = DEFAULT_TITLE): Long {
         val now = System.currentTimeMillis()
@@ -31,20 +48,25 @@ class ChatRepository(private val dao: ChatDao) {
         attachmentDurationMs: Long? = null,
         tokensPerSecond: Double? = null,
         timeToFirstTokenMs: Long? = null,
-    ): Long = dao.appendMessage(
-        MessageEntity(
-            chatId = chatId,
-            role = role,
-            text = text,
-            createdAt = System.currentTimeMillis(),
-            incomplete = incomplete,
-            attachmentPath = attachmentPath,
-            attachmentKind = attachmentKind,
-            attachmentDurationMs = attachmentDurationMs,
-            tokensPerSecond = tokensPerSecond,
-            timeToFirstTokenMs = timeToFirstTokenMs,
-        ),
-    )
+    ): Long {
+        val now = System.currentTimeMillis()
+        return dao.appendMessage(
+            MessageEntity(
+                chatId = chatId,
+                role = role,
+                text = text,
+                createdAt = now,
+                incomplete = incomplete,
+                attachmentPath = attachmentPath,
+                attachmentKind = attachmentKind,
+                attachmentDurationMs = attachmentDurationMs,
+                tokensPerSecond = tokensPerSecond,
+                timeToFirstTokenMs = timeToFirstTokenMs,
+                sessionId = sessions.sessionFor(chatId, now),
+                tokenEst = estimator.estimate(text),
+            ),
+        )
+    }
 
     suspend fun updateMessage(messageId: Long, text: String, incomplete: Boolean) =
         dao.updateMessage(messageId, text, incomplete)

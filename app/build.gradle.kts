@@ -18,7 +18,12 @@ android {
 
         // LiteRT-LM ships native code for these two ABIs only.
         ndk { abiFilters += listOf("arm64-v8a", "x86_64") }
+
+        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
+
+    // MigrationTestHelper reads the exported schemas from the test APK's assets.
+    sourceSets.getByName("androidTest").assets.srcDir("$projectDir/schemas")
 
     buildTypes {
         release {
@@ -64,6 +69,7 @@ dependencies {
     implementation(libs.androidx.lifecycle.runtime.ktx)
     implementation(libs.androidx.lifecycle.runtime.compose)
     implementation(libs.androidx.lifecycle.viewmodel.compose)
+    implementation(libs.androidx.lifecycle.process)
     implementation(libs.androidx.activity.compose)
     implementation(libs.kotlinx.coroutines.android)
 
@@ -78,11 +84,27 @@ dependencies {
     implementation(libs.androidx.room.runtime)
     implementation(libs.androidx.room.ktx)
     ksp(libs.androidx.room.compiler)
+    // Room's driver API: our own SQLite build, which can load extensions (sqlite-vec, Phase 3).
+    implementation(libs.androidx.sqlite.bundled)
 
     implementation(libs.okhttp)
 
     // On-device LLM runtime.
     implementation(libs.litertlm.android)
+    // Already a transitive dependency of LiteRT-LM; declared because tool arguments and results
+    // are parsed with it. org.json would be stubbed out in JVM unit tests.
+    implementation(libs.gson)
 
     testImplementation(libs.junit)
+
+    androidTestImplementation(libs.junit)
+    androidTestImplementation(libs.androidx.test.runner)
+    androidTestImplementation(libs.androidx.test.ext.junit)
+    androidTestImplementation(libs.androidx.room.testing)
+
+    constraints {
+        // Lifecycle pulls in 1.7.3, and the test APK is pinned to the app's versions; Room's
+        // schema reader (used by MigrationTestHelper) is built against 1.8 and fails on 1.7.
+        implementation(libs.kotlinx.serialization.core)
+    }
 }

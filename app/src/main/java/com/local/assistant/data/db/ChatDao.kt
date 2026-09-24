@@ -18,6 +18,13 @@ interface ChatDao {
     @Query("SELECT * FROM messages WHERE chatId = :chatId ORDER BY id ASC")
     suspend fun messagesFor(chatId: Long): List<MessageEntity>
 
+    /** The conversation as the model sees it: user and assistant turns before [beforeId]. */
+    @Query(
+        "SELECT * FROM messages WHERE chatId = :chatId AND id < :beforeId " +
+            "AND role IN ('USER', 'ASSISTANT') ORDER BY id ASC",
+    )
+    suspend fun turnsBefore(chatId: Long, beforeId: Long): List<MessageEntity>
+
     @Query("SELECT attachmentPath FROM messages WHERE attachmentPath IS NOT NULL")
     suspend fun attachmentPaths(): List<String>
 

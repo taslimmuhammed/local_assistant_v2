@@ -16,6 +16,7 @@ class CalibrationPlannerTest {
         generationInFlight: Int = 0,
         generationCrashStreak: Int = 0,
         totalMemoryBytes: Long = 16L shl 30,
+        ceilingTokens: Int = Int.MAX_VALUE,
     ) = CalibrationSnapshot(
         manualOverride = manualOverride,
         calibratedTokens = calibratedTokens,
@@ -25,6 +26,7 @@ class CalibrationPlannerTest {
         generationInFlight = generationInFlight,
         generationCrashStreak = generationCrashStreak,
         totalMemoryBytes = totalMemoryBytes,
+        ceilingTokens = ceilingTokens,
     )
 
     @Test
@@ -154,5 +156,49 @@ class CalibrationPlannerTest {
     fun `an unrelated error reports nothing`() {
         assertNull(CalibrationPlanner.reportedMaxTokens("Failed to create engine: RESOURCE_EXHAUSTED"))
         assertNull(CalibrationPlanner.reportedMaxTokens(null))
+    }
+
+    // ---- Ceiling: leaving memory for the models that run alongside the LLM ----
+
+    @Test
+    fun `a device confirmed above the ceiling runs at the ceiling without re-probing`() {
+        val decision = CalibrationPlanner.decide(
+            snapshot(calibratedTokens = 16384, calibratedKey = "model-gpu-mtp", ceilingTokens = 8192),
+        )
+        assertEquals(CalibrationDecision.UseKnown(8192), decision)
+    }
+
+    @Test
+    fun `probing never starts above the ceiling`() {
+        val decision = CalibrationPlanner.decide(snapshot(ceilingTokens = 8192))
+        assertEquals(CalibrationDecision.Probe(listOf(8192, 6144, 4096, 2048)), decision)
+    }
+
+    @Test
+    fun `one death at the capped size re-checks it rather than shrinking`() {
+        val decision = CalibrationPlanner.decide(
+            snapshot(
+                calibratedTokens = 16384,
+                calibratedKey = "model-gpu-mtp",
+                ceilingTokens = 8192,
+                generationInFlight = 8192,
+                generationCrashStreak = 1,
+            ),
+        )
+        assertEquals(CalibrationDecision.Probe(listOf(8192, 6144, 4096, 2048)), decision)
+    }
+
+    @Test
+    fun `an init death at the capped size shrinks below it`() {
+        val decision = CalibrationPlanner.decide(
+            snapshot(calibratedTokens = 16384, calibratedKey = "model-gpu-mtp", ceilingTokens = 8192, initInFlight = 8192),
+        )
+        assertEquals(CalibrationDecision.Probe(listOf(6144, 4096, 2048)), decision)
+    }
+
+    @Test
+    fun `a manual override is the user's call, ceiling or not`() {
+        val decision = CalibrationPlanner.decide(snapshot(manualOverride = 16384, ceilingTokens = 8192))
+        assertEquals(CalibrationDecision.UseKnown(16384), decision)
     }
 }

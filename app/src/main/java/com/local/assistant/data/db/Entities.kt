@@ -1,5 +1,6 @@
 package com.local.assistant.data.db
 
+import androidx.room.ColumnInfo
 import androidx.room.Entity
 import androidx.room.ForeignKey
 import androidx.room.Index
@@ -12,10 +13,23 @@ data class ChatEntity(
     val createdAt: Long,
     /** Bumped on every new message so the chat list can sort by recency. */
     val updatedAt: Long,
+    /**
+     * "Earlier in this chat": the turns that were folded out of the verbatim window, summarised.
+     * Persisted so the live conversation can be rebuilt the same way after process death.
+     */
+    val rollingSummary: String? = null,
+    /** Last message [rollingSummary] covers. Everything after it is sent verbatim. */
+    val rollingUptoMessageId: Long? = null,
 )
 
-/** Persisted author of a message. Kept as a string column so adding roles later is a no-op. */
-enum class Role { USER, ASSISTANT }
+/**
+ * Persisted author of a message. Kept as a string column so adding roles later is a no-op.
+ *
+ * [TOOL] rows record a tool call and its result. They are never shown as chat bubbles, never
+ * chunked or embedded, and never replayed into a rebuilt conversation: by then whatever the tool
+ * changed is already in the system prefix.
+ */
+enum class Role { USER, ASSISTANT, TOOL }
 
 /** What kind of file a message carries alongside its text. */
 enum class AttachmentKind { IMAGE, AUDIO }
@@ -30,7 +44,7 @@ enum class AttachmentKind { IMAGE, AUDIO }
             onDelete = ForeignKey.CASCADE,
         ),
     ],
-    indices = [Index("chatId")],
+    indices = [Index("chatId"), Index("sessionId"), Index("createdAt")],
 )
 data class MessageEntity(
     @PrimaryKey(autoGenerate = true) val id: Long = 0,
@@ -49,4 +63,16 @@ data class MessageEntity(
     val tokensPerSecond: Double? = null,
     /** Prefill latency: how long the model took before the first token appeared. */
     val timeToFirstTokenMs: Long? = null,
+    /**
+     * The foreground period this message was written in. Null only for rows that predate
+     * sessions and could not be attributed. Deliberately not a foreign key: deleting the chat
+     * already cascades to both.
+     */
+    val sessionId: Long? = null,
+    /**
+     * Estimated tokens for [text], computed once at write so budgeting never re-estimates the
+     * whole history. Attachments are charged separately, at budgeting time.
+     */
+    @ColumnInfo(defaultValue = "0")
+    val tokenEst: Int = 0,
 )

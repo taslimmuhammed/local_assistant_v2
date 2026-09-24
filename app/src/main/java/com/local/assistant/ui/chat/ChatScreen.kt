@@ -197,14 +197,17 @@ fun ChatScreen(
                 ContextMeter(contextUsage)
 
                 Composer(
+                    // While the model loads, a message can still be sent: it waits for the engine.
                     enabled = engineState is LlmService.State.Ready ||
-                        engineState is LlmService.State.Loading,
+                        engineState is LlmService.State.Loading ||
+                        engineState is LlmService.State.Idle,
                     isGenerating = isGenerating,
                     supportsImages = supportsImages,
                     supportsAudio = supportsAudio,
                     pendingAttachment = pendingAttachment,
                     recording = recording,
                     onSend = viewModel::send,
+                    onTyping = viewModel::onTyping,
                     onStop = viewModel::stop,
                     onPickImage = {
                         imagePicker.launch(
@@ -272,7 +275,7 @@ private fun ChatTopBar(
 @Composable
 private fun EngineBanner(state: LlmService.State) {
     val message = when (state) {
-        is LlmService.State.Loading -> "Loading model…"
+        is LlmService.State.Loading, LlmService.State.Idle -> "Getting ready…"
         is LlmService.State.Failed -> state.message
         LlmService.State.NoModel -> "No model installed."
         else -> null
@@ -345,6 +348,7 @@ private fun Composer(
     pendingAttachment: ChatViewModel.PendingAttachment?,
     recording: RecordingState?,
     onSend: (String) -> Unit,
+    onTyping: () -> Unit,
     onStop: () -> Unit,
     onPickImage: () -> Unit,
     onDiscardAttachment: () -> Unit,
@@ -403,7 +407,10 @@ private fun Composer(
                 }
                 BasicTextField(
                     value = text,
-                    onValueChange = { text = it },
+                    onValueChange = {
+                        text = it
+                        onTyping()
+                    },
                     enabled = enabled,
                     textStyle = MaterialTheme.typography.bodyLarge.merge(
                         TextStyle(color = AppColors.TextPrimary),

@@ -6,8 +6,6 @@ import android.util.Log
 import androidx.core.content.getSystemService
 import com.google.ai.edge.litertlm.Backend
 import com.google.ai.edge.litertlm.Capabilities
-import com.google.ai.edge.litertlm.Content
-import com.google.ai.edge.litertlm.Contents
 import com.google.ai.edge.litertlm.Conversation
 import com.google.ai.edge.litertlm.ConversationConfig
 import com.google.ai.edge.litertlm.Engine
@@ -15,54 +13,37 @@ import com.google.ai.edge.litertlm.EngineConfig
 import com.google.ai.edge.litertlm.ExperimentalApi
 import com.google.ai.edge.litertlm.ExperimentalFlags
 import com.google.ai.edge.litertlm.LogSeverity
-import com.google.ai.edge.litertlm.Message
-import com.google.ai.edge.litertlm.RepetitionPenaltyConfig
-import com.google.ai.edge.litertlm.SamplerConfig
 import com.google.ai.edge.litertlm.SupportedModalities
-import com.local.assistant.data.db.AttachmentKind
-import com.local.assistant.data.db.MessageEntity
-import com.local.assistant.data.db.Role
 import com.local.assistant.data.prefs.SettingsStore
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
-import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.flow.flow
-import kotlinx.coroutines.flow.flowOn
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import java.io.File
-import kotlin.math.max
 
 /**
- * Wraps the LiteRT-LM engine.
+ * Owns the LiteRT-LM engine: loading it, calibrating its window, and releasing it.
  *
  * There is exactly one [Engine] for the process — loading it costs seconds and gigabytes, so it
- * is shared across chats. Each chat gets its own [Conversation], which is what holds the KV
- * cache for that thread. The active conversation is cached so a continuing chat only has to
- * prefill the new turn; switching chats or resuming after a restart rebuilds it from the stored
- * history via [ConversationConfig.initialMessages].
+ * is shared across chats. Conversations on it are created through [createConversation], which
+ * tracks them so [unload] can close every one before the engine goes. What a conversation
+ * *contains*, and when to rebuild it, is decided above this class (see `LiteRtLmBackend` and
+ * the memory layer's `ConversationManager`).
  */
 class LlmService(
     private val context: Context,
     private val settings: SettingsStore,
     private val scope: CoroutineScope,
 ) {
-
-    /** Decode speed for one reply, as measured by the runtime rather than timed from outside. */
-    data class GenerationStats(
-        val decodeTokens: Int,
-        val tokensPerSecond: Double,
-        val timeToFirstTokenMs: Long,
-    )
-
-    /** A file to send with the next prompt. */
-    data class PromptAttachment(val path: String, val kind: AttachmentKind)
 
     sealed interface State {
         /** No model file installed yet. */
@@ -90,9 +71,6 @@ class LlmService(
     private val _state = MutableStateFlow<State>(State.Idle)
     val state: StateFlow<State> = _state.asStateFlow()
 
-    private val _contextUsage = MutableStateFlow<ContextUsage?>(null)
-    val contextUsage: StateFlow<ContextUsage?> = _contextUsage.asStateFlow()
-
     /**
      * What the installed model file actually accepts, read from the file itself rather than
      * assumed. The composer uses this to decide whether to offer the image and mic buttons.
@@ -116,16 +94,16 @@ class LlmService(
     private val _activeContextTokens = MutableStateFlow(0)
     val activeContextTokens: StateFlow<Int> = _activeContextTokens.asStateFlow()
 
-    /** How many stored messages the current conversation had to drop to fit the window. */
-    private val _droppedFromContext = MutableStateFlow(0)
-    val droppedFromContext: StateFlow<Int> = _droppedFromContext.asStateFlow()
+    /** What the loaded model supports, read from the model file. Null until a model is loaded. */
+    private val _capabilities = MutableStateFlow<BackendCapabilities?>(null)
+    val capabilities: StateFlow<BackendCapabilities?> = _capabilities.asStateFlow()
 
     /**
-     * Stats for the reply that just finished. Held here rather than emitted through the text
-     * flow so a stopped generation still reports what it managed.
+     * Stats for the generation that just finished. Held here rather than only emitted through the
+     * stream, so a stopped generation — whose stream is cancelled — still reports what it managed.
      */
-    private val _lastGenerationStats = MutableStateFlow<GenerationStats?>(null)
-    val lastGenerationStats: StateFlow<GenerationStats?> = _lastGenerationStats.asStateFlow()
+    private val _lastGenerationStats = MutableStateFlow<GenStats?>(null)
+    val lastGenerationStats: StateFlow<GenStats?> = _lastGenerationStats.asStateFlow()
 
     /** Vision tokens an image costs, read from the model so the budget maths is not a guess. */
     private var visionTokensPerImage = DEFAULT_VISION_TOKENS
@@ -133,17 +111,18 @@ class LlmService(
     private val loadMutex = Mutex()
 
     private var engine: Engine? = null
-    private var conversation: Conversation? = null
-    private var conversationChatId: Long? = null
 
-    /** How many stored messages the cached conversation already knows about. */
-    private var conversationMessageCount: Int = 0
+    /** Every conversation still open on [engine]; closed before the engine is. Guarded by itself. */
+    private val openConversations = mutableSetOf<Conversation>()
 
     /**
      * Read without the lock by [stop], which has to interrupt a generation that is holding it.
      */
     @Volatile
     private var activeConversation: Conversation? = null
+
+    /** True while a reply or background completion is being decoded. */
+    val isGenerating: Boolean get() = activeConversation != null
 
     init {
         Engine.setNativeMinLogSeverity(LogSeverity.WARNING)
@@ -171,6 +150,7 @@ class LlmService(
         val modalities = withContext(Dispatchers.IO) { probeModalities(modelPath) }
         _modalities.value = modalities
         visionTokensPerImage = withContext(Dispatchers.IO) { probeVisionTokens(modelPath) }
+        val features = withContext(Dispatchers.IO) { probeFeatures(modelPath) }
         calibrator.beginSession()
 
         for (attempt in attempts()) {
@@ -186,6 +166,20 @@ class LlmService(
                 _loadingBackend.value = null
                 engine = outcome.engine
                 _activeContextTokens.value = outcome.tokens
+                _capabilities.value = BackendCapabilities(
+                    // Not features.functionCalling: Gemma 4 E4B's file reports false, yet native
+                    // tool calls work (measured on device, EngineProbeTest.toolCalling). The
+                    // runtime supports manual tool calling; how well a model routes is an eval
+                    // question, not a capability flag.
+                    tools = true,
+                    // The runtime API exists in this version; whether this model honours it is
+                    // checked on device before anything relies on it.
+                    constrainedJson = true,
+                    thinking = features.thinking,
+                    speculativeDecoding = features.speculative && attempt.speculative,
+                    maxContextTokens = outcome.tokens,
+                    visionTokensPerImage = visionTokensPerImage,
+                )
                 _state.value = State.Ready(attempt.label, outcome.tokens)
                 return@withLock outcome.engine
             }
@@ -211,7 +205,7 @@ class LlmService(
 
     private inner class LoadAttempt(
         val label: String,
-        private val speculative: Boolean,
+        val speculative: Boolean,
         private val backend: () -> Backend,
     ) {
         @OptIn(ExperimentalApi::class)
@@ -248,59 +242,64 @@ class LlmService(
         Capabilities(modelPath).use { it.inputModalities() }
     }.onFailure { Log.w(TAG, "Could not read model capabilities", it) }.getOrNull()
 
-    /**
-     * Streams a reply to [prompt]. Emitted values are incremental chunks, not the running total.
-     *
-     * [history] is the conversation as stored, excluding [prompt] itself.
-     */
-    fun generate(
-        chatId: Long,
-        history: List<MessageEntity>,
-        prompt: String,
-        attachment: PromptAttachment? = null,
-    ): Flow<String> = flow {
-        val engine = ensureEngine() ?: error(failureMessage())
-        val conversation = loadMutex.withLock { conversationFor(engine, chatId, history) }
-        activeConversation = conversation
+    private data class ModelFeatures(val functionCalling: Boolean, val thinking: Boolean, val speculative: Boolean)
 
-        // Same crash guard as calibration: if a real chat is what finally exhausts memory, the
-        // marker is the only trace left after the process is killed.
-        settings.generationInFlightTokens = _activeContextTokens.value
-        _lastGenerationStats.value = null
-        var completed = false
-        try {
-            conversation.sendMessageAsync(
-                contentsOf(prompt, attachment?.path, attachment?.kind),
-                repetitionPenaltyConfig = RepetitionPenaltyConfig(
-                    repetitionPenalty = settings.repetitionPenalty,
-                    windowSize = settings.repetitionWindow,
-                ),
-            ).collect { message ->
-                // Message.toString() renders its Contents, which for a text model is the text.
-                val chunk = message.toString()
-                if (chunk.isNotEmpty()) emit(chunk)
-            }
-            completed = true
-        } finally {
-            activeConversation = null
-            settings.generationInFlightTokens = 0
-            withContext(NonCancellable) {
-                loadMutex.withLock {
-                    // Must run before closeConversation() below, which would drop the numbers.
-                    _lastGenerationStats.value = readGenerationStats()
-                    reportContextUsage()
-                    if (completed && conversationChatId == chatId) {
-                        // The conversation now also holds this user turn and the model's reply.
-                        conversationMessageCount = history.size + 2
-                    } else {
-                        // Interrupted part-way: the cache no longer matches what we stored,
-                        // so drop it and rebuild from the database on the next turn.
-                        closeConversation()
-                    }
-                }
+    /** What the model file says it can do. Unknown reads as "no", never as "yes". */
+    private fun probeFeatures(modelPath: String): ModelFeatures = runCatching {
+        Capabilities(modelPath).use {
+            ModelFeatures(it.supportsFunctionCalling(), it.supportsThinking(), it.hasSpeculativeDecodingSupport())
+        }
+    }.onFailure { Log.w(TAG, "Could not read model features", it) }
+        .getOrDefault(ModelFeatures(functionCalling = false, thinking = false, speculative = false))
+        .also { Log.i(TAG, "Model features: $it") }
+
+    /** Loads the engine if needed and waits for it. Null if no model can be loaded. */
+    suspend fun awaitEngine(): Engine? = ensureEngine()
+
+    /**
+     * Opens a conversation on the loaded engine, loading it first if necessary. The conversation
+     * is tracked so [unload] can close it; call [conversationClosed] after closing it yourself.
+     */
+    suspend fun createConversation(config: ConversationConfig): Conversation {
+        val loaded = ensureEngine() ?: error(failureMessage())
+        // Creation may prefill, which the native side cannot abandon half-way. Let it finish,
+        // then close the result if the caller stopped waiting, rather than leaking it.
+        val created = withContext(Dispatchers.IO + NonCancellable) {
+            loadMutex.withLock {
+                // The engine may have been swapped out while we waited for the lock.
+                val current = engine ?: error(failureMessage())
+                check(current === loaded) { "The model was reloaded; try again." }
+                current.createConversation(config).also { synchronized(openConversations) { openConversations += it } }
             }
         }
-    }.flowOn(Dispatchers.IO)
+        if (!currentCoroutineContext().isActive) {
+            runCatching { created.close() }
+            conversationClosed(created)
+            currentCoroutineContext().ensureActive()
+        }
+        return created
+    }
+
+    fun conversationClosed(conversation: Conversation) {
+        synchronized(openConversations) { openConversations -= conversation }
+    }
+
+    /**
+     * Brackets every generation. The marker is the same crash guard calibration uses: if a real
+     * chat is what finally exhausts memory, it is the only trace left after the process is killed.
+     */
+    fun generationStarted(conversation: Conversation) {
+        _lastGenerationStats.value = null
+        activeConversation = conversation
+        settings.generationInFlightTokens = _activeContextTokens.value
+    }
+
+    /** Clears the guard and returns the runtime's own measurement of the generation. */
+    fun generationFinished(conversation: Conversation): GenStats? {
+        if (activeConversation === conversation) activeConversation = null
+        settings.generationInFlightTokens = 0
+        return readGenerationStats(conversation).also { _lastGenerationStats.value = it }
+    }
 
     /** Interrupts the in-flight generation. Whatever was streamed so far stays. */
     fun stop() {
@@ -339,145 +338,36 @@ class LlmService(
         }
     }
 
-    /** Drops the cached conversation for [chatId], e.g. after its messages were deleted. */
-    suspend fun forget(chatId: Long) = loadMutex.withLock {
-        if (conversationChatId == chatId) closeConversation()
-    }
-
-    /** Releases the engine and all native memory. */
+    /** Releases the engine, every conversation on it, and all native memory. */
     suspend fun unload() = loadMutex.withLock {
-        closeConversation()
+        val open = synchronized(openConversations) { openConversations.toList().also { openConversations.clear() } }
+        open.forEach { runCatching { it.close() } }
         runCatching { engine?.close() }
         engine = null
         _activeContextTokens.value = 0
+        _capabilities.value = null
         _state.value = if (settings.modelPath == null) State.NoModel else State.Idle
     }
 
-    private fun conversationFor(
-        engine: Engine,
-        chatId: Long,
-        history: List<MessageEntity>,
-    ): Conversation {
-        val cached = conversation
-        if (cached != null && conversationChatId == chatId && conversationMessageCount == history.size) {
-            return cached
-        }
-
-        closeConversation()
-
-        // Older turns are dropped rather than letting the window overflow, which the runtime
-        // would reject outright with "Input token ids are too long".
-        val trimmed = ContextWindow.trimToBudget(
-            history = history,
-            budgetTokens = ContextWindow.budgetFor(
-                contextTokens = _activeContextTokens.value,
-                maxOutputTokens = effectiveMaxOutputTokens(),
-                systemPrompt = settings.systemPrompt,
-            ),
-            visionTokensPerImage = visionTokensPerImage,
-        )
-        _droppedFromContext.value = trimmed.droppedCount
-
-        val fresh = engine.createConversation(
-            ConversationConfig(
-                systemInstruction = settings.systemPrompt
-                    .takeIf { it.isNotBlank() }
-                    ?.let { Contents.of(it) },
-                initialMessages = trimmed.messages.map { it.toLiteRtMessage() },
-                samplerConfig = SamplerConfig(
-                    topK = TOP_K,
-                    topP = TOP_P,
-                    temperature = TEMPERATURE,
-                ),
-                maxOutputToken = effectiveMaxOutputTokens(),
-            ),
-        )
-        conversation = fresh
-        conversationChatId = chatId
-        conversationMessageCount = history.size
-        return fresh
-    }
-
-    /** Must be called with [loadMutex] held, and before the conversation is closed. */
+    /** Must be called before the conversation is closed, which would drop the numbers. */
     @OptIn(ExperimentalApi::class)
-    private fun readGenerationStats(): GenerationStats? {
-        val current = conversation ?: return null
-        return runCatching {
-            val info = current.getBenchmarkInfo()
-            GenerationStats(
-                decodeTokens = info.lastDecodeTokenCount,
-                tokensPerSecond = info.lastDecodeTokensPerSecond,
-                timeToFirstTokenMs = (info.timeToFirstTokenInSecond * 1000).toLong(),
-            ).takeIf { it.decodeTokens > 0 && it.tokensPerSecond > 0 }
-        }.getOrNull()
-    }
-
-    /** Must be called with [loadMutex] held. */
-    private fun reportContextUsage() {
-        val current = conversation
-        _contextUsage.value = if (current == null) {
-            null
-        } else {
-            runCatching { ContextUsage(current.getTokenCount(), _activeContextTokens.value) }.getOrNull()
-        }
-    }
-
-    /**
-     * A reply may not claim more than a quarter of the window, so a long answer cannot leave the
-     * next turn with nowhere to go.
-     */
-    private fun effectiveMaxOutputTokens(): Int {
-        val window = _activeContextTokens.value
-        if (window <= 0) return settings.maxOutputTokens
-        return settings.maxOutputTokens.coerceAtMost(max(MIN_OUTPUT_TOKENS, window / 4))
-    }
-
-    private fun closeConversation() {
-        runCatching { conversation?.close() }
-        conversation = null
-        conversationChatId = null
-        conversationMessageCount = 0
-        _contextUsage.value = null
-        _droppedFromContext.value = 0
-    }
+    private fun readGenerationStats(conversation: Conversation): GenStats? = runCatching {
+        val info = conversation.getBenchmarkInfo()
+        GenStats(
+            decodeTokens = info.lastDecodeTokenCount,
+            tokensPerSecond = info.lastDecodeTokensPerSecond,
+            timeToFirstTokenMs = (info.timeToFirstTokenInSecond * 1000).toLong(),
+            prefillTokens = info.lastPrefillTokenCount,
+        ).takeIf { it.decodeTokens > 0 && it.tokensPerSecond > 0 }
+    }.getOrNull()
 
     private fun failureMessage(): String =
         (state.value as? State.Failed)?.message ?: "The model is not loaded."
 
-    private fun MessageEntity.toLiteRtMessage(): Message = when (role) {
-        Role.USER -> Message.user(contentsOf(text, attachmentPath, attachmentKind))
-        Role.ASSISTANT -> Message.model(text)
-    }
-
-    /**
-     * Media first, then text — the order the runtime's own examples use.
-     *
-     * A missing attachment file degrades to text rather than failing the whole turn: the chat is
-     * still readable, and the alternative is a chat that can never be reopened.
-     */
-    private fun contentsOf(text: String, attachmentPath: String?, kind: AttachmentKind?): Contents {
-        val file = attachmentPath?.let(::File)?.takeIf { it.isFile }
-        if (file == null || kind == null) return Contents.of(text)
-
-        val media = when (kind) {
-            AttachmentKind.IMAGE -> Content.ImageFile(file.absolutePath)
-            AttachmentKind.AUDIO -> Content.AudioFile(file.absolutePath)
-        }
-        return if (text.isBlank()) {
-            Contents.of(media)
-        } else {
-            Contents.of(media, Content.Text(text))
-        }
-    }
-
     companion object {
         private const val TAG = "LlmService"
-        private const val TOP_K = 64
-        private const val TOP_P = 0.95
-        private const val TEMPERATURE = 1.0
         private const val NEARLY_FULL_FRACTION = 0.85f
         private const val DEFAULT_VISION_TOKENS = 256
-        private const val MIN_OUTPUT_TOKENS = 256
 
         /** Small enough that essentially any device that can hold the model can hold this too. */
         const val SAFE_CONTEXT_TOKENS = 4096

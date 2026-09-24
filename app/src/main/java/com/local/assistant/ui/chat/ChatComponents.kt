@@ -48,6 +48,8 @@ fun MessageRow(message: MessageEntity, modifier: Modifier = Modifier) {
             timeToFirstTokenMs = message.timeToFirstTokenMs,
             modifier = modifier,
         )
+        // Tool calls are bookkeeping, not conversation.
+        Role.TOOL -> Unit
     }
 }
 

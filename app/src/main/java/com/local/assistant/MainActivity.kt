@@ -52,9 +52,17 @@ private fun AppRoot(container: AppContainer) {
     }
 
     // The first load measures the context window, which takes real time. Doing it here rather
-    // than behind the chat means nobody watches an idle composer wondering if it hung.
+    // than behind the chat means nobody watches an idle composer wondering if it hung. Once the
+    // window is known, an ordinary load takes seconds: the chat is shown straight away and a
+    // message sent meanwhile simply waits for the engine.
     val engineState by container.llmService.state.collectAsStateWithLifecycle()
-    if (engineState !is LlmService.State.Ready) {
+    val calibration by container.llmService.calibrationProgress.collectAsStateWithLifecycle()
+    val windowKnown = container.settings.calibratedContextTokens > 0 ||
+        container.settings.manualContextTokens > 0
+    val needsLoadingScreen = engineState is LlmService.State.Failed ||
+        calibration != null ||
+        (engineState !is LlmService.State.Ready && !windowKnown)
+    if (needsLoadingScreen) {
         LoadingScreen(
             llmService = container.llmService,
             onOpenModelSettings = { showModelScreen = true },

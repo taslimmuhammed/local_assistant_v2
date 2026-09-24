@@ -17,6 +17,12 @@ data class CalibrationSnapshot(
     /** Consecutive launches that found a generation marker at the same size. */
     val generationCrashStreak: Int,
     val totalMemoryBytes: Long,
+    /**
+     * The largest window the app will run at, even where the device holds more. Calibration
+     * never probes above it: memory not spent on the KV cache is left for the models that run
+     * alongside the LLM (the embedder, a voice model).
+     */
+    val ceilingTokens: Int = Int.MAX_VALUE,
 )
 
 sealed interface CalibrationDecision {
@@ -52,31 +58,35 @@ object CalibrationPlanner {
         // answering. So the first one only earns a re-check at the same size; it takes a repeat
         // to rule the size out.
         val generationBad = snapshot.generationInFlight.takeIf { it > 0 }
+
+        // The size the app actually runs at: what was confirmed, held to the ceiling. A size
+        // below a confirmed one needs no probing of its own.
+        val effective = if (snapshot.calibratedTokens > 0) {
+            minOf(snapshot.calibratedTokens, snapshot.ceilingTokens)
+        } else {
+            0
+        }
         val generationIsFatal = generationBad != null &&
-            (snapshot.generationCrashStreak >= REPEATS_BEFORE_FATAL ||
-                generationBad != snapshot.calibratedTokens)
+            (snapshot.generationCrashStreak >= REPEATS_BEFORE_FATAL || generationBad != effective)
 
         val knownBad = listOfNotNull(initBad, generationBad.takeIf { generationIsFatal }).minOrNull()
 
-        val calibrationMatches = snapshot.calibratedTokens > 0 &&
+        val calibrationMatches = effective > 0 &&
             snapshot.calibratedKey == snapshot.currentKey &&
-            (knownBad == null || snapshot.calibratedTokens < knownBad)
+            (knownBad == null || effective < knownBad)
 
         if (calibrationMatches) {
             // Unexplained death at exactly this size: prove it still works before trusting it.
-            val needsRecheck = generationBad != null && !generationIsFatal &&
-                generationBad == snapshot.calibratedTokens
+            val needsRecheck = generationBad != null && !generationIsFatal && generationBad == effective
             return if (needsRecheck) {
-                CalibrationDecision.Probe(
-                    ContextLadder.rungsToTry(start = snapshot.calibratedTokens, knownBad = initBad),
-                )
+                CalibrationDecision.Probe(ContextLadder.rungsToTry(start = effective, knownBad = initBad))
             } else {
-                CalibrationDecision.UseKnown(snapshot.calibratedTokens)
+                CalibrationDecision.UseKnown(effective)
             }
         }
 
         val rungs = ContextLadder.rungsToTry(
-            start = ContextLadder.startingRung(snapshot.totalMemoryBytes),
+            start = minOf(ContextLadder.startingRung(snapshot.totalMemoryBytes), snapshot.ceilingTokens),
             knownBad = knownBad,
         )
         return if (rungs.isEmpty()) CalibrationDecision.Exhausted else CalibrationDecision.Probe(rungs)

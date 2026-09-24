@@ -13,9 +13,13 @@ import com.local.assistant.data.db.MessageEntity
 import com.local.assistant.data.db.Role
 import com.local.assistant.data.repo.ChatRepository
 import com.local.assistant.llm.LlmService
+import com.local.assistant.llm.PromptAttachment
 import com.local.assistant.media.AttachmentStore
 import com.local.assistant.media.AudioRecorder
 import com.local.assistant.media.RecordingState
+import com.local.assistant.memory.prompt.ConversationManager
+import com.local.assistant.memory.prompt.TurnEvent
+import com.local.assistant.memory.prompt.TurnRunner
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
@@ -33,6 +37,8 @@ import kotlinx.coroutines.withContext
 class ChatViewModel(
     private val repository: ChatRepository,
     private val llm: LlmService,
+    private val conversations: ConversationManager,
+    private val turns: TurnRunner,
     private val attachments: AttachmentStore,
     private val recorder: AudioRecorder,
 ) : ViewModel() {
@@ -57,6 +63,8 @@ class ChatViewModel(
     @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
     val messages: StateFlow<List<MessageEntity>> = _activeChatId
         .flatMapLatest { id -> if (id == null) flowOf(emptyList()) else repository.observeMessages(id) }
+        // Tool calls are stored for the record but are not part of the conversation shown.
+        .map { messages -> messages.filter { it.role != Role.TOOL } }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
     /** The reply being streamed right now, or null when nothing is generating. */
@@ -72,10 +80,10 @@ class ChatViewModel(
     val engineState: StateFlow<LlmService.State> = llm.state
 
     /** Real context consumption reported by the runtime, for the indicator above the composer. */
-    val contextUsage: StateFlow<LlmService.ContextUsage?> = llm.contextUsage
+    val contextUsage: StateFlow<LlmService.ContextUsage?> = conversations.contextUsage
 
     /** How many older turns fell out of the context window for the active chat. */
-    val droppedFromContext: StateFlow<Int> = llm.droppedFromContext
+    val droppedFromContext: StateFlow<Int> = conversations.droppedFromContext
 
     /** Drives whether the composer offers the image and mic buttons at all. */
     val supportsImages: StateFlow<Boolean> = llm.modalities
@@ -97,17 +105,22 @@ class ChatViewModel(
     fun startNewChat() {
         if (_isGenerating.value) return
         _activeChatId.value = null
+        conversations.onChatSelected(null)
     }
 
     fun selectChat(chatId: Long) {
         if (_isGenerating.value || _activeChatId.value == chatId) return
         _activeChatId.value = chatId
+        conversations.onChatSelected(chatId)
     }
+
+    /** Every keystroke: background model work yields to the person typing. */
+    fun onTyping() = turns.onUserActivity()
 
     fun deleteChat(chatId: Long) {
         viewModelScope.launch {
             repository.deleteChat(chatId)
-            llm.forget(chatId)
+            conversations.forget(chatId)
             // The rows are gone, so any file they referenced is now orphaned.
             attachments.pruneExcept(repository.attachmentPaths())
             if (_activeChatId.value == chatId) _activeChatId.value = null
@@ -164,10 +177,8 @@ class ChatViewModel(
             val chatId = _activeChatId.value
                 ?: repository.createChat().also { _activeChatId.value = it }
 
-            // Snapshot the history before the new turn is stored: the engine needs the prior
-            // turns as context and the prompt separately.
-            val history = repository.messagesFor(chatId)
-            repository.addMessage(
+            // Stored first, so nothing the user wrote is lost whatever happens next.
+            val userMessageId = repository.addMessage(
                 chatId = chatId,
                 role = Role.USER,
                 text = prompt,
@@ -187,13 +198,17 @@ class ChatViewModel(
 
             val reply = StringBuilder()
             var failure: String? = null
+            var completed = false
             try {
-                val promptAttachment = attachment?.let {
-                    LlmService.PromptAttachment(it.path, it.kind)
-                }
-                llm.generate(chatId, history, prompt, promptAttachment).collect { chunk ->
-                    reply.append(chunk)
-                    _streamingText.value = reply.toString()
+                val promptAttachment = attachment?.let { PromptAttachment(it.path, it.kind) }
+                turns.run(chatId, userMessageId, prompt, promptAttachment).collect { event ->
+                    when (event) {
+                        is TurnEvent.Text -> {
+                            reply.append(event.delta)
+                            _streamingText.value = reply.toString()
+                        }
+                        is TurnEvent.Done -> completed = true
+                    }
                 }
             } catch (e: CancellationException) {
                 throw e
@@ -203,9 +218,10 @@ class ChatViewModel(
                 // Runs even when stop() cancelled us, so a partial reply is never lost.
                 withContext(NonCancellable) {
                     val incomplete = stopRequested || failure != null
+                    var assistantMessageId: Long? = null
                     if (reply.isNotEmpty()) {
                         val stats = llm.lastGenerationStats.value
-                        repository.addMessage(
+                        assistantMessageId = repository.addMessage(
                             chatId = chatId,
                             role = Role.ASSISTANT,
                             text = reply.toString(),
@@ -214,6 +230,7 @@ class ChatViewModel(
                             timeToFirstTokenMs = stats?.timeToFirstTokenMs,
                         )
                     }
+                    turns.finish(chatId, assistantMessageId, completed = completed && !incomplete)
                     _error.value = failure
                     _streamingText.value = null
                     _isGenerating.value = false
@@ -236,6 +253,8 @@ class ChatViewModel(
                 ChatViewModel(
                     repository = container.chatRepository,
                     llm = container.llmService,
+                    conversations = container.conversations,
+                    turns = container.turnRunner,
                     attachments = container.attachmentStore,
                     recorder = container.audioRecorder,
                 )
