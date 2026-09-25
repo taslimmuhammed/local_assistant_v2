@@ -58,7 +58,7 @@ class MemoryRepository(
         sourceMessageId: Long?,
     ): FactWriteResult {
         val write = FactWrite(
-            subject = FactKeys.subject(subject),
+            subject = resolveSubject(subject),
             attribute = FactKeys.attribute(attribute),
             value = FactKeys.value(value),
             pin = pin,
@@ -91,7 +91,7 @@ class MemoryRepository(
      * tombstone so extraction from older messages cannot bring it back.
      */
     override suspend fun forgetFacts(subject: String, attribute: String?): ForgetResult {
-        val subjectKey = FactKeys.subject(subject)
+        val subjectKey = resolveSubject(subject)
         val attributeKey = attribute?.takeIf { it.isNotBlank() }?.let(FactKeys::attribute).orEmpty()
         return transaction {
             val removed = if (attributeKey.isEmpty()) {
@@ -114,6 +114,52 @@ class MemoryRepository(
         } else {
             facts.insertTombstone(ForgottenEntity(result.subject, result.attribute, previous))
         }
+    }
+
+    /** The subject key a name files under: normalised, then through any alias the user merged. */
+    private suspend fun resolveSubject(raw: String): String {
+        val key = FactKeys.subject(raw)
+        return facts.subjectForAlias(key) ?: key
+    }
+
+    /**
+     * Moves every fact about [from] under [into] and remembers [from] as a name for it. Where
+     * both have the same attribute, the user's own edit wins, then the newer statement. Tombstones
+     * move too, so nothing forgotten under the old name comes back under the new one.
+     */
+    suspend fun mergeSubjects(from: String, into: String): Int = transaction {
+        if (from == into || from == FactKeys.USER) return@transaction 0
+        var moved = 0
+        for (fact in facts.bySubject(from)) {
+            val existing = facts.find(into, fact.attribute)
+            if (existing == null) {
+                facts.update(fact.copy(subject = into))
+            } else {
+                val keepIncoming = when {
+                    existing.origin == FactOrigin.USER_EDIT && fact.origin != FactOrigin.USER_EDIT -> false
+                    fact.origin == FactOrigin.USER_EDIT && existing.origin != FactOrigin.USER_EDIT -> true
+                    else -> fact.statedAt > existing.statedAt
+                }
+                facts.delete(fact.id)
+                if (keepIncoming) facts.update(fact.copy(id = existing.id, subject = into, core = existing.core || fact.core))
+            }
+            moved++
+        }
+        for (tombstone in facts.tombstonesFor(from)) {
+            val current = facts.tombstone(into, tombstone.attribute)
+            if (current == null || current < tombstone.forgottenAt) facts.insertTombstone(tombstone.copy(subject = into))
+        }
+        facts.deleteTombstonesFor(from)
+        facts.repointAliases(from, into)
+        facts.insertAlias(SubjectAliasEntity(alias = from, subject = into))
+        moved
+    }
+
+    /** Applies every certain merge (see `AliasPlanner.merges`). Returns how many facts moved. */
+    suspend fun mergeCertainAliases(): Int {
+        val aliases = facts.aliases().associate { it.alias to it.subject }
+        val plan = com.local.assistant.memory.core.AliasPlanner.merges(facts.subjects(), aliases)
+        return plan.entries.sumOf { (from, into) -> mergeSubjects(from, into) }
     }
 
     override suspend fun searchFacts(words: List<String>, limit: Int): List<FactEntity> {

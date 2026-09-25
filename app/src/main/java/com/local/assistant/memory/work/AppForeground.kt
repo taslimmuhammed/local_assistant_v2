@@ -14,6 +14,7 @@ import androidx.lifecycle.LifecycleOwner
 class AppForeground(
     private val clock: () -> Long = System::currentTimeMillis,
     private val onForeground: () -> Unit = {},
+    private val onBackground: () -> Unit = {},
 ) : DefaultLifecycleObserver {
 
     /**
@@ -43,6 +44,7 @@ class AppForeground(
     override fun onStop(owner: LifecycleOwner) {
         stoppedAt = clock()
         isForeground = false
+        onBackground()
     }
 
     companion object {

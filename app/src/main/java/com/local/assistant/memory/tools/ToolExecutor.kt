@@ -44,6 +44,8 @@ class ToolExecutor(
     private val dedupeWindowMs: Long = DEDUPE_WINDOW_MS,
     /** Past conversations, for search_memory; nothing when the archive is not wired in. */
     private val archive: ArchiveSearch = ArchiveSearch { _, _ -> emptyList() },
+    /** Memory is paused: nothing new is saved about the user until it is turned back on. */
+    private val memoryPaused: () -> Boolean = { false },
 ) {
 
     data class Outcome(
@@ -110,7 +112,11 @@ class ToolExecutor(
             ToolCatalog.ADD_TASK -> addTask(args, context)
             ToolCatalog.UPDATE_TASK -> updateTask(args)
             ToolCatalog.ADD_EVENT -> addEvent(args, context)
-            ToolCatalog.SAVE_FACT -> saveFact(args, context)
+            ToolCatalog.SAVE_FACT -> if (memoryPaused()) {
+                throw ToolError("Memory is paused, so nothing was saved. Tell the user; they can turn memory back on in 'What I know about you'.")
+            } else {
+                saveFact(args, context)
+            }
             ToolCatalog.GET_UPCOMING -> getUpcoming(args)
             ToolCatalog.SEARCH_MEMORY -> searchMemory(args)
             ToolCatalog.FORGET -> forget(args)

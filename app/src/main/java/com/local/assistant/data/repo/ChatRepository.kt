@@ -21,6 +21,8 @@ class ChatRepository(
     private val estimator: TokenEstimator,
     /** Chats were deleted; what hangs off them outside SQL's cascades must follow. */
     private val onChatsDeleted: suspend () -> Unit = {},
+    /** Whether memory is paused right now; see `SettingsStore.memoryPaused`. */
+    private val memoryPaused: () -> Boolean = { false },
 ) {
 
     fun observeChats(): Flow<List<ChatEntity>> = dao.observeChats()
@@ -68,6 +70,7 @@ class ChatRepository(
                 timeToFirstTokenMs = timeToFirstTokenMs,
                 sessionId = sessions.sessionFor(chatId, now),
                 tokenEst = estimator.estimate(text),
+                offRecord = memoryPaused(),
             ),
         )
     }
@@ -89,6 +92,10 @@ class ChatRepository(
     }
 
     suspend fun renameChat(chatId: Long, title: String) = dao.renameChat(chatId, title)
+
+    /** "Earlier in this chat": [summary] covers every message up to [uptoMessageId]. */
+    suspend fun setRollingSummary(chatId: Long, summary: String?, uptoMessageId: Long?) =
+        dao.setRollingSummary(chatId, summary, uptoMessageId)
 
     /**
      * Gives an untitled chat a name derived from its first user message, the way ChatGPT does.

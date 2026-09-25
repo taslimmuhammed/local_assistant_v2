@@ -19,6 +19,7 @@ import com.local.assistant.memory.db.FactDao
 import com.local.assistant.memory.db.FactEntity
 import com.local.assistant.memory.db.FactFts
 import com.local.assistant.memory.db.ForgottenEntity
+import com.local.assistant.memory.db.MaintenanceDao
 import com.local.assistant.memory.db.SessionDao
 import com.local.assistant.memory.db.SessionEntity
 import com.local.assistant.memory.db.SubjectAliasEntity
@@ -45,7 +46,7 @@ import kotlinx.coroutines.Dispatchers
         ChunkFts::class,
         AppStateEntity::class,
     ],
-    version = 4,
+    version = 5,
     exportSchema = true,
 )
 @TypeConverters(Converters::class)
@@ -62,6 +63,8 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun appStateDao(): AppStateDao
 
     abstract fun chunkDao(): ChunkDao
+
+    abstract fun maintenanceDao(): MaintenanceDao
 
     /** The vector index is a derived table outside Room's schema, created where it can be. */
     object VectorTableCallback : Callback() {
@@ -88,7 +91,14 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
-        val MIGRATIONS: Array<Migration> = arrayOf(MIGRATION_1_2, MIGRATION_2_3, Migration3To4)
+        /** Pause memory: messages written while it is on are kept but never learned from. */
+        private val MIGRATION_4_5 = object : Migration(4, 5) {
+            override fun migrate(connection: SQLiteConnection) {
+                connection.execSQL("ALTER TABLE messages ADD COLUMN offRecord INTEGER NOT NULL DEFAULT 0")
+            }
+        }
+
+        val MIGRATIONS: Array<Migration> = arrayOf(MIGRATION_1_2, MIGRATION_2_3, Migration3To4, MIGRATION_4_5)
 
         /**
          * [withVectors]: sqlite-vec loaded on this device (see [SqliteVec.probe]). Its table is

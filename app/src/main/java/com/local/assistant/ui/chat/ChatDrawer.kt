@@ -41,6 +41,7 @@ fun ChatDrawer(
     onSelectChat: (Long) -> Unit,
     onDeleteChat: (Long) -> Unit,
     onOpenModelSettings: () -> Unit,
+    onOpenMemory: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     Column(
@@ -99,6 +100,20 @@ fun ChatDrawer(
         }
 
         HorizontalDivider(color = AppColors.Border)
+
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clickable(onClick = onOpenMemory)
+                .padding(horizontal = 20.dp, vertical = 16.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                text = "What I know about you",
+                style = MaterialTheme.typography.labelLarge,
+                color = AppColors.TextSecondary,
+            )
+        }
 
         Row(
             modifier = Modifier

@@ -14,6 +14,7 @@ import com.local.assistant.llm.LlmBackend
 import com.local.assistant.llm.LlmService
 import com.local.assistant.media.AttachmentStore
 import com.local.assistant.media.AudioRecorder
+import com.local.assistant.memory.MemoryControls
 import com.local.assistant.memory.db.ArchiveRepository
 import com.local.assistant.memory.db.MemoryRepository
 import com.local.assistant.memory.db.SessionTracker
@@ -35,7 +36,13 @@ import com.local.assistant.memory.tools.ChatToolLog
 import com.local.assistant.memory.tools.ToolCatalog
 import com.local.assistant.memory.tools.ToolExecutor
 import com.local.assistant.memory.tools.ToolLoop
+import com.local.assistant.memory.extract.ExtractionRouter
+import com.local.assistant.memory.extract.Extractor
+import com.local.assistant.memory.summary.SessionSummaries
+import com.local.assistant.memory.summary.Summarizer
 import com.local.assistant.memory.work.AppForeground
+import com.local.assistant.memory.work.BackgroundJobs
+import com.local.assistant.memory.work.Consolidation
 import com.local.assistant.memory.work.EmbeddingQueue
 import com.local.assistant.memory.work.ModelScheduler
 import com.local.assistant.model.ModelCatalog
@@ -63,10 +70,16 @@ class AppContainer(context: Context) {
     val settings = SettingsStore(context)
 
     /** Coming to the foreground warms the engines, so they are usually ready by the first send. */
-    val appForeground: AppForeground = AppForeground(onForeground = {
-        if (settings.modelPath != null) llmService.warmUp()
-        embeddingQueue.kick()
-    })
+    val appForeground: AppForeground = AppForeground(
+        onForeground = {
+            backgroundJobs.onForeground()
+            if (settings.modelPath != null) llmService.warmUp()
+            embeddingQueue.kick()
+        },
+        onBackground = { backgroundJobs.onBackground() },
+    )
+
+    val backgroundJobs = BackgroundJobs(context)
 
     /** Whether sqlite-vec loads here; if not, the archive's vectors are searched in Kotlin. */
     val sqliteVecVersion: String? = SqliteVec.probe()
@@ -83,6 +96,7 @@ class AppContainer(context: Context) {
         sessions = SessionTracker(database.sessionDao(), appForeground),
         estimator = tokenEstimator,
         onChatsDeleted = { archive.onChatsDeleted() },
+        memoryPaused = { settings.memoryPaused },
     )
 
     val modelManager = ModelManager(context, ModelCatalog.FILE, settings::modelPath, appScope)
@@ -135,6 +149,8 @@ class AppContainer(context: Context) {
 
     val llmBackend: LlmBackend = LiteRtLmBackend(llmService, settings)
 
+    private val summarizer = Summarizer(llmBackend, tokenEstimator)
+
     val modelScheduler = ModelScheduler()
 
     val conversations = ConversationManager(
@@ -147,6 +163,7 @@ class AppContainer(context: Context) {
         estimator = tokenEstimator,
         tools = ToolCatalog.declarations,
         retriever = retriever,
+        summarizer = summarizer,
     )
 
     val embeddingQueue: EmbeddingQueue = EmbeddingQueue(
@@ -172,6 +189,7 @@ class AppContainer(context: Context) {
         archive = ArchiveSearch { query, limit ->
             retriever.search(query, limit).map { Snippet(it.chunk.text, it.chunk.createdAt) }
         },
+        memoryPaused = { settings.memoryPaused },
     )
 
     private val toolLoop = ToolLoop(
@@ -185,6 +203,51 @@ class AppContainer(context: Context) {
     })
 
     val attachmentStore = AttachmentStore(context)
+
+    val sessionSummaries = SessionSummaries(database.sessionDao(), summarizer, llmBackend, conversations, modelScheduler)
+
+    private val extractor = Extractor(
+        maintenance = database.maintenanceDao(),
+        state = database.appStateDao(),
+        backend = llmBackend,
+        router = ExtractionRouter(memoryRepository, reminderScheduler),
+        conversations = conversations,
+        scheduler = modelScheduler,
+        estimator = tokenEstimator,
+    )
+
+    /** What the memory screen can see and change. */
+    val memoryControls = MemoryControls(
+        database = database,
+        memory = memoryRepository,
+        archive = archive,
+        chats = chatRepository,
+        reminders = reminderScheduler,
+        onChanged = { conversations.prefixMayHaveChanged() },
+    )
+
+    val consolidation = Consolidation(
+        embeddings = embeddingQueue,
+        sessions = sessionSummaries,
+        extractor = extractor,
+        memory = memoryRepository,
+        database = database,
+        retentionDays = { settings.historyRetentionDays },
+        applyRetention = { days ->
+            memoryControls.applyRetention(days).also {
+                if (it > 0) attachmentStore.pruneExcept(chatRepository.attachmentPaths())
+            }
+        },
+        releaseModel = {
+            if (!appForeground.isForeground) {
+                llmService.unload()
+                embedder.unload()
+            }
+        },
+    )
+
+    /** "Forget everything", including the nightly pass's place in the history. */
+    suspend fun forgetEverything() = memoryControls.forgetEverything(skipExtractionTo = extractor::skipToEnd)
 
     val audioRecorder = AudioRecorder(appScope)
 
@@ -202,6 +265,7 @@ class AppContainer(context: Context) {
     )
 
     init {
+        backgroundJobs.scheduleNightly()
         // Exchanges from before the archive existed, or missed by a crash, then their vectors.
         appScope.launch {
             val archived = archive.backfill(beforeId = archive.lastMessageId() + 1)

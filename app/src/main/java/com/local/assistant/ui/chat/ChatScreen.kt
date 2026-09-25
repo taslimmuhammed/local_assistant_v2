@@ -84,6 +84,7 @@ import kotlinx.coroutines.launch
 fun ChatScreen(
     viewModel: ChatViewModel,
     onOpenModelSettings: () -> Unit,
+    onOpenMemory: () -> Unit,
 ) {
     val chats by viewModel.chats.collectAsStateWithLifecycle()
     val activeChatId by viewModel.activeChatId.collectAsStateWithLifecycle()
@@ -178,6 +179,10 @@ fun ChatScreen(
                         scope.launch { drawerState.close() }
                         onOpenModelSettings()
                     },
+                    onOpenMemory = {
+                        scope.launch { drawerState.close() }
+                        onOpenMemory()
+                    },
                 )
             }
         },
@@ -201,6 +206,10 @@ fun ChatScreen(
                     .imePadding(),
             ) {
                 EngineBanner(engineState)
+                val tidying by viewModel.tidying.collectAsStateWithLifecycle()
+                val memoryPaused by viewModel.memoryPaused.collectAsStateWithLifecycle()
+                if (tidying) QuietBanner("Tidying up…")
+                if (memoryPaused) QuietBanner("Memory is paused: nothing new is remembered")
 
                 Box(Modifier.weight(1f).fillMaxWidth()) {
                     if (messages.isEmpty() && streamingText == null) {
@@ -325,6 +334,19 @@ private fun ChatTopBar(
         )
         HorizontalDivider(color = AppColors.Border)
     }
+}
+
+@Composable
+private fun QuietBanner(text: String) {
+    Text(
+        text = text,
+        style = MaterialTheme.typography.bodyMedium,
+        color = AppColors.TextSecondary,
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(AppColors.SurfaceMuted)
+            .padding(horizontal = 16.dp, vertical = 8.dp),
+    )
 }
 
 @Composable

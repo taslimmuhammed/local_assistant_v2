@@ -31,6 +31,19 @@ class SettingsStore(context: Context) {
         get() = prefs.getString(KEY_EMBEDDER_KEY, null)
         set(value) = prefs.edit { if (value == null) remove(KEY_EMBEDDER_KEY) else putString(KEY_EMBEDDER_KEY, value) }
 
+    /**
+     * Pause memory: while on, new messages are kept in their chat but nothing is learned from
+     * them — no archive, recall, summaries, extraction, and no facts saved by tools.
+     */
+    var memoryPaused: Boolean
+        get() = prefs.getBoolean(KEY_MEMORY_PAUSED, false)
+        set(value) = prefs.edit { putBoolean(KEY_MEMORY_PAUSED, value) }
+
+    /** Chat history older than this many days is deleted by the nightly job; 0 keeps everything. */
+    var historyRetentionDays: Int
+        get() = prefs.getInt(KEY_HISTORY_RETENTION, 0)
+        set(value) = prefs.edit { putInt(KEY_HISTORY_RETENTION, value) }
+
     /** Prefer the GPU backend. Falls back to CPU automatically if the GPU engine fails to start. */
     var useGpu: Boolean
         get() = prefs.getBoolean(KEY_USE_GPU, true)
@@ -147,6 +160,10 @@ class SettingsStore(context: Context) {
 
     fun observeModelPath(): Flow<String?> = observeKey(KEY_MODEL_PATH) { modelPath }
 
+    fun observeMemoryPaused(): Flow<Boolean> = observeKey(KEY_MEMORY_PAUSED) { memoryPaused }
+
+    fun observeHistoryRetentionDays(): Flow<Int> = observeKey(KEY_HISTORY_RETENTION) { historyRetentionDays }
+
     private fun <T> observeKey(key: String, read: () -> T): Flow<T> = callbackFlow {
         trySend(read())
         val listener = android.content.SharedPreferences.OnSharedPreferenceChangeListener { _, changed ->
@@ -160,6 +177,8 @@ class SettingsStore(context: Context) {
         private const val KEY_MODEL_PATH = "model_path"
         private const val KEY_EMBEDDER_PATH = "embedder_path"
         private const val KEY_EMBEDDER_KEY = "embedder_key"
+        private const val KEY_MEMORY_PAUSED = "memory_paused"
+        private const val KEY_HISTORY_RETENTION = "history_retention_days"
         private const val KEY_USE_GPU = "use_gpu"
         private const val KEY_SPECULATIVE = "speculative_decoding"
         private const val KEY_SYSTEM_PROMPT = "system_prompt"

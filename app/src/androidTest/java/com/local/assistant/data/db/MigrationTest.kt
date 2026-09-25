@@ -99,8 +99,22 @@ class MigrationTest {
             db.execSQL("INSERT INTO chats (id, title, createdAt, updatedAt) VALUES (1, 'Old', 1, 2)")
             db.execSQL("INSERT INTO messages (chatId, role, text, createdAt, incomplete) VALUES (1, 'USER', 'hello', 1, 0)")
         }
-        helper.runMigrationsAndValidate(4, AppDatabase.MIGRATIONS.toList()).use { db ->
-            assertEquals(1L, db.long("SELECT COUNT(*) FROM messages WHERE sessionId IS NOT NULL AND tokenEst > 0"))
+        helper.runMigrationsAndValidate(5, AppDatabase.MIGRATIONS.toList()).use { db ->
+            assertEquals(1L, db.long("SELECT COUNT(*) FROM messages WHERE sessionId IS NOT NULL AND tokenEst > 0 AND offRecord = 0"))
+        }
+    }
+
+    @Test
+    fun version4MessagesStayOnTheRecord() {
+        helper.createDatabase(4).use { db ->
+            db.execSQL("INSERT INTO chats (id, title, createdAt, updatedAt) VALUES (1, 'Trip', 1, 2)")
+            db.execSQL("INSERT INTO messages (id, chatId, role, text, createdAt, incomplete, tokenEst) VALUES (1, 1, 'USER', 'plan Gokarna', 1, 0, 3)")
+        }
+        helper.runMigrationsAndValidate(5, AppDatabase.MIGRATIONS.toList()).use { db ->
+            // Everything written before Pause memory existed was written with memory on.
+            assertEquals(0L, db.long("SELECT offRecord FROM messages WHERE id = 1"))
+            db.execSQL("INSERT INTO messages (chatId, role, text, createdAt, incomplete, tokenEst) VALUES (1, 'USER', 'x', 2, 0, 1)")
+            assertEquals(0L, db.long("SELECT offRecord FROM messages WHERE text = 'x'"))
         }
     }
 

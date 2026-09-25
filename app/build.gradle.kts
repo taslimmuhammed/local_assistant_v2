@@ -99,6 +99,9 @@ dependencies {
 
     implementation(libs.okhttp)
 
+    // Session-end summaries and the nightly consolidation run as scheduled background work.
+    implementation(libs.androidx.work.runtime.ktx)
+
     // On-device LLM runtime.
     implementation(libs.litertlm.android)
     // Already a transitive dependency of LiteRT-LM; declared because tool arguments and results

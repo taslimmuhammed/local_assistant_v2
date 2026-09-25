@@ -78,8 +78,11 @@ AssistantApplication
     ├── ModelScheduler            one model job at a time; the user always first
     ├── EmbeddingQueue            embeds the archive's backlog while the user is idle
     ├── Retriever                 per-turn recall: facts, then keyword + vector search, fused
-    ├── ConversationManager       the live conversation, and when to rebuild it
-    └── TurnRunner                one user turn: prepare, send, stream, archive
+    ├── ConversationManager       the live conversation, when to rebuild it, rolling compaction
+    ├── TurnRunner                one user turn: prepare, send, stream, archive
+    ├── SessionSummaries          ends sessions and summarises them (session-end job)
+    ├── Consolidation             the nightly job: backlog, summaries, extraction, aliases, upkeep
+    └── MemoryControls            what the "What I know about you" screen can see and change
 ```
 
 ### LlmService and the backend
@@ -164,6 +167,55 @@ related pairs recalled at 95% precision. Measured on the target phone:
 | Recall without vectors (FTS, fusion, facts) | 44 ms |
 | KNN over 55,000 chunks, k = 40 | 18–31 ms sqlite-vec, 30–51 ms Kotlin |
 
+### Summaries, compaction and the nightly job
+
+Background model work never shares the model with a chat: it asks `ConversationManager` to
+close the live conversation first (`withModelFree`), runs one short call at temperature 0.2 with
+thinking off, and the next turn rebuilds. Every such job goes through the `ModelScheduler` below
+the user's own turns and stops the moment they start typing.
+
+- **Rolling compaction.** After a reply, once the chat has been quiet for 30 seconds, a
+  conversation past `compactionTrigger` (4,000 tokens on the 8K profile) — or one rebuilt without
+  turns that no summary covers, like a long chat reopened after a restart — has its older turns
+  folded into the chat's "Earlier in this chat" summary (≤ 300 tokens), keeping the newest turns
+  that land the rebuilt prompt near `compactionTarget`. If a send would overflow before that
+  happened, it compacts first and the chat shows "Tidying up…".
+- **Session summaries.** Ten minutes after the app goes to the background, a WorkManager job
+  ends the sessions that went quiet and summarises them (topics, decisions, open loops, in the
+  user's language) if the engine is still loaded; otherwise they wait for the nightly job. The
+  newest summary opens later conversations as "Last time you talked". Summaries are context only:
+  nothing reads facts out of them.
+- **The nightly job** runs on the charger with the phone idle, eight minutes at a time with a
+  continuation for the rest, every step resuming where it stopped: embed the backlog, fill pending
+  summaries, extract, merge names, SQLite and FTS upkeep, and delete history past the retention
+  setting. It skips warm nights.
+- **Extraction** reads user messages after a watermark, a batch at a time, and asks for a
+  constrained JSON array of facts, tasks and events. Messages whose turn already made a tool call,
+  trivial ones, voice notes and paused ones are skipped. The examples in the prompt include what
+  must yield nothing (questions, hypotheticals, other people's opinions, moods, sarcasm), and every
+  item is checked in code (`ExtractionRouter`): it must point at a message in its batch; facts go
+  through the usual upsert rules with the message's own time, so tombstones and the user's edits
+  win; only reply preferences may be core; tasks and events need a time still ahead and are not
+  added twice.
+- **Names.** "amma", "mummy" and "mom" are filed under `mother` when written; the nightly job
+  merges any keys that normalise together, and anything that only looks alike ("priya" and
+  "priya_sharma") becomes a question on the memory screen rather than a merge.
+
+### What I know about you
+
+From the drawer. Facts grouped as the core memory ("Always in mind", with its token budget), then
+by category, each with where it came from (tap for the source message). Tap to edit (it then
+belongs to the user, and extraction never overwrites it), pin or unpin, swipe to delete with an
+undo. Deleting also empties the archived exchanges that state the fact — its value, alongside the
+person's name when it is about someone else — and leaves a tombstone so it is not learned again.
+A second tab lists reminders and events. Possible duplicates are asked about, never merged
+silently.
+
+Controls: **Pause memory** (chats go on; nothing new is archived, recalled from, summarised,
+extracted or saved by the model — reminders still work), **Keep chat history** (forever, 1 year,
+90 or 30 days; applied at once and nightly), **Export as JSON**, and **Forget everything** (asks
+twice; chats stay, but everything learned from them goes and they are never re-read).
+
 ### Tools and reminders
 
 The model can call eight tools — `add_task`, `update_task`, `add_event`, `save_fact`,
@@ -210,7 +262,7 @@ regardless (measured in `EngineProbeTest.toolCalling`), so the flag is not trust
 
 One database, `assistant.db`, on Room's driver API with the bundled SQLite, which loads
 sqlite-vec for the archive's vector index (`vec_chunks`, created on open where the extension
-loads and never referenced by a trigger). `chats` and `messages`, with `messages.chatId`
+loads and never referenced by a trigger). Version 5 adds `messages.offRecord` for Pause memory. `chats` and `messages`, with `messages.chatId`
 cascading on delete; a message carries an `incomplete` flag so a stopped reply is stored and shown
 as what it is. Memory lives alongside: `sessions` (one foreground period within a chat), `facts`
 with an FTS4 keyword index, `forgotten` tombstones, `tasks`, `events`, and `chunks` (with their
@@ -379,6 +431,9 @@ URLs, hashes, base64, long random IDs — and the loop is self-reinforcing once 
 | Time words the resolver misses | `memory/tools/WhenResolver.kt`, with a row in `WhenResolverTest` |
 | Another embedding model | `memory/embed/EmbedderCatalog.kt` (prompts, threshold); `tools/embedder/calibrate_threshold.py`, then `EmbedderProbeTest` on the phone |
 | What counts as trivial, or a rare word | `memory/retrieval/QueryText.kt` |
+| What extraction looks for | `memory/extract/Extraction.kt` (prompt and examples), `ExtractionRouter` (what may be written) |
+| When compaction runs | `MemoryBudget` (`compactionTrigger`, `compactionTarget`, `rollingSummaryCap`) |
+| What the nightly job does | `memory/work/BackgroundJobs.kt` (`Consolidation`) |
 | Camera capture | `ui/chat/ChatScreen.kt` — only the photo picker is wired up; camera needs a FileProvider |
 | Longer voice notes | `media/MediaLimits.kt`, once you know the model's real audio ceiling |
 | More Markdown (tables, images, nested quotes) | `ui/chat/Markdown.kt` — parser; `MarkdownText.kt` — renderer |
@@ -413,7 +468,7 @@ These are deliberate omissions, not bugs:
 - The renderer re-parses the whole message on every streamed token — fine at chat length, but it
   is the first thing to optimise if very long replies feel sluggish
 - Downloads stop if the process is killed (they resume on the next attempt)
-- No editing or regenerating messages, no search, no export
+- No editing or regenerating messages, and no search or export of chats (memory can be exported)
 - Images come from the gallery only; no camera capture
 - One attachment per message
 - Light theme only

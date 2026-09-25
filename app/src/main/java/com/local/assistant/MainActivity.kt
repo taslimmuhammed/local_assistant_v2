@@ -12,6 +12,9 @@ import androidx.compose.runtime.setValue
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.local.assistant.ui.chat.ChatScreen
+import com.local.assistant.ui.memory.MemoryScreen
+import com.local.assistant.ui.memory.MemoryViewModel
+import androidx.activity.compose.BackHandler
 import com.local.assistant.ui.chat.ChatViewModel
 import com.local.assistant.llm.LlmService
 import com.local.assistant.ui.setup.ModelScreen
@@ -36,6 +39,7 @@ class MainActivity : ComponentActivity() {
 private fun AppRoot(container: AppContainer) {
     val installed by container.modelManager.installed.collectAsStateWithLifecycle()
     var showModelScreen by remember { mutableStateOf(false) }
+    var showMemoryScreen by remember { mutableStateOf(false) }
 
     // With no model there is nothing to chat with, so the model screen is the whole app.
     if (installed == null || showModelScreen) {
@@ -71,9 +75,17 @@ private fun AppRoot(container: AppContainer) {
         return
     }
 
+    if (showMemoryScreen) {
+        BackHandler { showMemoryScreen = false }
+        val memoryViewModel: MemoryViewModel = viewModel(factory = MemoryViewModel.factory(container))
+        MemoryScreen(viewModel = memoryViewModel, onBack = { showMemoryScreen = false })
+        return
+    }
+
     val viewModel: ChatViewModel = viewModel(factory = ChatViewModel.factory(container))
     ChatScreen(
         viewModel = viewModel,
         onOpenModelSettings = { showModelScreen = true },
+        onOpenMemory = { showMemoryScreen = true },
     )
 }

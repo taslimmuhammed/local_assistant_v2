@@ -94,6 +94,33 @@ interface FactDao {
     @Query("SELECT subject FROM subject_aliases WHERE alias = :alias")
     suspend fun subjectForAlias(alias: String): String?
 
+    @Query("SELECT * FROM facts ORDER BY id")
+    suspend fun all(): List<FactEntity>
+
+    @Query("SELECT DISTINCT subject FROM facts")
+    suspend fun subjects(): List<String>
+
+    @Query("SELECT * FROM subject_aliases")
+    suspend fun aliases(): List<SubjectAliasEntity>
+
+    @Query("UPDATE subject_aliases SET subject = :into WHERE subject = :from")
+    suspend fun repointAliases(from: String, into: String)
+
+    @Query("SELECT * FROM forgotten WHERE subject = :subject")
+    suspend fun tombstonesFor(subject: String): List<ForgottenEntity>
+
+    @Query("DELETE FROM forgotten WHERE subject = :subject")
+    suspend fun deleteTombstonesFor(subject: String)
+
+    @Query("SELECT * FROM forgotten ORDER BY forgottenAt")
+    suspend fun tombstones(): List<ForgottenEntity>
+
+    @Query("DELETE FROM facts")
+    suspend fun deleteAll(): Int
+
+    @Query("DELETE FROM subject_aliases")
+    suspend fun deleteAllAliases()
+
     /** Subjects any of [aliases] stand for ("amma" → mother). */
     @Query("SELECT DISTINCT subject FROM subject_aliases WHERE alias IN (:aliases)")
     suspend fun subjectsForAliases(aliases: List<String>): List<String>
@@ -161,6 +188,25 @@ interface AgendaDao {
 
     @Query("SELECT * FROM events WHERE startsAt >= :from ORDER BY startsAt, id LIMIT :limit")
     suspend fun upcomingEvents(from: Long, limit: Int): List<EventEntity>
+
+    @Query("SELECT * FROM tasks WHERE status = 'OPEN' ORDER BY dueAt IS NULL, dueAt, id")
+    fun observeOpenTasks(): Flow<List<TaskEntity>>
+
+    /** Events still to come, and every repeating one. */
+    @Query("SELECT * FROM events WHERE startsAt >= :from OR recurrence IS NOT NULL ORDER BY startsAt, id")
+    fun observeEvents(from: Long): Flow<List<EventEntity>>
+
+    @Query("SELECT * FROM tasks ORDER BY id")
+    suspend fun allTasks(): List<TaskEntity>
+
+    @Query("SELECT * FROM events ORDER BY id")
+    suspend fun allEvents(): List<EventEntity>
+
+    @Query("DELETE FROM tasks")
+    suspend fun deleteAllTasks()
+
+    @Query("DELETE FROM events")
+    suspend fun deleteAllEvents()
 }
 
 @Dao
@@ -177,6 +223,30 @@ interface SessionDao {
 
     @Query("SELECT MAX(createdAt) FROM messages WHERE sessionId = :sessionId")
     suspend fun lastActivity(sessionId: Long): Long?
+
+    @Query("SELECT * FROM sessions WHERE endedAt IS NULL ORDER BY id")
+    suspend fun openSessions(): List<SessionEntity>
+
+    /** Ended sessions still waiting for a summary, oldest first. */
+    @Query("SELECT * FROM sessions WHERE endedAt IS NOT NULL AND summaryStatus = 'PENDING' ORDER BY endedAt, id LIMIT :limit")
+    suspend fun pendingSummaries(limit: Int): List<SessionEntity>
+
+    @Query("SELECT COUNT(*) FROM sessions WHERE endedAt IS NOT NULL AND summaryStatus = 'PENDING'")
+    suspend fun pendingSummaryCount(): Int
+
+    /** The session's user and assistant turns, oldest first. */
+    @Query("SELECT * FROM messages WHERE sessionId = :sessionId AND role != 'TOOL' ORDER BY id")
+    suspend fun turns(sessionId: Long): List<MessageEntity>
+
+    @Query("UPDATE sessions SET summary = :summary, summaryStatus = :status WHERE id = :sessionId")
+    suspend fun setSummary(sessionId: Long, summary: String?, status: SummaryStatus)
+
+    @Query("SELECT * FROM sessions WHERE summary IS NOT NULL ORDER BY startedAt")
+    suspend fun summarised(): List<SessionEntity>
+
+    /** "Forget everything": summaries go, and ended sessions are not summarised again. */
+    @Query("UPDATE sessions SET summary = NULL, summaryStatus = 'DONE' WHERE endedAt IS NOT NULL")
+    suspend fun clearSummaries()
 
     /** The most recent session anywhere that has a finished summary. */
     @Query(
@@ -269,7 +339,7 @@ interface ChunkDao {
     @Query(
         """
         SELECT * FROM messages
-        WHERE role = 'USER' AND id > :after AND id < :before
+        WHERE role = 'USER' AND id > :after AND id < :before AND offRecord = 0
           AND NOT EXISTS (SELECT 1 FROM chunks WHERE chunks.messageId = messages.id)
         ORDER BY id LIMIT :limit
         """,
@@ -282,4 +352,49 @@ interface ChunkDao {
 
     @Query("SELECT MAX(id) FROM messages")
     suspend fun lastMessageId(): Long?
+
+    /** Chunks matching an FTS4 query. */
+    @Query("SELECT chunks.* FROM chunks JOIN chunks_fts ON chunks.id = chunks_fts.rowid WHERE chunks_fts MATCH :match")
+    suspend fun matching(match: String): List<ChunkEntity>
+
+    @Query("UPDATE chunks SET text = '', embedding = NULL, modelId = :marker WHERE id IN (:ids)")
+    suspend fun blank(ids: List<Long>, marker: String)
+
+    @Query("UPDATE chunks SET text = '', embedding = NULL, modelId = :marker")
+    suspend fun blankAll(marker: String): Int
+
+    @Update
+    suspend fun update(chunk: ChunkEntity)
+}
+
+/** Queries for the nightly job: extraction candidates, history retention, housekeeping. */
+@Dao
+interface MaintenanceDao {
+
+    /** User messages after [after] that memory may learn from, oldest first. */
+    @Query("SELECT * FROM messages WHERE role = 'USER' AND id > :after AND offRecord = 0 ORDER BY id LIMIT :limit")
+    suspend fun userMessagesAfter(after: Long, limit: Int): List<MessageEntity>
+
+    /** Whether the turn [messageId] opened made a tool call (it then already acted on what was said). */
+    @Query(
+        """
+        SELECT EXISTS(
+            SELECT 1 FROM messages t WHERE t.chatId = :chatId AND t.role = 'TOOL' AND t.id > :messageId
+              AND t.id < (SELECT COALESCE(MIN(n.id), 9223372036854775807) FROM messages n
+                          WHERE n.chatId = :chatId AND n.role = 'USER' AND n.id > :messageId)
+        )
+        """,
+    )
+    suspend fun turnUsedTools(chatId: Long, messageId: Long): Boolean
+
+    /** The message just before [messageId] in its chat, skipping tool records. */
+    @Query("SELECT * FROM messages WHERE chatId = :chatId AND id < :messageId AND role != 'TOOL' ORDER BY id DESC LIMIT 1")
+    suspend fun previousTurn(chatId: Long, messageId: Long): MessageEntity?
+
+    @Query("DELETE FROM messages WHERE createdAt < :cutoff")
+    suspend fun deleteMessagesBefore(cutoff: Long): Int
+
+    /** Chats left with no messages, and older than [cutoff] (a brand-new chat is left alone). */
+    @Query("DELETE FROM chats WHERE updatedAt < :cutoff AND NOT EXISTS (SELECT 1 FROM messages WHERE messages.chatId = chats.id)")
+    suspend fun deleteEmptyChatsBefore(cutoff: Long): Int
 }

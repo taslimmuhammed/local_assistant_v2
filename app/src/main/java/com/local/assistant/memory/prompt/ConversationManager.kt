@@ -2,6 +2,7 @@ package com.local.assistant.memory.prompt
 
 import android.util.Log
 import com.local.assistant.data.db.MessageEntity
+import com.local.assistant.data.db.Role
 import com.local.assistant.data.prefs.SettingsStore
 import com.local.assistant.data.repo.ChatRepository
 import com.local.assistant.llm.BackendCapabilities
@@ -12,6 +13,8 @@ import com.local.assistant.llm.LlmService
 import com.local.assistant.memory.db.MemoryRepository
 import com.local.assistant.memory.retrieval.Recall
 import com.local.assistant.memory.retrieval.Retriever
+import com.local.assistant.memory.summary.Summarizer
+import com.local.assistant.memory.work.ModelAccess
 import com.local.assistant.memory.work.ModelScheduler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
@@ -59,9 +62,11 @@ class ConversationManager(
     private val tools: List<String> = emptyList(),
     /** Per-turn recall of facts and archived exchanges; none when null. */
     private val retriever: Retriever? = null,
+    /** Folds older turns into the chat's rolling summary; without it they are simply dropped. */
+    private val summarizer: Summarizer? = null,
     private val zone: () -> ZoneId = ZoneId::systemDefault,
     private val clock: () -> Long = System::currentTimeMillis,
-) {
+) : ModelAccess {
 
     /** A turn ready to send. */
     data class PreparedTurn(val session: ChatSession, val envelope: Envelope, val budget: MemoryBudget)
@@ -86,6 +91,8 @@ class ConversationManager(
         var lastNowShown: ZonedDateTime? = null,
         /** The runtime's count just before the turn in flight, to measure what the turn cost. */
         var tokensBeforeTurn: Int? = null,
+        /** Stored turns this conversation left out that no summary covers yet. */
+        val unsummarizedDropped: Int = 0,
     )
 
     /** Plain turns' text and real cost, gathered until there is enough to learn from. */
@@ -101,6 +108,14 @@ class ConversationManager(
 
     /** How many stored messages of the current chat did not fit its conversation. */
     val droppedFromContext: StateFlow<Int> = _droppedFromContext.asStateFlow()
+
+    /** When compaction last failed per chat, so a model that will not summarise is not asked every turn. */
+    private val compactionFailedAt = mutableMapOf<Long, Long>()
+
+    private val _tidying = MutableStateFlow(false)
+
+    /** A send is waiting while the chat's older turns are summarised to make room. */
+    val tidying: StateFlow<Boolean> = _tidying.asStateFlow()
 
     private val _contextUsage = MutableStateFlow<LlmService.ContextUsage?>(null)
 
@@ -119,7 +134,7 @@ class ConversationManager(
         val capabilities = checkNotNull(backend.capabilities) { "The model is not loaded." }
         val budget = MemoryBudget.forWindow(capabilities.maxContextTokens)
         val assembler = assemblerFor(budget, capabilities)
-        val history = historyFor(chatId, userMessageId)
+        var history = historyFor(chatId, userMessageId)
         val now = now()
 
         val reusable = live?.takeIf {
@@ -144,9 +159,16 @@ class ConversationManager(
         val liveTokens = current.session.tokenCount() ?: 0
         var envelope = assembler.fitEnvelope(liveTokens, inputs)
         if (envelope == null) {
-            // Too full to take even this turn. Rebuild smaller now rather than overflow; rolling
-            // compaction (which summarises instead of dropping) keeps this rare.
-            Log.i(TAG, "Conversation at $liveTokens tokens cannot take the next turn; rebuilding")
+            // Too full to take even this turn: the idle compaction after replies did not keep up.
+            // Summarise the older turns now, visibly, rather than drop them; if that fails, the
+            // rebuild sheds them instead.
+            Log.i(TAG, "Conversation at $liveTokens tokens cannot take the next turn; compacting first")
+            _tidying.value = true
+            try {
+                if (compact(chatId, budget, capabilities, beforeId = userMessageId)) history = historyFor(chatId, userMessageId)
+            } finally {
+                _tidying.value = false
+            }
             current = rebuild(chatId, history, budget, capabilities, next = inputs)
             envelope = assembler.buildEnvelope(inputs.copy(showNow = true))
         }
@@ -262,6 +284,16 @@ class ConversationManager(
                 mutex.withLock {
                     val current = live ?: return@withLock
                     val capabilities = backend.capabilities ?: return@withLock
+                    if (needsCompaction(current)) {
+                        // The summary can be interrupted (the user started typing); the rebuild
+                        // after it cannot, since a half-prefilled conversation is thrown away.
+                        if (compact(current.chatId, current.budget, capabilities)) {
+                            withContext(NonCancellable) {
+                                publishUsage(rebuild(current.chatId, historyFor(current.chatId, Long.MAX_VALUE), current.budget, capabilities))
+                            }
+                        }
+                        return@withLock
+                    }
                     val prefix = assemblerFor(current.budget, capabilities)
                         .buildPrefix(prefixInputs(current.chatId, current.budget))
                     if (prefix.text == current.acknowledgedPrefix) return@withLock
@@ -273,6 +305,76 @@ class ConversationManager(
                 }
             }
         }
+    }
+
+    /**
+     * The conversation has passed the compaction trigger, or was built without turns that no
+     * summary covers (a long chat reopened after a restart).
+     */
+    private fun needsCompaction(current: Live): Boolean {
+        if (summarizer == null) return false
+        val failed = compactionFailedAt[current.chatId]
+        if (failed != null && clock() - failed < COMPACTION_RETRY_MS) return false
+        val tokens = current.session.tokenCount() ?: 0
+        return tokens > current.budget.compactionTrigger || current.unsummarizedDropped > 0
+    }
+
+    /**
+     * Folds the chat's older turns into its rolling summary, keeping the newest whole turns that
+     * let a rebuilt conversation land near [MemoryBudget.compactionTarget]. Closes the live
+     * conversation (the summary needs the model, and two conversations at once cost gigabytes);
+     * the caller rebuilds. Must hold [mutex]. False when there was nothing to fold or no summary
+     * came back — the stored summary is then left as it was.
+     */
+    private suspend fun compact(
+        chatId: Long,
+        budget: MemoryBudget,
+        capabilities: BackendCapabilities,
+        beforeId: Long = Long.MAX_VALUE,
+    ): Boolean {
+        val summarizer = summarizer ?: return false
+        val history = historyFor(chatId, beforeId)
+        val assembler = assemblerFor(budget, capabilities)
+        val prefix = assembler.buildPrefix(prefixInputs(chatId, budget))
+        val room = budget.compactionTarget - (prefix.tokens - prefix.summaryTokens + budget.rollingSummaryCap) -
+            toolTokens(capabilities)
+        val keep = assembler.selectHistory(history, budget.maxVerbatimTurns, room.coerceAtLeast(0))
+        // Always keep the newest turn verbatim, even if it alone is over the target.
+        val foldCount = if (keep.messages.isEmpty()) history.indexOfLast { it.role == Role.USER } else keep.droppedCount
+        if (foldCount <= 0) return false
+        val fold = history.subList(0, foldCount)
+
+        live?.let(::close)
+        _contextUsage.value = null
+        val started = clock()
+        val summary = try {
+            summarizer.rolling(chats.chat(chatId)?.rollingSummary, fold, budget.rollingSummaryCap)
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Log.w(TAG, "Compaction failed for chat $chatId", e)
+            null
+        }
+        if (summary == null) {
+            compactionFailedAt[chatId] = clock()
+            return false
+        }
+        compactionFailedAt.remove(chatId)
+        val fitted = assembler.truncateToTokens(summary, budget.rollingSummaryCap)
+        chats.setRollingSummary(chatId, fitted, fold.last().id)
+        Log.i(TAG, "Compacted ${fold.size} messages of chat $chatId into ${estimator.estimate(fitted)} tokens in ${clock() - started} ms")
+        return true
+    }
+
+    /**
+     * Runs [block] with the model free of any chat conversation: a one-shot summary or
+     * extraction. The live conversation is closed first — two at once cost gigabytes and run
+     * several times slower — and the next turn rebuilds it. Call it from a scheduler slot.
+     */
+    override suspend fun <T> withModelFree(block: suspend () -> T): T = mutex.withLock {
+        live?.let(::close)
+        _contextUsage.value = null
+        block()
     }
 
     /**
@@ -295,9 +397,7 @@ class ConversationManager(
         val prefixInputs = prefixInputs(chatId, budget)
 
         val declared = tools.takeIf { capabilities.tools }.orEmpty()
-        // The runtime renders declarations in its own template format; the JSON is a fair,
-        // conservative stand-in for what they cost.
-        val toolTokens = if (declared.isEmpty()) 0 else estimator.estimate(declared.joinToString("\n"))
+        val toolTokens = toolTokens(capabilities)
 
         suspend fun open(): Pair<PromptPlan, ChatSession> {
             val plan = assemblerFor(budget, capabilities).plan(prefixInputs, history, next, toolTokens)
@@ -332,6 +432,7 @@ class ConversationManager(
             lastMessageId = lastId,
             // With nothing kept verbatim, the window starts at the next message.
             windowStartId = plan.history.messages.firstOrNull()?.id ?: (lastId + 1),
+            unsummarizedDropped = plan.history.droppedCount,
         ).also { live = it }
     }
 
@@ -381,6 +482,15 @@ class ConversationManager(
         if (live === current) live = null
     }
 
+    /**
+     * The runtime renders tool declarations in its own template format; the JSON is a fair,
+     * conservative stand-in for what they cost.
+     */
+    private fun toolTokens(capabilities: BackendCapabilities): Int {
+        val declared = tools.takeIf { capabilities.tools }.orEmpty()
+        return if (declared.isEmpty()) 0 else estimator.estimate(declared.joinToString("\n"))
+    }
+
     private fun assemblerFor(budget: MemoryBudget, capabilities: BackendCapabilities) =
         PromptAssembler(budget, estimator, zone(), capabilities.visionTokensPerImage)
 
@@ -391,5 +501,8 @@ class ConversationManager(
 
         /** How long a chat must be quiet after a reply before an idle rebuild may start. */
         const val IDLE_BEFORE_REBUILD_MS = 30_000L
+
+        /** After a failed compaction, how long before trying that chat again. */
+        const val COMPACTION_RETRY_MS = 10 * 60_000L
     }
 }

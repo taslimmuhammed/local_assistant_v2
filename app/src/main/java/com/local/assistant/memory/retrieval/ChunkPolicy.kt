@@ -21,6 +21,12 @@ object ChunkPolicy {
     const val FAILED_PREFIX = "!"
 
     /**
+     * Marks a chunk the user made the assistant forget. The row stays, emptied, so the backfill
+     * does not archive the message again; its text and vector are gone.
+     */
+    const val FORGOTTEN = "forgotten"
+
+    /**
      * The chunk text for an exchange, or null if there is nothing to archive: voice notes are
      * kept for playback but never remembered, and a picture with no words has nothing to search.
      */

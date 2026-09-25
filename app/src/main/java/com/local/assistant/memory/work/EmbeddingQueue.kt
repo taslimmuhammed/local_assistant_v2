@@ -13,6 +13,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.withLock
 import kotlin.coroutines.coroutineContext
 
 /**
@@ -53,7 +54,7 @@ class EmbeddingQueue(
             while (requested) {
                 requested = false
                 try {
-                    drain()
+                    drainLock.withLock { drain() }
                 } catch (e: Exception) {
                     if (e is kotlinx.coroutines.CancellationException) throw e
                     Log.w(TAG, "Embedding backlog stopped", e)
@@ -65,6 +66,14 @@ class EmbeddingQueue(
 
     @Volatile
     private var requested = false
+
+    /**
+     * Embeds the whole backlog now and returns when it is done (or the user took the model back).
+     * For the nightly job; the day-to-day path is [kick].
+     */
+    suspend fun drainNow() = drainLock.withLock { drain() }
+
+    private val drainLock = kotlinx.coroutines.sync.Mutex()
 
     private suspend fun drain() {
         val modelId = embedder.modelId ?: return

@@ -43,6 +43,12 @@ interface ChatDao {
     @Query("UPDATE messages SET text = :text, incomplete = :incomplete WHERE id = :messageId")
     suspend fun updateMessage(messageId: Long, text: String, incomplete: Boolean)
 
+    @Query("UPDATE chats SET rollingSummary = :summary, rollingUptoMessageId = :uptoMessageId WHERE id = :chatId")
+    suspend fun setRollingSummary(chatId: Long, summary: String?, uptoMessageId: Long?)
+
+    @Query("UPDATE chats SET rollingSummary = NULL")
+    suspend fun clearRollingSummaries()
+
     @Query("UPDATE chats SET title = :title WHERE id = :chatId")
     suspend fun renameChat(chatId: Long, title: String)
 

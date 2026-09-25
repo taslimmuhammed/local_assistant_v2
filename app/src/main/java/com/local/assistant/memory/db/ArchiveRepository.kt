@@ -38,11 +38,13 @@ class ArchiveRepository(
      * when the chunk is one to embed.
      */
     suspend fun recordExchange(userMessageId: Long): Boolean = transaction {
-        val user = messages.message(userMessageId)?.takeIf { it.role == Role.USER } ?: return@transaction false
+        val user = messages.message(userMessageId)?.takeIf { it.role == Role.USER && !it.offRecord } ?: return@transaction false
         val reply = chunks.nextTurn(user.chatId, user.id)?.takeIf { it.role == Role.ASSISTANT }
         val text = ChunkPolicy.text(user.text, user.attachmentKind, reply?.text) ?: return@transaction false
         val marker = if (ChunkPolicy.shouldEmbed(user.text)) null else ChunkPolicy.NOT_EMBEDDED
         val existing = chunks.forMessage(user.id)
+        // Forgotten on purpose: an edit to the exchange must not bring it back.
+        if (existing?.modelId == ChunkPolicy.FORGOTTEN) return@transaction false
         when {
             existing == null -> chunks.insert(
                 ChunkEntity(
@@ -107,7 +109,7 @@ class ArchiveRepository(
     suspend fun adoptModel(modelId: String) {
         if (state.get(KEY_MODEL) != modelId) {
             val reset = transaction {
-                chunks.resetOtherModels(modelId, listOf(ChunkPolicy.NOT_EMBEDDED)).also {
+                chunks.resetOtherModels(modelId, listOf(ChunkPolicy.NOT_EMBEDDED, ChunkPolicy.FORGOTTEN)).also {
                     state.put(AppStateEntity(KEY_MODEL, modelId))
                 }
             }
@@ -125,6 +127,54 @@ class ArchiveRepository(
 
     /** After chats were deleted: their chunks went by cascade, their index entries go now. */
     suspend fun onChatsDeleted() = index.prune()
+
+    /**
+     * Archived exchanges that mention [phrase] (as a phrase, in any case) and, when [alsoOneOf]
+     * is given, at least one of those words too — "12 March" alone is too common to delete every
+     * mention of, "12 March" with "mother" is the fact being forgotten.
+     */
+    suspend fun mentioning(phrase: String, alsoOneOf: List<String> = emptyList()): List<ChunkEntity> {
+        val words = com.local.assistant.memory.retrieval.QueryText.words(phrase).map { it.lowercase() }
+        if (words.isEmpty()) return emptyList()
+        val found = try {
+            chunks.matching("\"" + words.joinToString(" ") + "\"")
+        } catch (e: Exception) {
+            Log.w(TAG, "Could not search for '$phrase'", e)
+            emptyList()
+        }
+        if (alsoOneOf.isEmpty()) return found
+        // Word by word, and "mother's" counts as "mother".
+        fun wordsOf(text: String) = com.local.assistant.memory.retrieval.QueryText.words(text)
+            .map { it.lowercase().substringBefore('\'').substringBefore('’') }
+        return found.filter { chunk ->
+            val text = wordsOf(chunk.text).toSet()
+            alsoOneOf.any { other -> wordsOf(other).all { it in text } }
+        }
+    }
+
+    /** Empties [forget] (see [ChunkPolicy.FORGOTTEN]) and returns them as they were, for undo. */
+    suspend fun forget(forget: List<ChunkEntity>): List<ChunkEntity> = transaction {
+        if (forget.isEmpty()) return@transaction emptyList()
+        chunks.blank(forget.map { it.id }, ChunkPolicy.FORGOTTEN)
+        index.remove(forget.map { it.id })
+        forget
+    }
+
+    /** Puts back chunks [forget] emptied. */
+    suspend fun restore(restored: List<ChunkEntity>) = transaction {
+        for (chunk in restored) {
+            chunks.update(chunk)
+            val vector = chunk.embedding
+            if (vector != null && chunk.modelId != null && !chunk.modelId.startsWith(ChunkPolicy.FAILED_PREFIX)) index.put(chunk.id, vector)
+        }
+    }
+
+    /** "Forget everything": every chunk emptied, the vector index cleared. */
+    suspend fun forgetAll(): Int {
+        val count = transaction { chunks.blankAll(ChunkPolicy.FORGOTTEN) }
+        index.replaceAll(emptyList())
+        return count
+    }
 
     private suspend fun storedVectors(modelId: String): List<Pair<Long, ByteArray>> =
         chunks.vectors(modelId).map { it.id to it.embedding }

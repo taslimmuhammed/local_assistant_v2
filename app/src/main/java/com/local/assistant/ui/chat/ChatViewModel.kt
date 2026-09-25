@@ -111,6 +111,12 @@ class ChatViewModel(
     /** Real context consumption reported by the runtime, for the indicator above the composer. */
     val contextUsage: StateFlow<LlmService.ContextUsage?> = conversations.contextUsage
 
+    /** A send is waiting while older turns are summarised to make room. */
+    val tidying: StateFlow<Boolean> = conversations.tidying
+
+    val memoryPaused: StateFlow<Boolean> = settings.observeMemoryPaused()
+        .stateIn(viewModelScope, SharingStarted.Eagerly, settings.memoryPaused)
+
     /** How many older turns fell out of the context window for the active chat. */
     val droppedFromContext: StateFlow<Int> = conversations.droppedFromContext
 

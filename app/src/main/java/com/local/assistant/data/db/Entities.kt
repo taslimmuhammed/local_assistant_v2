@@ -75,4 +75,10 @@ data class MessageEntity(
      */
     @ColumnInfo(defaultValue = "0")
     val tokenEst: Int = 0,
+    /**
+     * Written while memory was paused. The message stays in its chat, but nothing is learned
+     * from it: it is not archived, recalled, summarised or mined for facts.
+     */
+    @ColumnInfo(defaultValue = "0")
+    val offRecord: Boolean = false,
 )

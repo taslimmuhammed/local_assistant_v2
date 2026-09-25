@@ -79,13 +79,20 @@ class LiteRtLmBackend(
                 enableResponseFormat = constrained,
             ),
         )
+        // Streamed rather than blocking, so a background job can be stopped mid-generation the
+        // moment the user needs the model: cancelling the collector cancels the native decode.
         return withContext(Dispatchers.IO) {
+            val out = StringBuilder()
             try {
                 llm.generationStarted(conversation)
-                conversation.sendMessage(
+                conversation.sendMessageAsync(
                     input,
                     responseFormat = if (constrained) ResponseFormat.json(jsonSchema!!) else null,
-                ).toString()
+                ).collect { chunk -> out.append(chunk.toString()) }
+                out.toString()
+            } catch (e: CancellationException) {
+                runCatching { conversation.cancelProcess() }
+                throw e
             } finally {
                 withContext(NonCancellable) {
                     llm.generationFinished(conversation)
