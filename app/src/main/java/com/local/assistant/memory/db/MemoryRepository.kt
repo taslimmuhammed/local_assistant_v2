@@ -155,6 +155,34 @@ class MemoryRepository(
         moved
     }
 
+    /**
+     * Files every fact under its attribute's current key — for rows written before a synonym was
+     * added ("occupation" is now `job`). Where both exist, the user's own edit wins, then the
+     * newer statement. Returns how many rows changed.
+     */
+    suspend fun normalizeAttributes(): Int = transaction {
+        var changed = 0
+        for (fact in facts.all()) {
+            val key = FactKeys.attribute(fact.attribute)
+            if (key.isEmpty() || key == fact.attribute) continue
+            val existing = facts.find(fact.subject, key)
+            val moved = fact.copy(attribute = key, category = com.local.assistant.memory.core.FactCategorizer.categorize(fact.subject, key))
+            if (existing == null) {
+                facts.update(moved)
+            } else {
+                val keepMoved = when {
+                    existing.origin == FactOrigin.USER_EDIT && fact.origin != FactOrigin.USER_EDIT -> false
+                    fact.origin == FactOrigin.USER_EDIT && existing.origin != FactOrigin.USER_EDIT -> true
+                    else -> fact.statedAt > existing.statedAt
+                }
+                facts.delete(fact.id)
+                if (keepMoved) facts.update(moved.copy(id = existing.id, core = existing.core || fact.core))
+            }
+            changed++
+        }
+        changed
+    }
+
     /** Applies every certain merge (see `AliasPlanner.merges`). Returns how many facts moved. */
     suspend fun mergeCertainAliases(): Int {
         val aliases = facts.aliases().associate { it.alias to it.subject }

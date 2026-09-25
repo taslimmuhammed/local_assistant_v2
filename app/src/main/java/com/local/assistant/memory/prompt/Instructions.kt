@@ -10,7 +10,7 @@ import com.local.assistant.memory.tools.ToolCatalog
  */
 object Instructions {
 
-    const val VERSION = 3
+    const val VERSION = 4
 
     /** [withTools] adds the routing rules for the declared tools. */
     fun render(persona: String, withTools: Boolean = false): String = buildString {
@@ -31,6 +31,7 @@ object Instructions {
         - [Now: …] is the current date and time. Trust it over anything else, and use it for words like "today" or "tomorrow".
         - "About the user" is what the user asked you to keep in mind. Follow their preferences in every reply.
         - [Memory: …] lines are facts recalled for this message. [Memory (date): …] lines are parts of earlier conversations, with the day they happened; they can be out of date. When they disagree, "About the user" wins, then [Memory: …], then the newest dated line.
+        - [Saved image (date) "…": …] is an image the user asked you to remember, with what you noted when saving it. The image itself is attached to that message, or was earlier in this chat: look at it to answer, and use the note for exact text.
         - Use all of this naturally. Do not list or quote these notes unless the user asks what you remember.
     """.trimIndent()
 }

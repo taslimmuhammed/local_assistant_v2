@@ -47,7 +47,7 @@ object FactCategorizer {
     private val PROFILE = setOf(
         "name", "full_name", "nickname", "age", "birthday", "date_of_birth", "dob", "gender",
         "pronouns", "city", "hometown", "country", "nationality", "language", "native_language",
-        "languages", "religion", "marital_status", "anniversary",
+        "languages", "religion", "marital_status", "anniversary", "interests",
     )
 
     /** The user's people: roles someone plays in their life. */

@@ -13,6 +13,7 @@ import com.local.assistant.memory.extract.ExtractionPrompt
 import com.local.assistant.memory.prompt.TurnEvent
 import com.local.assistant.memory.summary.Summarizer
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
@@ -174,5 +175,94 @@ class MemoryEvalTest {
         } finally {
             chats.deleteChat(chatId)
         }
+    }
+
+    /** A card with more on it than a one-line description would keep. */
+    private fun wifiCard(file: File) {
+        val bitmap = android.graphics.Bitmap.createBitmap(1024, 640, android.graphics.Bitmap.Config.ARGB_8888)
+        val canvas = android.graphics.Canvas(bitmap)
+        canvas.drawColor(android.graphics.Color.WHITE)
+        val paint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply { color = android.graphics.Color.BLACK; textSize = 52f }
+        listOf("HOME WIFI", "Network: Home_5G", "Password: kochi2026", "Router: TP-Link Archer C6", "Admin PIN: 4417", "Support: 1800-209-4455")
+            .forEachIndexed { i, line -> canvas.drawText(line, 60f, 100f + i * 90f, paint) }
+        file.outputStream().use { bitmap.compress(android.graphics.Bitmap.CompressFormat.JPEG, 92, it) }
+    }
+
+    /** Runs one user turn the way the chat screen does and returns the reply and any chips. */
+    private suspend fun turn(chatId: Long, text: String, image: String? = null): Pair<String, List<com.local.assistant.memory.tools.MemoryChip>> {
+        val chats = container.chatRepository
+        val userId = chats.addMessage(
+            chatId, Role.USER, text,
+            attachmentPath = image, attachmentKind = image?.let { com.local.assistant.data.db.AttachmentKind.IMAGE },
+        )
+        val reply = StringBuilder()
+        val chips = mutableListOf<com.local.assistant.memory.tools.MemoryChip>()
+        val attachment = image?.let { com.local.assistant.llm.PromptAttachment(it, com.local.assistant.data.db.AttachmentKind.IMAGE) }
+        container.turnRunner.run(chatId, userId, text, attachment).collect { event ->
+            when (event) {
+                is TurnEvent.Text -> reply.append(event.delta)
+                is TurnEvent.Memory -> chips += event.chip
+                else -> Unit
+            }
+        }
+        val replyId = chats.addMessage(chatId, Role.ASSISTANT, reply.toString())
+        container.turnRunner.finish(chatId, userId, replyId, completed = true)
+        return reply.toString() to chips
+    }
+
+    private fun ownLog(tag: String): List<String> =
+        Runtime.getRuntime().exec(arrayOf("logcat", "-d", "-s", "$tag:I")).inputStream.bufferedReader().readLines()
+
+    @Test
+    fun aSavedImageIsLookedAtAgainWhenAskedAbout() = runBlocking {
+        enabled()
+        check(container.llmBackend.ensureReady())
+        val chats = container.chatRepository
+        val context = instrumentation.targetContext
+        val image = File(File(context.filesDir, "attachments").apply { mkdirs() }, "eval-wifi-card.jpg").also(::wifiCard)
+        val first = chats.createChat("Saved image eval")
+        var second = 0L
+        var noteId: Long? = null
+        try {
+            var started = System.currentTimeMillis()
+            val (saidOnSave, chips) = turn(first, "remember this", image.path)
+            report("save turn: ${System.currentTimeMillis() - started} ms, chips ${chips.map { "${it.kind}:${it.label}:${it.detail}" }}")
+            report("reply: ${saidOnSave.take(300)}")
+            val note = container.memoryControls.observeSavedImages().first().firstOrNull { it.imagePath != null && it.createdAt >= started }
+            report("saved: ${note?.let { "“${it.title}”: ${it.details}" } ?: "nothing"}")
+            assertNotNull("remember_image was called", note)
+            noteId = note!!.id
+
+            started = System.currentTimeMillis()
+            container.embeddingQueue.drainNow()
+            report("embedded in ${System.currentTimeMillis() - started} ms")
+
+            // A new chat: the image is not in its history, so only recall can bring it back.
+            second = chats.createChat("Saved image eval, later")
+            val questions = listOf(
+                "what's the admin PIN on the wifi card I saved?",
+                "what's the support number on my router card?",
+                // Not in any note: only looking at the image again answers it.
+                "what colour is the background of that wifi card?",
+            )
+            for (question in questions) {
+                Runtime.getRuntime().exec(arrayOf("logcat", "-c")).waitFor()
+                started = System.currentTimeMillis()
+                val (answer, _) = turn(second, question)
+                val attached = ownLog("ConversationManager").lastOrNull { "aved image" in it }
+                report("Q: $question → ${System.currentTimeMillis() - started} ms, ${attached?.substringAfter(": ") ?: "no saved image recalled"}")
+                report("A: ${answer.take(300)}")
+            }
+            val answers = chats.messagesFor(second).filter { it.role == Role.ASSISTANT }.map { it.text }
+            assertTrue("the PIN is read back", "4417" in answers[0])
+            assertTrue("the support number is read back", answers[1].filter { it.isDigit() }.contains("18002094455"))
+            assertTrue("the image itself is looked at", answers[2].contains("white", ignoreCase = true))
+        } finally {
+            noteId?.let { container.savedImages.delete(it) }
+            chats.deleteChat(first)
+            if (second != 0L) chats.deleteChat(second)
+            image.delete()
+        }
+        Unit
     }
 }

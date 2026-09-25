@@ -20,6 +20,9 @@ import com.local.assistant.memory.db.FactEntity
 import com.local.assistant.memory.db.FactFts
 import com.local.assistant.memory.db.ForgottenEntity
 import com.local.assistant.memory.db.MaintenanceDao
+import com.local.assistant.memory.db.NoteDao
+import com.local.assistant.memory.db.NoteEntity
+import com.local.assistant.memory.db.NoteFts
 import com.local.assistant.memory.db.SessionDao
 import com.local.assistant.memory.db.SessionEntity
 import com.local.assistant.memory.db.SubjectAliasEntity
@@ -45,8 +48,10 @@ import kotlinx.coroutines.Dispatchers
         ChunkEntity::class,
         ChunkFts::class,
         AppStateEntity::class,
+        NoteEntity::class,
+        NoteFts::class,
     ],
-    version = 5,
+    version = 6,
     exportSchema = true,
 )
 @TypeConverters(Converters::class)
@@ -65,6 +70,8 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun chunkDao(): ChunkDao
 
     abstract fun maintenanceDao(): MaintenanceDao
+
+    abstract fun noteDao(): NoteDao
 
     /** The vector index is a derived table outside Room's schema, created where it can be. */
     object VectorTableCallback : Callback() {
@@ -98,7 +105,26 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
-        val MIGRATIONS: Array<Migration> = arrayOf(MIGRATION_1_2, MIGRATION_2_3, Migration3To4, MIGRATION_4_5)
+        /**
+         * Notes: images the user asked to have remembered, with what was seen in them. The
+         * statements are copied from `schemas/…/6.json`, which Room validates the result against,
+         * keyword index and its triggers included.
+         */
+        private val MIGRATION_5_6 = object : Migration(5, 6) {
+            override fun migrate(connection: SQLiteConnection) {
+                listOf(
+                    "CREATE TABLE IF NOT EXISTS `notes` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `title` TEXT NOT NULL, `details` TEXT NOT NULL, `imagePath` TEXT, `sourceMessageId` INTEGER, `chatId` INTEGER, `embedding` BLOB, `modelId` TEXT, `createdAt` INTEGER NOT NULL, `updatedAt` INTEGER NOT NULL, FOREIGN KEY(`sourceMessageId`) REFERENCES `messages`(`id`) ON UPDATE NO ACTION ON DELETE SET NULL )",
+                    "CREATE INDEX IF NOT EXISTS `index_notes_sourceMessageId` ON `notes` (`sourceMessageId`)",
+                    "CREATE VIRTUAL TABLE IF NOT EXISTS `notes_fts` USING FTS4(`title` TEXT NOT NULL, `details` TEXT NOT NULL, tokenize=unicode61, content=`notes`)",
+                    "CREATE TRIGGER IF NOT EXISTS room_fts_content_sync_notes_fts_BEFORE_UPDATE BEFORE UPDATE ON `notes` BEGIN DELETE FROM `notes_fts` WHERE `docid`=OLD.`rowid`; END",
+                    "CREATE TRIGGER IF NOT EXISTS room_fts_content_sync_notes_fts_BEFORE_DELETE BEFORE DELETE ON `notes` BEGIN DELETE FROM `notes_fts` WHERE `docid`=OLD.`rowid`; END",
+                    "CREATE TRIGGER IF NOT EXISTS room_fts_content_sync_notes_fts_AFTER_UPDATE AFTER UPDATE ON `notes` BEGIN INSERT INTO `notes_fts`(`docid`, `title`, `details`) VALUES (NEW.`rowid`, NEW.`title`, NEW.`details`); END",
+                    "CREATE TRIGGER IF NOT EXISTS room_fts_content_sync_notes_fts_AFTER_INSERT AFTER INSERT ON `notes` BEGIN INSERT INTO `notes_fts`(`docid`, `title`, `details`) VALUES (NEW.`rowid`, NEW.`title`, NEW.`details`); END",
+                ).forEach(connection::execSQL)
+            }
+        }
+
+        val MIGRATIONS: Array<Migration> = arrayOf(MIGRATION_1_2, MIGRATION_2_3, Migration3To4, MIGRATION_4_5, MIGRATION_5_6)
 
         /**
          * [withVectors]: sqlite-vec loaded on this device (see [SqliteVec.probe]). Its table is

@@ -236,3 +236,50 @@ data class AppStateEntity(
     @PrimaryKey val key: String,
     val value: String,
 )
+
+/**
+ * An image the user asked to be remembered, kept with what the model saw in it at the time.
+ *
+ * The details are what recall searches; the image itself is what answers the questions nobody
+ * thought to write down. When a later message is about it, the image is attached to that turn
+ * and the model looks at it again ("what was the phone number on that card?").
+ */
+@Entity(
+    tableName = "notes",
+    foreignKeys = [
+        ForeignKey(
+            entity = MessageEntity::class,
+            parentColumns = ["id"],
+            childColumns = ["sourceMessageId"],
+            onDelete = ForeignKey.SET_NULL,
+        ),
+    ],
+    indices = [Index("sourceMessageId")],
+)
+class NoteEntity(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    /** "Dr. Mehta's visiting card". */
+    val title: String,
+    /** What the model saw in it when saving, in its words. */
+    val details: String,
+    /** The app's own copy of the image, kept even if the chat it came from is deleted. */
+    val imagePath: String?,
+    /** The message the image came with; null once that chat is deleted. */
+    val sourceMessageId: Long?,
+    /**
+     * The chat it was sent in, so recall can tell when the image is already in front of the
+     * model. Deliberately not a foreign key: the note outlives the chat.
+     */
+    val chatId: Long?,
+    /** int8, like the archive's (see `Int8Vectors`); null until embedded. */
+    @ColumnInfo(typeAffinity = ColumnInfo.BLOB)
+    val embedding: ByteArray? = null,
+    val modelId: String? = null,
+    val createdAt: Long,
+    val updatedAt: Long,
+)
+
+/** Keyword index over notes, kept in sync by Room's triggers. */
+@Fts4(contentEntity = NoteEntity::class, tokenizer = FtsOptions.TOKENIZER_UNICODE61)
+@Entity(tableName = "notes_fts")
+data class NoteFts(val title: String, val details: String)

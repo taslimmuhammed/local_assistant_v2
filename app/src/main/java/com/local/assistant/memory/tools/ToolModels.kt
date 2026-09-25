@@ -27,7 +27,7 @@ data class MemoryChip(
     /** Whether the time can be changed from the chip. */
     val editable: Boolean = false,
 ) {
-    enum class Kind { FACT, TASK, EVENT, FORGET, ALARM }
+    enum class Kind { FACT, TASK, EVENT, FORGET, ALARM, IMAGE }
 }
 
 /**
@@ -42,6 +42,7 @@ data class UndoToken(
     val createdEventId: Long? = null,
     val previousEvent: EventEntity? = null,
     val forgotten: ForgetResult? = null,
+    val createdNoteId: Long? = null,
 )
 
 /**

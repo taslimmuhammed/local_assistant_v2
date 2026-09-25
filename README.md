@@ -201,6 +201,37 @@ the user's own turns and stops the moment they start typing.
   merges any keys that normalise together, and anything that only looks alike ("priya" and
   "priya_sharma") becomes a question on the memory screen rather than a merge.
 
+### Your profile
+
+The first time the app opens it asks, before anything else, for a few optional details: name,
+age, work, city, languages and interests (`memory/core/UserProfile.kt`). They are ordinary facts
+about the user, the user's own edits and pinned to "Always in mind", so they open every
+conversation's system prompt ("About the user (always keep in mind): …") and stay in step with
+chat: "I'm 31 now" updates the same row, and "occupation" or "profession" said in a chat files under
+Work. Editable any time from "Your profile" in the drawer; clearing a field forgets it.
+
+### Saved images
+
+"Remember this" with a photo — a visiting card, a bill, a Wi-Fi card, a whiteboard — goes to the
+`remember_image` tool. It keeps what the model saw in it (a title and details, in its own words) and
+a copy of the image in `files/saved_images/`, apart from the chat's attachments, so it outlives the
+chat (`memory/notes/SavedImages.kt`, table `notes` with an FTS4 index). The chip's Undo deletes both.
+
+Later questions find it the way recall finds past exchanges: the details' embedding at τ, or one of
+the message's rare words. The turn then carries a line — `[Saved image (21 Sep 2026) “Wifi card”:
+… It is attached to this message.]` — and the image itself, so the model looks again and can answer
+what the details never said. At most one per turn, only when the user attached nothing themselves,
+and never one already in front of the model: an image sent in this conversation's window is left
+out, and one recalled earlier in the same live conversation is pointed to ("attached earlier in
+this chat; look at it again") rather than attached twice. Measured on the phone, a second copy of
+the same image garbled long numbers (`1800-209-4455` read back as `18000-29-45555`); one copy read
+them right every time. A rebuilt conversation starts over and attaches it again. `search_memory`
+lists saved images too.
+
+On the real model (`MemoryEvalTest.aSavedImageIsLookedAtAgainWhenAskedAbout`): a card is saved in
+one chat, then a new chat asks for its PIN, its support number and its background colour — 9/9
+right over three runs, the colour coming from the image alone.
+
 ### What I know about you
 
 From the drawer. Facts grouped as the core memory ("Always in mind", with its token budget), then
@@ -208,18 +239,20 @@ by category, each with where it came from (tap for the source message). Tap to e
 belongs to the user, and extraction never overwrites it), pin or unpin, swipe to delete with an
 undo. Deleting also empties the archived exchanges that state the fact — its value, alongside the
 person's name when it is about someone else — and leaves a tombstone so it is not learned again.
-A second tab lists reminders and events. Possible duplicates are asked about, never merged
-silently.
+A second tab lists reminders and events, a third the saved images (tap for the full image and
+details, swipe to delete with an undo; the file itself goes in the nightly tidy). Possible
+duplicates are asked about, never merged silently.
 
 Controls: **Pause memory** (chats go on; nothing new is archived, recalled from, summarised,
 extracted or saved by the model — reminders still work), **Keep chat history** (forever, 1 year,
-90 or 30 days; applied at once and nightly), **Export as JSON**, and **Forget everything** (asks
-twice; chats stay, but everything learned from them goes and they are never re-read).
+90 or 30 days; applied at once and nightly), **Export as JSON** (saved images as their titles and details, not the files), and **Forget
+everything** (asks twice; chats stay, but everything learned from them goes, saved images included,
+and they are never re-read).
 
 ### Tools and reminders
 
-The model can call eight tools — `add_task`, `update_task`, `add_event`, `save_fact`,
-`get_upcoming`, `search_memory`, `forget`, `set_alarm` — declared in `memory/tools/ToolCatalog.kt` with short
+The model can call nine tools — `add_task`, `update_task`, `add_event`, `save_fact`,
+`get_upcoming`, `search_memory`, `forget`, `set_alarm`, `remember_image` — declared in `memory/tools/ToolCatalog.kt` with short
 routing-style descriptions. Tool calling is manual (`automaticToolCalling = false`): the runtime
 reports a call, and `ToolLoop` hands it to `ToolExecutor`, which validates the arguments, ignores
 a repeat of the same call within two minutes, applies it and its TOOL-row record in one
@@ -250,10 +283,12 @@ alarm is either one-off within the next 24 hours or repeating on days of the wee
 is refused and the model offers a reminder. For alarms a bare hour means whichever comes first —
 "5:30" set at night is 5:30 AM — rather than the daytime rule reminders use.
 
-Routing is measured, not assumed: `RoutingEvalTest` runs 30 requests — reminders, reschedules,
+Routing is measured, not assumed: `RoutingEvalTest` runs 34 requests — reminders, reschedules,
 facts, events, Hinglish, and negatives that must not save anything — through the real model. On
-the target phone it scores 102/102 at temperature 1.0 (34 requests, three samples each), with the
-tool declarations costing 698 tokens.
+the target phone it has scored 102/102 at temperature 1.0 (three samples each); on 25 Sep 2026 it
+scored 33/34 at both 1.0 and 0.7, with and without `remember_image` alike — the miss being the
+hypothetical "if I had a dentist, what should I ask them?", saved as a fact. The tool declarations
+cost 809 tokens (698 before `remember_image`).
 
 Note that the model file reports `supportsFunctionCalling = false`; native tool calls work
 regardless (measured in `EngineProbeTest.toolCalling`), so the flag is not trusted.
@@ -262,7 +297,8 @@ regardless (measured in `EngineProbeTest.toolCalling`), so the flag is not trust
 
 One database, `assistant.db`, on Room's driver API with the bundled SQLite, which loads
 sqlite-vec for the archive's vector index (`vec_chunks`, created on open where the extension
-loads and never referenced by a trigger). Version 5 adds `messages.offRecord` for Pause memory. `chats` and `messages`, with `messages.chatId`
+loads and never referenced by a trigger). Version 5 adds `messages.offRecord` for Pause memory; version 6 adds `notes` (saved images) and
+its FTS4 index. `chats` and `messages`, with `messages.chatId`
 cascading on delete; a message carries an `incomplete` flag so a stopped reply is stored and shown
 as what it is. Memory lives alongside: `sessions` (one foreground period within a chat), `facts`
 with an FTS4 keyword index, `forgotten` tombstones, `tasks`, `events`, and `chunks` (with their

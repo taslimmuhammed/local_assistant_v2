@@ -18,9 +18,10 @@ object ToolCatalog {
     const val SEARCH_MEMORY = "search_memory"
     const val FORGET = "forget"
     const val SET_ALARM = "set_alarm"
+    const val REMEMBER_IMAGE = "remember_image"
 
     /** Tools that change something, as opposed to reading it. */
-    val WRITES = setOf(ADD_TASK, UPDATE_TASK, ADD_EVENT, SAVE_FACT, FORGET, SET_ALARM)
+    val WRITES = setOf(ADD_TASK, UPDATE_TASK, ADD_EVENT, SAVE_FACT, FORGET, SET_ALARM, REMEMBER_IMAGE)
 
     val declarations: List<String> = listOf(
         function(
@@ -79,6 +80,13 @@ object ToolCatalog {
             "repeat" to "string",
         ),
         function(
+            REMEMBER_IMAGE,
+            "Use when the user asks you to remember or save an image they sent: a card, bill, document, screenshot or photo. The image itself is kept and shown to you again when they ask about it later. title: a few words naming it; details: everything you can read and see in it.",
+            required = listOf("title", "details"),
+            "title" to "string",
+            "details" to "string",
+        ),
+        function(
             FORGET,
             "Use when the user asks you to forget or delete something they told you.",
             required = listOf("subject"),
@@ -92,6 +100,7 @@ object ToolCatalog {
         Tools — call them rather than only saying you will:
         - Reminders and to-dos → add_task, with the user's own time words in when.
         - Alarms ("set an alarm", "wake me up") → set_alarm, which rings in the phone's clock app.
+        - "Remember this" about an image → remember_image, with everything you can read in details (not save_fact).
         - Changing, finishing or moving an existing reminder → update_task.
         - Appointments, meetings, birthdays, trips → add_event.
         - Lasting facts about the user or their people and places → save_fact. How they want you to reply from now on ("keep answers short", "reply in Hindi") → save_fact with core=true, then follow it. Never for questions, hypotheticals, other people's opinions, passing moods or jokes.

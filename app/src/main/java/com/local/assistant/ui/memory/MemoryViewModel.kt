@@ -18,6 +18,7 @@ import com.local.assistant.memory.db.EventEntity
 import com.local.assistant.memory.db.FactCategory
 import com.local.assistant.memory.db.FactEntity
 import com.local.assistant.memory.db.FactOrigin
+import com.local.assistant.memory.db.NoteEntity
 import com.local.assistant.memory.db.TaskEntity
 import com.local.assistant.memory.prompt.MemoryBudget
 import com.local.assistant.memory.prompt.TokenEstimator
@@ -103,6 +104,8 @@ class MemoryViewModel(
 
     val events: StateFlow<List<EventEntity>> = controls.observeEvents().stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
 
+    val savedImages: StateFlow<List<NoteEntity>> = controls.observeSavedImages().stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
+
     private val _duplicates = MutableStateFlow<List<DuplicateSuggestion>>(emptyList())
     val duplicates: StateFlow<List<DuplicateSuggestion>> = _duplicates.asStateFlow()
 
@@ -165,6 +168,11 @@ class MemoryViewModel(
     fun deleteEvent(event: EventEntity) = launch {
         controls.deleteEvent(event)
         _notices.emit(Notice("Deleted “${event.title}”") { controls.restoreEvent(event) })
+    }
+
+    fun deleteSavedImage(note: NoteEntity) = launch {
+        controls.deleteSavedImage(note)
+        _notices.emit(Notice("Deleted “${note.title}”") { controls.restoreSavedImage(note) })
     }
 
     fun setPaused(paused: Boolean) {

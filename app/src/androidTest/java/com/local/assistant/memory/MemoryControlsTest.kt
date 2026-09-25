@@ -200,6 +200,37 @@ class MemoryControlsTest {
     }
 
     @Test
+    fun theProfileIsPinnedAndItsOwnAndClearingForgets() = runBlocking {
+        // Said in a chat under another word, before the profile existed.
+        database.factDao().insert(
+            com.local.assistant.memory.db.FactEntity(
+                subject = "user", attribute = "occupation", value = "Teacher",
+                category = com.local.assistant.memory.db.FactCategory.WORK, core = false, origin = FactOrigin.CHAT,
+                sourceMessageId = null, statedAt = 1, createdAt = 1, updatedAt = 1, lastConfirmedAt = 1,
+            ),
+        )
+        memory.saveFact("user", "name", "Taslim", FactOrigin.CHAT)
+        assertEquals(mapOf("name" to "Taslim", "job" to "Teacher"), controls.profile())
+
+        assertTrue(controls.saveProfile(mapOf("name" to "Taslim", "age" to "29", "job" to "Software engineer", "city" to " ")))
+        val facts = database.factDao()
+        for ((attribute, value) in listOf("name" to "Taslim", "age" to "29", "job" to "Software engineer")) {
+            val fact = facts.find("user", attribute)!!
+            assertEquals(value, fact.value)
+            assertTrue("$attribute is always in mind", fact.core)
+            assertEquals(FactOrigin.USER_EDIT, fact.origin)
+        }
+        assertFalse("nothing changed, nothing written", controls.saveProfile(controls.profile()))
+
+        // Clearing a field forgets it: gone, and a tombstone so old chats cannot bring it back.
+        assertTrue(controls.saveProfile(mapOf("name" to "Taslim", "age" to "29", "job" to "")))
+        assertNull(facts.find("user", "job"))
+        assertNotNull(facts.tombstone("user", "job"))
+        memory.saveFact("user", "occupation", "Teacher", FactOrigin.EXTRACTED, statedAt = 2)
+        assertNull(facts.find("user", "job"))
+    }
+
+    @Test
     fun pausedMessagesAreKeptButNeverArchived() = runBlocking {
         paused = true
         val secret = exchange("my salary is 1.2 lakh a month")

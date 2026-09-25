@@ -45,6 +45,8 @@ data class MemoryBudget(
     val maxSnippets: Int,
     val snippetTokens: Int,
     val snippetsCap: Int,
+    /** The line describing a recalled saved image; the image itself is charged separately. */
+    val savedImageTokens: Int,
 
     // Totals.
     val promptTarget: Int,
@@ -90,6 +92,7 @@ data class MemoryBudget(
             maxSnippets = 4,
             snippetTokens = 110,
             snippetsCap = 450,
+            savedImageTokens = 300,
             promptTarget = 10_000,
             promptCeiling = 12_000,
             compactionTrigger = 9_000,
@@ -123,6 +126,7 @@ data class MemoryBudget(
             maxEnvelopeFacts = 3,
             maxSnippets = 2,
             snippetsCap = 225,
+            savedImageTokens = 150,
             promptTarget = 4_400,
             promptCeiling = 5_200,
             compactionTrigger = 4_000,
@@ -159,6 +163,7 @@ data class MemoryBudget(
             historyCap = s(historyCap),
             envelopeCap = s(envelopeCap),
             snippetsCap = s(snippetsCap),
+            savedImageTokens = s(savedImageTokens),
             promptTarget = s(promptTarget),
             promptCeiling = s(promptCeiling),
             compactionTrigger = s(compactionTrigger),

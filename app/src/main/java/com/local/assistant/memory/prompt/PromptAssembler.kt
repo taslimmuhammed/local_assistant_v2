@@ -123,8 +123,10 @@ class PromptAssembler(
             snippets += line
             keptSnippets += snippet
         }
+        val imageLine = inputs.savedImage?.let(::renderSavedImage)
 
-        // Hold the app-added part to its cap: snippets go before facts.
+        // Hold the app-added part to its cap: snippets go before facts. The image line has its
+        // own allowance ([MemoryBudget.savedImageTokens]) on top: the user asked for it to be kept.
         var keptFacts = facts
         fun header() = listOfNotNull(nowLine, renderFacts(keptFacts)) + snippets
         while (estimator.estimate(header().joinToString("\n")) > budget.envelopeCap) {
@@ -138,14 +140,25 @@ class PromptAssembler(
             }
         }
 
-        val text = (header() + inputs.userText).joinToString("\n")
+        val text = (header() + listOfNotNull(imageLine) + inputs.userText).joinToString("\n")
+        val attachments = inputs.attachmentTokens + if (imageLine != null && inputs.savedImage.attached) visionTokensPerImage else 0
         return Envelope(
             text = text,
-            tokens = estimator.estimate(text) + ContextWindow.TURN_OVERHEAD_TOKENS,
+            tokens = estimator.estimate(text) + attachments + ContextWindow.TURN_OVERHEAD_TOKENS,
             facts = keptFacts,
             snippets = keptSnippets,
             showedNow = nowLine != null,
+            savedImage = inputs.savedImage.takeIf { imageLine != null },
         )
+    }
+
+    /** "[Saved image (21 Sep 2026) “Dr. Mehta's card”: … It is attached to this message.]" */
+    private fun renderSavedImage(image: SavedImageLine): String {
+        val date = SNIPPET_DATE.format(Instant.ofEpochMilli(image.at).atZone(zone))
+        val head = "[Saved image ($date) “${FactLabels.inline(image.title)}”: "
+        val tail = if (image.attached) " It is attached to this message.]" else " It is attached earlier in this chat; look at it again.]"
+        val room = budget.savedImageTokens - estimator.estimate(head + tail)
+        return head + truncateToTokens(FactLabels.inline(image.details), room) + tail
     }
 
     private fun renderFacts(facts: List<FactEntity>): String? {
@@ -220,12 +233,13 @@ class PromptAssembler(
         val shed = mutableListOf<ShedStep>()
         var snippets = envelopeInputs.snippets
         var facts = envelopeInputs.facts
+        var image = envelopeInputs.savedImage
         var summaryCap = summaryCapFor(prefixInputs.summary)
         var maxTurns = budget.maxVerbatimTurns
         var coreCap = budget.coreCap
 
         while (true) {
-            val envelope = buildEnvelope(envelopeInputs.copy(facts = facts, snippets = snippets))
+            val envelope = buildEnvelope(envelopeInputs.copy(facts = facts, snippets = snippets, savedImage = image))
             // Shedding inside buildEnvelope already applied; carry its result forward.
             snippets = envelope.snippets
             facts = envelope.facts
@@ -245,6 +259,10 @@ class PromptAssembler(
                 facts.isNotEmpty() -> {
                     facts = facts.dropLast(1)
                     shed.addOnce(ShedStep.FACTS)
+                }
+                image != null -> {
+                    image = null
+                    shed.addOnce(ShedStep.IMAGE)
                 }
                 prefix.summaryTokens > 0 -> {
                     // Halve what is actually there; a summary too short to halve usefully goes.
@@ -273,14 +291,16 @@ class PromptAssembler(
     fun fitEnvelope(liveTokens: Int, inputs: EnvelopeInputs): Envelope? {
         var snippets = inputs.snippets
         var facts = inputs.facts
+        var image = inputs.savedImage
         while (true) {
-            val envelope = buildEnvelope(inputs.copy(facts = facts, snippets = snippets))
+            val envelope = buildEnvelope(inputs.copy(facts = facts, snippets = snippets, savedImage = image))
             if (liveTokens + envelope.tokens <= budget.promptCeiling) return envelope
             snippets = envelope.snippets
             facts = envelope.facts
             when {
                 snippets.isNotEmpty() -> snippets = snippets.dropLast(1)
                 facts.isNotEmpty() -> facts = facts.dropLast(1)
+                image != null -> image = null
                 else -> return null
             }
         }

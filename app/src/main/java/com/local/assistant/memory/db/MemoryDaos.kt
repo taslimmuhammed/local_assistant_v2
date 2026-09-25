@@ -398,3 +398,42 @@ interface MaintenanceDao {
     @Query("DELETE FROM chats WHERE updatedAt < :cutoff AND NOT EXISTS (SELECT 1 FROM messages WHERE messages.chatId = chats.id)")
     suspend fun deleteEmptyChatsBefore(cutoff: Long): Int
 }
+
+@Dao
+interface NoteDao {
+
+    @Insert
+    suspend fun insert(note: NoteEntity): Long
+
+    @Query("SELECT * FROM notes WHERE id = :id")
+    suspend fun byId(id: Long): NoteEntity?
+
+    @Query("UPDATE notes SET embedding = :embedding, modelId = :modelId WHERE id = :id")
+    suspend fun setEmbedding(id: Long, embedding: ByteArray?, modelId: String?)
+
+    /** Notes not yet embedded by [modelId]. */
+    @Query("SELECT * FROM notes WHERE modelId IS NULL OR (modelId != :modelId AND modelId != '!' || :modelId) ORDER BY id")
+    suspend fun unembedded(modelId: String): List<NoteEntity>
+
+    @Query("SELECT * FROM notes WHERE modelId = :modelId AND embedding IS NOT NULL")
+    suspend fun embedded(modelId: String): List<NoteEntity>
+
+    @Query("SELECT * FROM notes ORDER BY createdAt DESC")
+    suspend fun all(): List<NoteEntity>
+
+    @Query("SELECT * FROM notes ORDER BY createdAt DESC")
+    fun observe(): Flow<List<NoteEntity>>
+
+    /** Notes matching an FTS4 query. */
+    @Query("SELECT notes.* FROM notes JOIN notes_fts ON notes.id = notes_fts.rowid WHERE notes_fts MATCH :match")
+    suspend fun matching(match: String): List<NoteEntity>
+
+    @Query("SELECT imagePath FROM notes WHERE imagePath IS NOT NULL")
+    suspend fun imagePaths(): List<String>
+
+    @Query("DELETE FROM notes WHERE id = :id")
+    suspend fun delete(id: Long)
+
+    @Query("DELETE FROM notes")
+    suspend fun deleteAll()
+}

@@ -16,8 +16,10 @@ import com.local.assistant.memory.db.FactEntity
 import com.local.assistant.memory.db.FactOrigin
 import com.local.assistant.memory.db.ForgetResult
 import com.local.assistant.memory.db.MemoryRepository
+import com.local.assistant.memory.db.NoteEntity
 import com.local.assistant.memory.db.TaskEntity
 import com.local.assistant.memory.db.TaskStatus
+import com.local.assistant.memory.notes.SavedImages
 import com.local.assistant.memory.tools.ReminderScheduler
 import com.local.assistant.memory.tools.TaskOps
 import kotlinx.coroutines.flow.Flow
@@ -37,6 +39,8 @@ class MemoryControls(
     private val reminders: ReminderScheduler,
     /** Something the prompt prefix shows changed; the live conversation should catch up. */
     private val onChanged: suspend () -> Unit,
+    /** Images the user asked to have remembered; none in tests that do not need them. */
+    private val images: SavedImages? = null,
     private val clock: () -> Long = System::currentTimeMillis,
     private val zone: () -> ZoneId = ZoneId::systemDefault,
 ) {
@@ -52,6 +56,8 @@ class MemoryControls(
     /** Events from the start of today on. */
     fun observeEvents(): Flow<List<EventEntity>> =
         agenda.observeEvents(Instant.ofEpochMilli(clock()).atZone(zone()).toLocalDate().atStartOfDay(zone()).toInstant().toEpochMilli())
+
+    fun observeSavedImages(): Flow<List<NoteEntity>> = database.noteDao().observe()
 
     // ---- Facts ----
 
@@ -105,6 +111,52 @@ class MemoryControls(
 
     private suspend fun aliasesOf(subject: String): List<String> =
         facts.aliases().filter { it.subject == subject }.map { it.alias.replace('_', ' ') }
+
+    // ---- Saved images ----
+
+    /** The row goes now; the image file waits for the nightly tidy, so undo can bring it back. */
+    suspend fun deleteSavedImage(note: NoteEntity) {
+        images?.remove(note)
+    }
+
+    suspend fun restoreSavedImage(note: NoteEntity) {
+        images?.restore(note)
+    }
+
+    // ---- Profile ----
+
+    /** The profile fields as stored: attribute → value, for the fields that have one. */
+    suspend fun profile(): Map<String, String> {
+        memory.normalizeAttributes()
+        return com.local.assistant.memory.core.UserProfile.FIELDS.mapNotNull { field ->
+            facts.find(FactKeys.USER, field.attribute)?.let { field.attribute to it.value }
+        }.toMap()
+    }
+
+    /**
+     * Saves what the user typed: each filled field becomes their own edit, pinned to "Always in
+     * mind"; each field they cleared is forgotten, so it is not learned again from old chats.
+     * Returns whether anything changed.
+     */
+    suspend fun saveProfile(values: Map<String, String>): Boolean {
+        var changed = false
+        for (field in com.local.assistant.memory.core.UserProfile.FIELDS) {
+            val value = FactKeys.value(values[field.attribute].orEmpty())
+            val existing = facts.find(FactKeys.USER, field.attribute)
+            when {
+                value.isEmpty() && existing != null -> {
+                    memory.forgetFacts(FactKeys.USER, field.attribute)
+                    changed = true
+                }
+                value.isNotEmpty() && (existing == null || existing.value != value || !existing.core || existing.origin != FactOrigin.USER_EDIT) -> {
+                    memory.saveFact(FactKeys.USER, field.attribute, value, FactOrigin.USER_EDIT, pin = true)
+                    changed = true
+                }
+            }
+        }
+        if (changed) onChanged()
+        return changed
+    }
 
     // ---- Possible duplicates ----
 
@@ -160,7 +212,7 @@ class MemoryControls(
     // ---- Global controls ----
 
     /**
-     * Facts, names, reminders and events, the archive's search index and every summary go.
+     * Facts, names, reminders and events, saved images, the archive's search index and every summary go.
      * Chats stay as they are, but nothing is ever learned from what was said before now.
      */
     suspend fun forgetEverything(skipExtractionTo: suspend (Long) -> Unit) {
@@ -175,11 +227,12 @@ class MemoryControls(
             database.chatDao().clearRollingSummaries()
         }
         archive.forgetAll()
+        images?.deleteAll()
         skipExtractionTo(archive.lastMessageId())
         onChanged()
     }
 
-    /** Everything above, as JSON the user can keep. Chats are not included. */
+    /** Everything above, as JSON the user can keep. Chats and the images themselves are not included. */
     suspend fun exportJson(): String {
         val out = linkedMapOf<String, Any?>(
             "exported_at" to Instant.ofEpochMilli(clock()).toString(),
@@ -201,6 +254,13 @@ class MemoryControls(
                 linkedMapOf(
                     "title" to it.title, "starts" to Instant.ofEpochMilli(it.startsAt).toString(),
                     "all_day" to it.allDay, "repeat" to it.recurrence, "notes" to it.notes,
+                )
+            },
+            "saved_images" to database.noteDao().all().map {
+                linkedMapOf(
+                    "title" to it.title, "details" to it.details,
+                    "saved" to Instant.ofEpochMilli(it.createdAt).toString(),
+                    "file" to it.imagePath?.let { path -> java.io.File(path).name },
                 )
             },
             "conversation_summaries" to sessions.summarised().map {

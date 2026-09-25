@@ -32,6 +32,8 @@ class EmbeddingQueue(
     private val inForeground: () -> Boolean,
     /** Small-memory devices give the embedder's memory back once the backlog is done. */
     private val unloadWhenDrained: Boolean,
+    /** Saved images, embedded by their title and details so recall can find them by meaning. */
+    private val notes: com.local.assistant.memory.db.NoteDao? = null,
 ) {
 
     private var job: Job? = null
@@ -105,7 +107,23 @@ class EmbeddingQueue(
             _remaining.value = archive.backlogSize()
         }
         if (embedded > 0) Log.i(TAG, "Embedded $embedded chunks; ${_remaining.value} left")
+        embedNotes(modelId)
         if (unloadWhenDrained && !inForeground()) embedder.unload()
+    }
+
+    /** Saved images not yet embedded by this model: few, and each one the user asked for. */
+    private suspend fun embedNotes(modelId: String) {
+        val pending = notes?.unembedded(modelId).orEmpty()
+        if (pending.isEmpty() || embedder.modelId != modelId) return
+        runWhenIdle {
+            for (note in pending) {
+                coroutineContext.ensureActive()
+                val vector = embedder.embed(note.title + "\n" + note.details, EmbedKind.DOCUMENT)?.let(Int8Vectors::quantize)
+                if (vector == null && !embedder.isReady) return@runWhenIdle false
+                notes?.setEmbedding(note.id, vector, if (vector == null) com.local.assistant.memory.retrieval.ChunkPolicy.FAILED_PREFIX + modelId else modelId)
+            }
+            true
+        }
     }
 
     /**

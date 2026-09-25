@@ -269,6 +269,58 @@ class PromptBudgetTest {
         assertEquals("hi", omitted.text)
     }
 
+    // ---- Saved images ----
+
+    private val card = SavedImageLine("Wifi card", "Network Home_5G, password kochi2026, router TP-Link Archer C6.", now.minusDays(4).toInstant().toEpochMilli())
+
+    @Test
+    fun `a saved image is named above the user's words and costs an image`() {
+        val with = assembler.buildEnvelope(EnvelopeInputs(now, showNow = false, savedImage = card, userText = "what's the wifi password?"))
+        assertEquals(
+            "[Saved image (17 Sep 2026) “Wifi card”: Network Home_5G, password kochi2026, router TP-Link Archer C6. It is attached to this message.]\nwhat's the wifi password?",
+            with.text,
+        )
+        assertEquals(card, with.savedImage)
+        val without = assembler.buildEnvelope(EnvelopeInputs(now, showNow = false, userText = "what's the wifi password?"))
+        assertTrue(with.tokens - without.tokens >= PromptAssembler.DEFAULT_VISION_TOKENS)
+    }
+
+    @Test
+    fun `an image the conversation already holds is pointed to, not paid for again`() {
+        val held = assembler.buildEnvelope(EnvelopeInputs(now, showNow = false, savedImage = card.copy(attached = false), userText = "and the PIN?"))
+        assertTrue(held.text.startsWith("[Saved image (17 Sep 2026) “Wifi card”: "))
+        assertTrue(held.text.contains("It is attached earlier in this chat; look at it again.]"))
+        val attached = assembler.buildEnvelope(EnvelopeInputs(now, showNow = false, savedImage = card, userText = "and the PIN?"))
+        // The same line but for a few words of its ending: the difference is the image.
+        assertTrue(attached.tokens - held.tokens >= PromptAssembler.DEFAULT_VISION_TOKENS - 10)
+    }
+
+    @Test
+    fun `long saved details are cut to their allowance, never the user's words`() {
+        val long = card.copy(details = "row of numbers ".repeat(400))
+        val envelope = assembler.buildEnvelope(EnvelopeInputs(now, showNow = false, savedImage = long, userText = "and the last one?"))
+        val line = envelope.text.lines().first()
+        assertTrue(line.endsWith("It is attached to this message.]"))
+        assertTrue(estimator.estimate(line) <= budget.savedImageTokens + 2)
+        assertTrue(envelope.text.endsWith("\nand the last one?"))
+    }
+
+    @Test
+    fun `the image goes after snippets and facts, before the summary, and is then not attached`() {
+        val envelope = richEnvelope.copy(savedImage = card)
+        val beforeImage = assembler.buildEnvelope(envelope).tokens -
+            assembler.buildEnvelope(envelope.copy(snippets = emptyList(), facts = emptyList())).tokens
+        val plan = planOverBy(spare = beforeImage + 3, history = conversation(5, 10), envelope = envelope, summary = summary)
+        assertEquals(listOf(ShedStep.SNIPPETS, ShedStep.FACTS, ShedStep.IMAGE), plan.shed)
+        assertNull(plan.envelope.savedImage)
+        assertFalse("Saved image" in plan.envelope.text)
+        assertTrue(plan.prefix.summaryTokens > 0)
+
+        val bare = assembler.buildEnvelope(envelope.copy(snippets = emptyList(), facts = emptyList(), savedImage = null))
+        val live = assembler.fitEnvelope(budget.promptCeiling - bare.tokens, envelope)!!
+        assertNull(live.savedImage)
+    }
+
     // ---- History and live turns ----
 
     @Test

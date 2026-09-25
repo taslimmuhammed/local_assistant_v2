@@ -3,6 +3,7 @@ package com.local.assistant.memory.retrieval
 import android.util.Log
 import com.local.assistant.memory.db.ChunkEntity
 import com.local.assistant.memory.db.FactEntity
+import com.local.assistant.memory.db.NoteEntity
 import com.local.assistant.memory.embed.EmbedKind
 import com.local.assistant.memory.embed.Embedder
 import com.local.assistant.memory.embed.Int8Vectors
@@ -40,11 +41,25 @@ interface FactSource {
     suspend fun searchNonCore(match: String, limit: Int): List<FactEntity>
 }
 
+/** Saved images as retrieval reads them. */
+interface NoteSource {
+    /** Notes matching an FTS4 query. */
+    suspend fun matching(match: String): List<NoteEntity>
+
+    /** Notes embedded by [modelId]. */
+    suspend fun embedded(modelId: String): List<NoteEntity>
+}
+
+/** A saved image this turn is about: its line in the envelope, and the image to attach. */
+data class RecalledImage(val noteId: Long, val title: String, val details: String, val path: String, val at: Long)
+
 /** What was recalled for one turn, and how, for the envelope and the debug log. */
 data class Recall(
     val facts: List<FactEntity>,
     val snippets: List<Snippet>,
     val trace: RecallTrace,
+    /** A saved image the message is about, to be looked at again. */
+    val image: RecalledImage? = null,
 ) {
     companion object {
         val NONE = Recall(emptyList(), emptyList(), RecallTrace(gated = true))
@@ -89,6 +104,7 @@ class Retriever(
     private val facts: FactSource,
     private val archive: ArchiveSource,
     private val embedder: Embedder,
+    private val notes: NoteSource? = null,
     private val logScores: Boolean = false,
     /** Turns are started from the main thread; scoring and fusion must not run there. */
     private val dispatcher: CoroutineDispatcher = Dispatchers.Default,
@@ -113,25 +129,89 @@ class Retriever(
         val rare = QueryText.rareTerms(text)
 
         val recalledFacts = recallFacts(terms, maxFacts)
-        val search = search(text, terms, rare, embedQuery) { hitChatId, messageId ->
-            hitChatId == chatId && messageId >= windowStartMessageId
+        val (query, embedMs) = queryVector(text, embedQuery)
+        val inWindow = { hitChatId: Long?, messageId: Long? ->
+            hitChatId == chatId && messageId != null && messageId >= windowStartMessageId
         }
+        val search = search(terms, rare, query) { hitChatId, messageId -> inWindow(hitChatId, messageId) }
         val threshold = embedder.similarityThreshold
         val candidates = search.candidates.map { candidate ->
             val passes = (candidate.similarity ?: -1f) >= threshold || candidate.rareTermHit
             candidate.copy(injected = passes)
         }
         val snippets = candidates.filter { it.injected }.take(maxSnippets).map { Snippet(it.chunk.text, it.chunk.createdAt) }
+        // An image sent in this conversation's window is already in front of the model.
+        val image = recallImage(terms, rare, query, threshold) { inWindow(it.chatId, it.sourceMessageId) }
         val trace = RecallTrace(
             gated = false,
             keywordHits = search.keywordHits,
             vectorHits = search.vectorHits,
-            embedMs = search.embedMs,
+            embedMs = embedMs,
             totalMs = (System.nanoTime() - started) / 1_000_000,
             candidates = candidates,
         )
-        if (logScores) log(text, trace, threshold)
-        Recall(recalledFacts, snippets, trace)
+        if (logScores) log(text, trace, threshold, image)
+        Recall(recalledFacts, snippets, trace, image)
+    }
+
+    /** The message as a query vector, and how long that took; nulls when there is no model to ask. */
+    private suspend fun queryVector(text: String, embedQuery: Boolean): Pair<ByteArray?, Long?> {
+        if (!embedQuery || embedder.modelId == null) return null to null
+        val started = System.nanoTime()
+        val vector = embedder.embed(text, EmbedKind.QUERY)?.let(Int8Vectors::quantize)
+        return vector to (System.nanoTime() - started) / 1_000_000
+    }
+
+    /**
+     * The saved image the message is most likely about, under the same rule as snippets: its
+     * details are close enough in meaning, or share one of the message's rare words. At most one:
+     * each costs a few hundred tokens of the window to look at.
+     */
+    private suspend fun recallImage(
+        terms: List<String>,
+        rare: Set<String>,
+        query: ByteArray?,
+        threshold: Float,
+        excluded: (NoteEntity) -> Boolean,
+    ): RecalledImage? {
+        val source = notes ?: return null
+        val byKeyword = QueryText.ftsMatch(terms)?.let { runCatching { source.matching(it) }.getOrNull() }.orEmpty()
+        val modelId = embedder.modelId
+        val byVector = if (query != null && modelId != null) source.embedded(modelId) else emptyList()
+        val scored = (byKeyword + byVector).distinctBy { it.id }.map { note ->
+            val words = QueryText.words(note.title + " " + note.details).map { it.lowercase() }.toSet()
+            val vector = note.embedding
+            val similarity = if (query != null && vector != null && note.modelId == modelId) {
+                Int8Vectors.similarity(Int8Vectors.cosineDistance(vector, query))
+            } else {
+                null
+            }
+            Triple(note, similarity, rare.any { it in words })
+        }
+        return scored
+            .filter { (note, similarity, rareHit) ->
+                ((similarity ?: -1f) >= threshold || rareHit) && !excluded(note) && note.imagePath?.let { java.io.File(it).isFile } == true
+            }
+            .maxByOrNull { (note, similarity, rareHit) -> (similarity ?: 0f) + (if (rareHit) RARE_BONUS else 0f) + note.createdAt * 1e-15f }
+            ?.let { (note, _, _) -> RecalledImage(note.id, note.title, note.details, note.imagePath!!, note.createdAt) }
+    }
+
+    /** Saved images for search_memory: any keyword hit or a close enough meaning. */
+    suspend fun searchImages(query: String, limit: Int): List<NoteEntity> = withContext(dispatcher) {
+        val source = notes ?: return@withContext emptyList()
+        val terms = QueryText.terms(query)
+        val keyword = QueryText.ftsMatch(terms)?.let { runCatching { source.matching(it) }.getOrNull() }.orEmpty()
+        val (vector, _) = queryVector(query, embedQuery = true)
+        val modelId = embedder.modelId
+        val threshold = embedder.similarityThreshold - SEARCH_THRESHOLD_SLACK
+        val close = if (vector != null && modelId != null) {
+            source.embedded(modelId).filter { note ->
+                note.embedding?.let { Int8Vectors.similarity(Int8Vectors.cosineDistance(it, vector)) >= threshold } == true
+            }
+        } else {
+            emptyList()
+        }
+        (keyword + close).distinctBy { it.id }.take(limit)
     }
 
     /**
@@ -140,7 +220,8 @@ class Retriever(
      */
     suspend fun search(query: String, limit: Int): List<Candidate> = withContext(dispatcher) {
         val terms = QueryText.terms(query)
-        val search = search(query, terms, QueryText.rareTerms(query), embedQuery = true) { _, _ -> false }
+        val (vector, _) = queryVector(query, embedQuery = true)
+        val search = search(terms, QueryText.rareTerms(query), vector) { _, _ -> false }
         val threshold = embedder.similarityThreshold - SEARCH_THRESHOLD_SLACK
         search.candidates
             .map { it.copy(injected = it.keywordHit || (it.similarity ?: -1f) >= threshold) }
@@ -152,14 +233,12 @@ class Retriever(
         val candidates: List<Candidate>,
         val keywordHits: Int,
         val vectorHits: Int,
-        val embedMs: Long?,
     )
 
     private suspend fun search(
-        text: String,
         terms: List<String>,
         rare: Set<String>,
-        embedQuery: Boolean,
+        query: ByteArray?,
         excluded: (chatId: Long, messageId: Long) -> Boolean,
     ): Search {
         val rareIndexes = terms.indices.filter { terms[it] in rare }
@@ -169,14 +248,6 @@ class Retriever(
             .sortedWith(compareByDescending<KeywordHit> { it.score }.thenByDescending { it.messageId })
             .take(PER_LIST)
 
-        var embedMs: Long? = null
-        val query = if (embedQuery && embedder.modelId != null) {
-            val started = System.nanoTime()
-            embedder.embed(text, EmbedKind.QUERY)?.let(Int8Vectors::quantize)
-                .also { embedMs = (System.nanoTime() - started) / 1_000_000 }
-        } else {
-            null
-        }
         // Over-fetch: some neighbours will be in the window, or stale after a chat was deleted.
         val nearest = query?.let { archive.nearest(it, PER_LIST + NEAREST_MARGIN) }.orEmpty()
 
@@ -211,7 +282,7 @@ class Retriever(
                 injected = false,
             )
         }
-        return Search(candidates, keyword.size, vector.size, embedMs)
+        return Search(candidates, keyword.size, vector.size)
     }
 
     private suspend fun recallFacts(terms: List<String>, limit: Int): List<FactEntity> {
@@ -224,7 +295,8 @@ class Retriever(
         return (about + matching).distinctBy { it.id }.take(limit)
     }
 
-    private fun log(text: String, trace: RecallTrace, threshold: Float) {
+    private fun log(text: String, trace: RecallTrace, threshold: Float, image: RecalledImage?) {
+        image?.let { Log.d(TAG, "recall \"${text.take(60)}\": attaching saved image \"${it.title}\"") }
         Log.d(
             TAG,
             "recall \"${text.take(60)}\": ${trace.keywordHits} keyword, ${trace.vectorHits} vector, " +
@@ -250,6 +322,9 @@ class Retriever(
         private const val KEYWORD_POOL = 200
         private const val NEAREST_MARGIN = 20
         private const val SEARCH_THRESHOLD_SLACK = 0.1f
+
+        /** A rare word naming the image outweighs a small difference in similarity. */
+        private const val RARE_BONUS = 0.2f
         private const val LOGGED_CANDIDATES = 8
     }
 }

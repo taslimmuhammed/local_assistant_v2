@@ -1,6 +1,7 @@
 package com.local.assistant.memory.prompt
 
 import android.util.Log
+import com.local.assistant.data.db.AttachmentKind
 import com.local.assistant.llm.GenStats
 import com.local.assistant.llm.PromptAttachment
 import com.local.assistant.memory.tools.LoopEvent
@@ -56,7 +57,9 @@ class TurnRunner(
                 val turn = conversations.prepareTurn(chatId, userMessageId, userText)
                 var overflowed = false
                 val reply = StringBuilder()
-                tools.run(turn.session, turn.envelope.text, attachment, ToolContext(chatId, userMessageId)).collect { event ->
+                // A saved image the message is about is looked at again, as if sent with it.
+                val sent = attachment ?: turn.recalledImage?.let { PromptAttachment(it, AttachmentKind.IMAGE) }
+                tools.run(turn.session, turn.envelope.text, sent, ToolContext(chatId, userMessageId)).collect { event ->
                     when (event) {
                         is LoopEvent.Text -> {
                             reply.append(event.delta)
@@ -67,7 +70,7 @@ class TurnRunner(
                             // The model saw the change in its own history, so it needs no rebuild.
                             if (event.changedPrefix) conversations.acknowledgePrefixChange(chatId)
                             // A plain text turn is a clean sample of what text costs.
-                            if (event.toolRounds == 0 && attachment == null) {
+                            if (event.toolRounds == 0 && sent == null) {
                                 conversations.learnFromTurn(chatId, turn.envelope.text, reply.toString())
                             }
                             emit(TurnEvent.Done(event.stats))

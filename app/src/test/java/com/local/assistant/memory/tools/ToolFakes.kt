@@ -17,6 +17,8 @@ import com.local.assistant.memory.db.ForgetResult
 import com.local.assistant.memory.db.MemoryStore
 import com.local.assistant.memory.db.TaskEntity
 import com.local.assistant.memory.db.TaskStatus
+import com.local.assistant.memory.notes.FoundImage
+import com.local.assistant.memory.notes.ImageNotes
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.asFlow
 
@@ -157,5 +159,24 @@ class ScriptedSession(private val script: ArrayDeque<List<GenEvent>>) : ChatSess
     companion object {
         fun calls(vararg calls: ToolCall) = listOf(GenEvent.ToolCalls(calls.toList()), GenEvent.Done(null))
         fun says(text: String) = listOf(GenEvent.TextDelta(text), GenEvent.Done(null))
+    }
+}
+
+/** Images by message: what `remember_image` can find, and what it saved. */
+class FakeImageNotes : ImageNotes {
+    /** chatId → (messageId → path) of images the user sent. */
+    val sent = mutableMapOf<Long, MutableMap<Long, String>>()
+    val saved = linkedMapOf<Long, Triple<String, String, FoundImage>>()
+    private var nextId = 1L
+
+    override suspend fun findImage(chatId: Long, upToMessageId: Long): FoundImage? =
+        sent[chatId].orEmpty().filterKeys { it <= upToMessageId }.maxByOrNull { it.key }
+            ?.let { (messageId, path) -> FoundImage(chatId, messageId, path) }
+
+    override suspend fun save(title: String, details: String, image: FoundImage): Long =
+        nextId++.also { saved[it] = Triple(title, details, image) }
+
+    override suspend fun delete(noteId: Long) {
+        saved.remove(noteId)
     }
 }

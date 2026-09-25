@@ -32,7 +32,9 @@ class ToolRoutingTest {
     private val reminders = FakeReminders()
     private val log = FakeToolLog()
     private val clock = FakeSystemAlarms()
-    private val executor = ToolExecutor(store, reminders, clock, log, now = { now })
+    private val images = FakeImageNotes()
+    private var paused = false
+    private val executor = ToolExecutor(store, reminders, clock, log, now = { now }, memoryPaused = { paused }, images = images)
     private val loop = ToolLoop(executor, maxRounds = 3, isOverflow = { "too long" in it.message.orEmpty() })
     private val context = ToolContext(chatId = 1, userMessageId = 10)
 
@@ -380,5 +382,48 @@ class ToolRoutingTest {
         assertEquals(at(9, 23, 16), task.dueAt)
         assertEquals(at(9, 23, 16), reminders.scheduled[task.id])
         assertEquals(at(9, 23, 16), log.records.getValue(recordId).chip!!.at)
+    }
+
+    // ---- Saved images ----
+
+    @Test
+    fun `remember this keeps the image the user just sent with the model's details`() {
+        images.sent[1] = mutableMapOf(4L to "/a/old.jpg", 9L to "/a/card.jpg", 11L to "/a/later.jpg")
+        val (session, events) = turn(
+            call("remember_image", "title" to "wifi card", "details" to "Network: Home_5G. Password: kochi2026. Router: TP-Link Archer C6."),
+        )
+        val (title, details, image) = images.saved.values.single()
+        assertEquals("Wifi card", title)
+        assertTrue("kochi2026" in details)
+        assertEquals("the newest image up to this message", 9L, image.messageId)
+        assertEquals(true, result(session)["ok"])
+        val chip = events.filterIsInstance<LoopEvent.Memory>().single().chip
+        assertEquals(MemoryChip.Kind.IMAGE, chip.kind)
+        assertEquals("Saved image", chip.label)
+    }
+
+    @Test
+    fun `remember this with no image in the chat is an error, and nothing is saved`() {
+        val (session, events) = turn(call("remember_image", "title" to "receipt", "details" to "Total 450"))
+        assertEquals(false, result(session)["ok"])
+        assertTrue(images.saved.isEmpty())
+        assertTrue(events.none { it is LoopEvent.Memory })
+    }
+
+    @Test
+    fun `undo of a saved image deletes it`() {
+        images.sent[1] = mutableMapOf(10L to "/a/receipt.jpg")
+        val (_, events) = turn(call("remember_image", "title" to "receipt", "details" to "Total 450"))
+        assertEquals(ToolExecutor.UndoResult.UNDONE, runBlocking { executor.undo(events.filterIsInstance<LoopEvent.Memory>().single().recordId) })
+        assertTrue(images.saved.isEmpty())
+    }
+
+    @Test
+    fun `while memory is paused no image is saved`() {
+        paused = true
+        images.sent[1] = mutableMapOf(10L to "/a/receipt.jpg")
+        val (session, _) = turn(call("remember_image", "title" to "receipt", "details" to "Total 450"))
+        assertEquals(false, result(session)["ok"])
+        assertTrue(images.saved.isEmpty())
     }
 }

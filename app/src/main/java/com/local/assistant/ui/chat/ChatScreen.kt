@@ -85,6 +85,7 @@ fun ChatScreen(
     viewModel: ChatViewModel,
     onOpenModelSettings: () -> Unit,
     onOpenMemory: () -> Unit,
+    onOpenProfile: () -> Unit,
 ) {
     val chats by viewModel.chats.collectAsStateWithLifecycle()
     val activeChatId by viewModel.activeChatId.collectAsStateWithLifecycle()
@@ -182,6 +183,10 @@ fun ChatScreen(
                     onOpenMemory = {
                         scope.launch { drawerState.close() }
                         onOpenMemory()
+                    },
+                    onOpenProfile = {
+                        scope.launch { drawerState.close() }
+                        onOpenProfile()
                     },
                 )
             }

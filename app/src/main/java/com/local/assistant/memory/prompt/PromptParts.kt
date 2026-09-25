@@ -48,6 +48,12 @@ data class SystemPrefix(
 /** An archived exchange recalled for this turn. */
 data class Snippet(val text: String, val at: Long)
 
+/**
+ * A saved image recalled for this turn. [attached]: the image goes with this message; otherwise
+ * the conversation already holds it from an earlier turn, and only the line is repeated.
+ */
+data class SavedImageLine(val title: String, val details: String, val at: Long, val attached: Boolean = true)
+
 /** Everything the per-turn user message (sections E–G) is built from. */
 data class EnvelopeInputs(
     val now: ZonedDateTime,
@@ -56,6 +62,10 @@ data class EnvelopeInputs(
     val facts: List<FactEntity> = emptyList(),
     /** Retrieved snippets, best first. */
     val snippets: List<Snippet> = emptyList(),
+    /** A saved image this message is about, attached to it. */
+    val savedImage: SavedImageLine? = null,
+    /** What files sent with the message cost: the user's own, and a recalled image. */
+    val attachmentTokens: Int = 0,
     val userText: String,
 )
 
@@ -65,6 +75,8 @@ data class Envelope(
     val facts: List<FactEntity>,
     val snippets: List<Snippet>,
     val showedNow: Boolean,
+    /** Whether the recalled image made it in; if not, it must not be attached either. */
+    val savedImage: SavedImageLine? = null,
 )
 
 data class HistorySelection(
@@ -75,7 +87,7 @@ data class HistorySelection(
 )
 
 /** Budget-shedding steps, in the order they are applied. */
-enum class ShedStep { SNIPPETS, FACTS, SUMMARY, HISTORY, CORE }
+enum class ShedStep { SNIPPETS, FACTS, IMAGE, SUMMARY, HISTORY, CORE }
 
 /** A complete prompt that fits the budget, and what was given up to make it fit. */
 data class PromptPlan(

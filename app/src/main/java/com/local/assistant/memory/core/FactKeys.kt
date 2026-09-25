@@ -36,7 +36,7 @@ object FactKeys {
             ?.let { PREFERENCE_PREFIX + key.removePrefix(it) }
             ?: key.takeIf { it in BARE_PREFERENCES }?.let { PREFERENCE_PREFIX + it }
             ?: key
-        return RELATION_SYNONYMS[namespaced] ?: namespaced
+        return RELATION_SYNONYMS[namespaced] ?: ATTRIBUTE_SYNONYMS[namespaced] ?: namespaced
     }
 
     /** Display text as the user will see it: trimmed, with runs of whitespace collapsed. */
@@ -92,6 +92,19 @@ object FactKeys {
     )
 
     private val PREFERENCE_ALIASES = listOf("preference.", "preferences.", "pref_")
+
+    /**
+     * Other words for the fields on the profile screen, so "occupation" said in a chat and "Work"
+     * typed on the profile are one row. Only words that mean the same whoever the subject is:
+     * "location" is left alone, since an office's location is an address, not a city.
+     */
+    private val ATTRIBUTE_SYNONYMS: Map<String, String> = buildMap {
+        fun map(target: String, vararg words: String) = words.forEach { put(it, target) }
+        map("job", "occupation", "profession", "designation", "job_title")
+        map("city", "current_city", "lives_in", "residence", "home_city")
+        map("languages", "language", "languages_spoken", "spoken_languages")
+        map("interests", "interest", "hobbies", "hobby")
+    }
 
     /** Response-style keys the model sometimes writes without the namespace. */
     private val BARE_PREFERENCES = setOf(

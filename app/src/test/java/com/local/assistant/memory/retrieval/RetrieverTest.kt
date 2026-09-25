@@ -4,15 +4,18 @@ import com.local.assistant.memory.db.ChunkEntity
 import com.local.assistant.memory.db.FactCategory
 import com.local.assistant.memory.db.FactEntity
 import com.local.assistant.memory.db.FactOrigin
+import com.local.assistant.memory.db.NoteEntity
 import com.local.assistant.memory.embed.EmbedKind
 import com.local.assistant.memory.embed.Embedder
 import com.local.assistant.memory.embed.Int8Vectors
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import java.io.File
 import java.util.Locale
 import kotlin.math.sqrt
 
@@ -85,8 +88,37 @@ class RetrieverTest {
     private fun fact(id: Long, subject: String, attribute: String, value: String) =
         FactEntity(id, subject, attribute, value, FactCategory.OTHER, core = false, origin = FactOrigin.CHAT, sourceMessageId = null, statedAt = 0, createdAt = 0, updatedAt = 0, lastConfirmedAt = 0)
 
-    private fun retriever(chunks: List<ChunkEntity>, embedder: Embedder, facts: FactSource = FakeFacts(emptyList())) =
-        Retriever(facts, FakeArchive(chunks), embedder)
+    private fun retriever(chunks: List<ChunkEntity>, embedder: Embedder, facts: FactSource = FakeFacts(emptyList()), notes: NoteSource? = null) =
+        Retriever(facts, FakeArchive(chunks), embedder, notes = notes)
+
+    /** Keyword search by word prefix over title and details. */
+    private class FakeNotes(val notes: List<NoteEntity>) : NoteSource {
+        override suspend fun matching(match: String): List<NoteEntity> {
+            val terms = match.split(" OR ")
+            return notes.filter { note ->
+                val words = QueryText.words(note.title + " " + note.details).map { it.lowercase(Locale.ROOT) }
+                terms.any { term -> if (term.endsWith("*")) words.any { it.startsWith(term.dropLast(1)) } else term in words }
+            }
+        }
+
+        override suspend fun embedded(modelId: String) = notes.filter { it.modelId == modelId && it.embedding != null }
+    }
+
+    private val imageFile = File.createTempFile("saved", ".jpg").apply { deleteOnExit() }
+
+    private fun note(id: Long, title: String, details: String, vector: FloatArray? = null, chatId: Long = 2, messageId: Long? = id * 10, path: String = imageFile.path) =
+        NoteEntity(
+            id = id,
+            title = title,
+            details = details,
+            imagePath = path,
+            sourceMessageId = messageId,
+            chatId = chatId,
+            embedding = vector?.let { Int8Vectors.quantize(it) },
+            modelId = vector?.let { "fake@256" },
+            createdAt = id,
+            updatedAt = id,
+        )
 
     private val question = "what was the plan for the weekend trip"
 
@@ -186,5 +218,51 @@ class RetrieverTest {
         val found = retriever(chunks, FakeEmbedder(emptyMap(), isReady = false)).search("office meeting", 3)
         assertEquals(listOf(1L), found.map { it.chunk.id })
         assertFalse(found.single().rareTermHit)
+    }
+
+    // ---- Saved images ----
+
+    private val cardQuestion = "what was the password on that wifi card"
+
+    @Test
+    fun aSavedImageCloseInMeaningIsRecalled() = runBlocking {
+        val notes = FakeNotes(listOf(note(1, "Wifi card", "Network and password on the router card", along(0.8)), note(2, "Receipt", "Groceries", along(0.2, axis = 2))))
+        val recall = retriever(emptyList(), FakeEmbedder(mapOf(cardQuestion to query)), notes = notes).recall(1, cardQuestion, 1_000, 5, 4)
+        assertEquals(1L, recall.image?.noteId)
+        assertEquals(imageFile.path, recall.image?.path)
+    }
+
+    @Test
+    fun aSavedImageFarInMeaningIsNot() = runBlocking {
+        val notes = FakeNotes(listOf(note(1, "Receipt", "Groceries from the market", along(0.3))))
+        val recall = retriever(emptyList(), FakeEmbedder(mapOf(cardQuestion to query)), notes = notes).recall(1, cardQuestion, 1_000, 5, 4)
+        assertNull(recall.image)
+    }
+
+    @Test
+    fun aRareWordFindsASavedImageWithoutTheEmbedder() = runBlocking {
+        val notes = FakeNotes(listOf(note(1, "Visiting card", "Dr. Mehta, dentist, Jayanagar clinic")))
+        val notReady = FakeEmbedder(emptyMap(), isReady = false)
+        assertEquals(1L, retriever(emptyList(), notReady, notes = notes).recall(1, "what's the number of the Jayanagar clinic", 1_000, 5, 4).image?.noteId)
+        assertNull("a common word alone is not enough", retriever(emptyList(), notReady, notes = notes).recall(1, "which clinic was it", 1_000, 5, 4).image)
+    }
+
+    @Test
+    fun anImageAlreadyInTheWindowOrWithoutItsFileIsNotRecalled() = runBlocking {
+        val embedder = FakeEmbedder(mapOf(cardQuestion to query))
+        val inWindow = FakeNotes(listOf(note(1, "Wifi card", "password", along(0.9), chatId = 1, messageId = 500)))
+        assertNull(retriever(emptyList(), embedder, notes = inWindow).recall(1, cardQuestion, windowStartMessageId = 400, 5, 4).image)
+        // The same image from another chat, or from before this window, is not in front of the model.
+        assertEquals(1L, retriever(emptyList(), embedder, notes = inWindow).recall(2, cardQuestion, windowStartMessageId = 400, 5, 4).image?.noteId)
+        assertEquals(1L, retriever(emptyList(), embedder, notes = inWindow).recall(1, cardQuestion, windowStartMessageId = 600, 5, 4).image?.noteId)
+
+        val gone = FakeNotes(listOf(note(1, "Wifi card", "password", along(0.9), path = "/nowhere/card.jpg")))
+        assertNull(retriever(emptyList(), embedder, notes = gone).recall(1, cardQuestion, 1_000, 5, 4).image)
+    }
+
+    @Test
+    fun theBestOfSeveralSavedImagesWins() = runBlocking {
+        val notes = FakeNotes(listOf(note(1, "Router box", "model number", along(0.7)), note(2, "Wifi card", "network and password", along(0.9, axis = 2))))
+        assertEquals(2L, retriever(emptyList(), FakeEmbedder(mapOf(cardQuestion to query)), notes = notes).recall(1, cardQuestion, 1_000, 5, 4).image?.noteId)
     }
 }

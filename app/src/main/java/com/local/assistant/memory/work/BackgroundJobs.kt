@@ -139,6 +139,8 @@ class Consolidation(
     private val applyRetention: suspend (Int) -> Int,
     /** Frees the chat model afterwards if nobody is using the app. */
     private val releaseModel: suspend () -> Unit,
+    /** Removes saved-image files whose note was deleted; returns how many. */
+    private val pruneSavedImages: suspend () -> Int = { 0 },
     private val clock: () -> Long = System::currentTimeMillis,
 ) {
 
@@ -150,10 +152,13 @@ class Consolidation(
             sessions.endQuietSessions()
             if (sessions.summarisePending(deadline, loadModel = true) > 0) return false
             if (!extractor.run(deadline)) return false
+            memory.normalizeAttributes()
             val merged = memory.mergeCertainAliases()
             if (merged > 0) Log.i(TAG, "Merged $merged facts under their canonical names")
             val removed = applyRetention(retentionDays())
             if (removed > 0) Log.i(TAG, "Deleted $removed messages past the retention period")
+            val pruned = pruneSavedImages()
+            if (pruned > 0) Log.i(TAG, "Removed $pruned images of deleted saved images")
             optimize()
             return true
         } finally {
@@ -168,6 +173,7 @@ class Consolidation(
             for (sql in listOf(
                 "INSERT INTO facts_fts(facts_fts) VALUES('optimize')",
                 "INSERT INTO chunks_fts(chunks_fts) VALUES('optimize')",
+                "INSERT INTO notes_fts(notes_fts) VALUES('optimize')",
                 "PRAGMA optimize",
             )) {
                 connection.usePrepared(sql) { it.step() }

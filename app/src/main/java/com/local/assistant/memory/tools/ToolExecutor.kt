@@ -11,6 +11,8 @@ import com.local.assistant.memory.db.FactOrigin
 import com.local.assistant.memory.db.MemoryStore
 import com.local.assistant.memory.db.TaskEntity
 import com.local.assistant.memory.db.TaskStatus
+import com.local.assistant.memory.notes.FoundImage
+import com.local.assistant.memory.notes.ImageNotes
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import java.time.DayOfWeek
@@ -46,6 +48,8 @@ class ToolExecutor(
     private val archive: ArchiveSearch = ArchiveSearch { _, _ -> emptyList() },
     /** Memory is paused: nothing new is saved about the user until it is turned back on. */
     private val memoryPaused: () -> Boolean = { false },
+    /** Images kept for remember_image; none when not wired in. */
+    private val images: ImageNotes = NoImageNotes,
 ) {
 
     data class Outcome(
@@ -121,6 +125,11 @@ class ToolExecutor(
             ToolCatalog.SEARCH_MEMORY -> searchMemory(args)
             ToolCatalog.FORGET -> forget(args)
             ToolCatalog.SET_ALARM -> setAlarm(args)
+            ToolCatalog.REMEMBER_IMAGE -> if (memoryPaused()) {
+                throw ToolError("Memory is paused, so nothing was saved. Tell the user; they can turn memory back on in 'What I know about you'.")
+            } else {
+                rememberImage(args, context)
+            }
             else -> throw ToolError("There is no tool called ${call.name}.")
         }
     }
@@ -411,6 +420,24 @@ class ToolExecutor(
         )
     }
 
+    /**
+     * Keeps the image with the title and details the model gave. The details are what later
+     * questions are matched against; the image is attached again when one is, so the model can
+     * read what nobody wrote down.
+     */
+    private suspend fun rememberImage(args: Args, context: ToolContext): Applied {
+        val title = tidyTitle(args.required("title")).take(MAX_TITLE)
+        val details = args.text("details").orEmpty().take(MAX_DETAILS)
+        val image = images.findImage(context.chatId, context.userMessageId)
+            ?: throw ToolError("There is no image in this chat to remember. Ask the user to send it.")
+        val id = images.save(title, details, image)
+        return Applied(
+            result = ok("id" to id, "saved" to "the image and your details; it will be shown to you again when the user asks about it"),
+            chip = MemoryChip(MemoryChip.Kind.IMAGE, "Saved image", title),
+            undo = UndoToken(createdNoteId = id),
+        )
+    }
+
     private suspend fun forget(args: Args): Applied {
         val subject = args.required("subject")
         val attribute = args.text("attribute")
@@ -528,6 +555,10 @@ class ToolExecutor(
                 }
                 token.forgotten != null -> {
                     store.unforget(token.forgotten)
+                    true
+                }
+                token.createdNoteId != null -> {
+                    images.delete(token.createdNoteId)
                     true
                 }
                 else -> false
@@ -670,6 +701,8 @@ class ToolExecutor(
         private const val MAX_FACT_LENGTH = 300
         private const val MAX_LISTED = 8
         private const val MAX_FOUND = 5
+        private const val MAX_TITLE = 80
+        private const val MAX_DETAILS = 4_000
         private const val MAX_NOTES = 3
         private const val MAX_NOTE_CHARS = 360
         private val NOTE_DATE = DateTimeFormatter.ofPattern("d MMM yyyy", Locale.ENGLISH)
@@ -684,4 +717,11 @@ class ToolExecutor(
             "it", "that", "this", "and", "of", "on", "at", "in", "is", "ko", "ka", "ki", "se",
         )
     }
+}
+
+/** No image store: remember_image finds nothing to remember. */
+private object NoImageNotes : ImageNotes {
+    override suspend fun findImage(chatId: Long, upToMessageId: Long): FoundImage? = null
+    override suspend fun save(title: String, details: String, image: FoundImage): Long = error("no image store")
+    override suspend fun delete(noteId: Long) = Unit
 }

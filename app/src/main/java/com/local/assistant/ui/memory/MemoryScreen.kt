@@ -1,7 +1,9 @@
 package com.local.assistant.ui.memory
 
+import android.graphics.BitmapFactory
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -13,10 +15,13 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ArrowBack
 import androidx.compose.material.icons.filled.PushPin
@@ -59,8 +64,12 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.local.assistant.memory.core.DuplicateSuggestion
@@ -68,7 +77,9 @@ import com.local.assistant.memory.core.FactKeys
 import com.local.assistant.memory.core.FactLabels
 import com.local.assistant.memory.db.EventEntity
 import com.local.assistant.memory.db.FactEntity
+import com.local.assistant.memory.db.NoteEntity
 import com.local.assistant.memory.db.TaskEntity
+import com.local.assistant.ui.chat.AttachedImage
 import com.local.assistant.ui.theme.AppColors
 import kotlinx.coroutines.launch
 import java.time.Instant
@@ -121,10 +132,12 @@ fun MemoryScreen(viewModel: MemoryViewModel, onBack: () -> Unit) {
             TabRow(selectedTabIndex = tab, containerColor = AppColors.Background, contentColor = AppColors.TextPrimary) {
                 Tab(selected = tab == 0, onClick = { tab = 0 }, text = { Text("About you") })
                 Tab(selected = tab == 1, onClick = { tab = 1 }, text = { Text("Reminders & events") })
+                Tab(selected = tab == 2, onClick = { tab = 2 }, text = { Text("Images") })
             }
             when (tab) {
                 0 -> FactsTab(viewModel)
-                else -> AgendaTab(viewModel)
+                1 -> AgendaTab(viewModel)
+                else -> ImagesTab(viewModel)
             }
         }
     }
@@ -368,7 +381,7 @@ private fun Controls(viewModel: MemoryViewModel) {
         AlertDialog(
             onDismissRequest = { forgetStep = 0 },
             title = { Text("Forget everything?") },
-            text = { Text("Every fact, reminder and event, the search index of past conversations and all summaries are deleted. Your chats stay, but nothing is learned from them again.") },
+            text = { Text("Every fact, reminder and event, every saved image, the search index of past conversations and all summaries are deleted. Your chats stay, but nothing is learned from them again.") },
             confirmButton = { TextButton(onClick = { forgetStep = 2 }) { Text("Continue", color = AppColors.Danger) } },
             dismissButton = { TextButton(onClick = { forgetStep = 0 }) { Text("Cancel") } },
         )
@@ -449,6 +462,76 @@ private fun EventRow(event: EventEntity) {
         )
     }
 }
+
+// ---- Saved images ----
+
+@Composable
+private fun ImagesTab(viewModel: MemoryViewModel) {
+    val notes by viewModel.savedImages.collectAsStateWithLifecycle()
+    var open by remember { mutableStateOf<NoteEntity?>(null) }
+    LazyColumn(Modifier.fillMaxSize()) {
+        item { SectionHeader("Saved images") }
+        if (notes.isEmpty()) {
+            item { Note("Nothing saved yet. Send a photo and say “remember this” — a receipt, a label, a whiteboard — and ask about it any time later.") }
+        }
+        items(notes, key = { "note-${it.id}" }) { note ->
+            Dismissible(onDismiss = { viewModel.deleteSavedImage(note) }) {
+                SavedImageRow(note, onClick = { open = note })
+            }
+        }
+        if (notes.isNotEmpty()) item { Note("Ask about a saved image in any chat and the assistant looks at it again. Swipe to delete.") }
+    }
+    open?.let { note -> SavedImageDialog(note, onDone = { open = null }) }
+}
+
+@Composable
+private fun SavedImageRow(note: NoteEntity, onClick: () -> Unit) {
+    Row(
+        Modifier.fillMaxWidth().background(AppColors.Background).clickable(onClick = onClick).padding(horizontal = 16.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Thumbnail(note.imagePath)
+        Column(Modifier.weight(1f).padding(start = 12.dp)) {
+            Text(note.title, style = MaterialTheme.typography.bodyLarge, color = AppColors.TextPrimary, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text(note.details, style = MaterialTheme.typography.bodySmall, color = AppColors.TextSecondary, maxLines = 2, overflow = TextOverflow.Ellipsis)
+            Text("Saved " + formatWhen(note.createdAt, true), style = MaterialTheme.typography.labelSmall, color = AppColors.TextSecondary)
+        }
+    }
+}
+
+/** A small square crop, decoded small: these rows can be many. */
+@Composable
+private fun Thumbnail(path: String?) {
+    val bitmap = remember(path) {
+        path?.let {
+            runCatching { BitmapFactory.decodeFile(it, BitmapFactory.Options().apply { inSampleSize = THUMB_SAMPLE })?.asImageBitmap() }.getOrNull()
+        }
+    }
+    val modifier = Modifier.size(56.dp).clip(RoundedCornerShape(10.dp))
+    if (bitmap == null) {
+        Box(modifier.background(AppColors.SurfaceMuted))
+    } else {
+        Image(bitmap = bitmap, contentDescription = null, contentScale = ContentScale.Crop, modifier = modifier)
+    }
+}
+
+@Composable
+private fun SavedImageDialog(note: NoteEntity, onDone: () -> Unit) {
+    AlertDialog(
+        onDismissRequest = onDone,
+        title = { Text(note.title) },
+        text = {
+            Column(Modifier.verticalScroll(rememberScrollState())) {
+                note.imagePath?.let { AttachedImage(it, maxHeight = 320) }
+                Text(note.details, style = MaterialTheme.typography.bodyMedium, color = AppColors.TextPrimary, modifier = Modifier.padding(top = 12.dp))
+                Text("Saved " + formatWhen(note.createdAt, false), style = MaterialTheme.typography.labelSmall, color = AppColors.TextSecondary, modifier = Modifier.padding(top = 8.dp))
+            }
+        },
+        confirmButton = { TextButton(onClick = onDone) { Text("Close") } },
+    )
+}
+
+private const val THUMB_SAMPLE = 4
 
 // ---- Shared ----
 

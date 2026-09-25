@@ -9,6 +9,7 @@ import com.local.assistant.llm.BackendCapabilities
 import com.local.assistant.llm.ChatSession
 import com.local.assistant.llm.ChatSpec
 import com.local.assistant.llm.LlmBackend
+import com.local.assistant.llm.ContextWindow
 import com.local.assistant.llm.LlmService
 import com.local.assistant.memory.db.MemoryRepository
 import com.local.assistant.memory.retrieval.Recall
@@ -68,8 +69,16 @@ class ConversationManager(
     private val clock: () -> Long = System::currentTimeMillis,
 ) : ModelAccess {
 
-    /** A turn ready to send. */
-    data class PreparedTurn(val session: ChatSession, val envelope: Envelope, val budget: MemoryBudget)
+    /**
+     * A turn ready to send. [recalledImage] is a saved image the message is about, to go with it
+     * when the user attached nothing themselves.
+     */
+    data class PreparedTurn(
+        val session: ChatSession,
+        val envelope: Envelope,
+        val budget: MemoryBudget,
+        val recalledImage: String? = null,
+    )
 
     private class Live(
         val chatId: Long,
@@ -93,6 +102,12 @@ class ConversationManager(
         var tokensBeforeTurn: Int? = null,
         /** Stored turns this conversation left out that no summary covers yet. */
         val unsummarizedDropped: Int = 0,
+        /**
+         * Saved images already attached to a turn of this conversation. Stored history does not
+         * carry them, so a rebuild starts empty; until then, attaching one again only muddles the
+         * model's reading of it (a second copy garbled long numbers on the phone).
+         */
+        val attachedNotes: MutableSet<Long> = mutableSetOf(),
     )
 
     /** Plain turns' text and real cost, gathered until there is enough to learn from. */
@@ -127,6 +142,7 @@ class ConversationManager(
      * the user's message, already stored; everything before it is history.
      */
     suspend fun prepareTurn(chatId: Long, userMessageId: Long, userText: String): PreparedTurn = mutex.withLock {
+        val userMessage = chats.message(userMessageId)
         // A rebuild still waiting for a quiet spell is moot now; one already running has finished
         // by the time we hold the lock.
         maintenance?.cancel()
@@ -149,11 +165,19 @@ class ConversationManager(
         }
 
         val recall = recall(chatId, userText, current.windowStartId, budget)
-        val inputs = EnvelopeInputs(
+        // One attachment per message: a recalled image only goes with a message that has none.
+        val userAttached = userMessage?.attachmentKind != null
+        val image = recall.image?.takeIf { !userAttached }
+        fun line(attach: Boolean) = image?.let { SavedImageLine(it.title, it.details, it.at, attached = attach) }
+        var inputs = EnvelopeInputs(
             now = now,
             showNow = assembler.shouldShowNow(current.lastNowShown, now),
             facts = recall.facts,
             snippets = recall.snippets,
+            // Once in the conversation, the image is not attached again: a second copy garbled
+            // long numbers on the phone. The line still points the model back at it.
+            savedImage = line(attach = image != null && image.noteId !in current.attachedNotes),
+            attachmentTokens = userMessage?.let { ContextWindow.attachmentTokens(it, capabilities.visionTokensPerImage) } ?: 0,
             userText = userText,
         )
         val liveTokens = current.session.tokenCount() ?: 0
@@ -169,12 +193,23 @@ class ConversationManager(
             } finally {
                 _tidying.value = false
             }
+            // The new conversation holds no saved image, so it goes with this message after all.
+            inputs = inputs.copy(savedImage = line(attach = true))
             current = rebuild(chatId, history, budget, capabilities, next = inputs)
             envelope = assembler.buildEnvelope(inputs.copy(showNow = true))
         }
         if (envelope.showedNow) current.lastNowShown = now
+        val attached = image?.takeIf { envelope.savedImage?.attached == true }
+        if (attached != null) current.attachedNotes += attached.noteId
+        image?.let {
+            Log.i(TAG, when {
+                attached != null -> "Attaching saved image ${it.noteId}"
+                envelope.savedImage != null -> "Saved image ${it.noteId} already in the conversation"
+                else -> "Saved image ${it.noteId} shed to fit"
+            })
+        }
         current.tokensBeforeTurn = current.session.tokenCount()
-        PreparedTurn(current.session, envelope, budget)
+        PreparedTurn(current.session, envelope, budget, recalledImage = attached?.path)
     }
 
     /** Recall is best-effort: a failure costs this turn its memory lines, never the turn. */

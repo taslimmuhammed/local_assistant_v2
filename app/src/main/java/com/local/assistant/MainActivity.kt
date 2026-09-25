@@ -14,6 +14,8 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import com.local.assistant.ui.chat.ChatScreen
 import com.local.assistant.ui.memory.MemoryScreen
 import com.local.assistant.ui.memory.MemoryViewModel
+import com.local.assistant.ui.profile.ProfileScreen
+import com.local.assistant.ui.profile.ProfileViewModel
 import androidx.activity.compose.BackHandler
 import com.local.assistant.ui.chat.ChatViewModel
 import com.local.assistant.llm.LlmService
@@ -40,6 +42,15 @@ private fun AppRoot(container: AppContainer) {
     val installed by container.modelManager.installed.collectAsStateWithLifecycle()
     var showModelScreen by remember { mutableStateOf(false) }
     var showMemoryScreen by remember { mutableStateOf(false) }
+    var showProfileScreen by remember { mutableStateOf(false) }
+    var profileAsked by remember { mutableStateOf(container.settings.profileAsked) }
+
+    // First launch: a few details about the user before anything else. Skippable.
+    if (!profileAsked) {
+        val profileViewModel: ProfileViewModel = viewModel(factory = ProfileViewModel.factory(container))
+        ProfileScreen(viewModel = profileViewModel, onboarding = true, onDone = { profileAsked = true })
+        return
+    }
 
     // With no model there is nothing to chat with, so the model screen is the whole app.
     if (installed == null || showModelScreen) {
@@ -75,6 +86,13 @@ private fun AppRoot(container: AppContainer) {
         return
     }
 
+    if (showProfileScreen) {
+        BackHandler { showProfileScreen = false }
+        val profileViewModel: ProfileViewModel = viewModel(key = "profile-edit", factory = ProfileViewModel.factory(container))
+        ProfileScreen(viewModel = profileViewModel, onboarding = false, onDone = { showProfileScreen = false })
+        return
+    }
+
     if (showMemoryScreen) {
         BackHandler { showMemoryScreen = false }
         val memoryViewModel: MemoryViewModel = viewModel(factory = MemoryViewModel.factory(container))
@@ -87,5 +105,6 @@ private fun AppRoot(container: AppContainer) {
         viewModel = viewModel,
         onOpenModelSettings = { showModelScreen = true },
         onOpenMemory = { showMemoryScreen = true },
+        onOpenProfile = { showProfileScreen = true },
     )
 }

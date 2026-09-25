@@ -99,7 +99,7 @@ class MigrationTest {
             db.execSQL("INSERT INTO chats (id, title, createdAt, updatedAt) VALUES (1, 'Old', 1, 2)")
             db.execSQL("INSERT INTO messages (chatId, role, text, createdAt, incomplete) VALUES (1, 'USER', 'hello', 1, 0)")
         }
-        helper.runMigrationsAndValidate(5, AppDatabase.MIGRATIONS.toList()).use { db ->
+        helper.runMigrationsAndValidate(6, AppDatabase.MIGRATIONS.toList()).use { db ->
             assertEquals(1L, db.long("SELECT COUNT(*) FROM messages WHERE sessionId IS NOT NULL AND tokenEst > 0 AND offRecord = 0"))
         }
     }
@@ -115,6 +115,32 @@ class MigrationTest {
             assertEquals(0L, db.long("SELECT offRecord FROM messages WHERE id = 1"))
             db.execSQL("INSERT INTO messages (chatId, role, text, createdAt, incomplete, tokenEst) VALUES (1, 'USER', 'x', 2, 0, 1)")
             assertEquals(0L, db.long("SELECT offRecord FROM messages WHERE text = 'x'"))
+        }
+    }
+
+    @Test
+    fun version5GainsSavedImagesWithTheirSearchIndex() {
+        helper.createDatabase(5).use { db ->
+            db.execSQL("INSERT INTO chats (id, title, createdAt, updatedAt) VALUES (1, 'Wifi', 1, 2)")
+            db.execSQL("INSERT INTO messages (id, chatId, role, text, createdAt, incomplete, tokenEst, offRecord) VALUES (7, 1, 'USER', 'remember this', 1, 0, 3, 0)")
+        }
+        helper.runMigrationsAndValidate(6, AppDatabase.MIGRATIONS.toList()).use { db ->
+            assertEquals("the chat is untouched", 1L, db.long("SELECT COUNT(*) FROM messages"))
+            db.execSQL(
+                "INSERT INTO notes (id, title, details, imagePath, sourceMessageId, chatId, createdAt, updatedAt) " +
+                    "VALUES (1, 'Wifi card', 'Network Home_5G, password kochi2026', '/x/card.jpg', 7, 1, 5, 5)",
+            )
+            // The triggers keep the index in step: insert, update and delete.
+            assertEquals(1L, db.long("SELECT COUNT(*) FROM notes_fts WHERE notes_fts MATCH 'kochi2026'"))
+            db.execSQL("UPDATE notes SET details = 'Network Home_5G, password goa2027' WHERE id = 1")
+            assertEquals(0L, db.long("SELECT COUNT(*) FROM notes_fts WHERE notes_fts MATCH 'kochi2026'"))
+            assertEquals(1L, db.long("SELECT COUNT(*) FROM notes_fts WHERE notes_fts MATCH 'goa2027'"))
+            // Deleting the chat keeps the saved image; it only forgets where it came from.
+            db.execSQL("PRAGMA foreign_keys = ON")
+            db.execSQL("DELETE FROM messages WHERE id = 7")
+            assertEquals(1L, db.long("SELECT COUNT(*) FROM notes WHERE sourceMessageId IS NULL"))
+            db.execSQL("DELETE FROM notes WHERE id = 1")
+            assertEquals(0L, db.long("SELECT COUNT(*) FROM notes_fts WHERE notes_fts MATCH 'goa2027'"))
         }
     }
 

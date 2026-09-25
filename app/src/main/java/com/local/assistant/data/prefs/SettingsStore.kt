@@ -39,6 +39,11 @@ class SettingsStore(context: Context) {
         get() = prefs.getBoolean(KEY_MEMORY_PAUSED, false)
         set(value) = prefs.edit { putBoolean(KEY_MEMORY_PAUSED, value) }
 
+    /** The profile has been offered once (filled in or skipped); first launch asks for it. */
+    var profileAsked: Boolean
+        get() = prefs.getBoolean(KEY_PROFILE_ASKED, false)
+        set(value) = prefs.edit { putBoolean(KEY_PROFILE_ASKED, value) }
+
     /** Chat history older than this many days is deleted by the nightly job; 0 keeps everything. */
     var historyRetentionDays: Int
         get() = prefs.getInt(KEY_HISTORY_RETENTION, 0)
@@ -178,6 +183,7 @@ class SettingsStore(context: Context) {
         private const val KEY_EMBEDDER_PATH = "embedder_path"
         private const val KEY_EMBEDDER_KEY = "embedder_key"
         private const val KEY_MEMORY_PAUSED = "memory_paused"
+        private const val KEY_PROFILE_ASKED = "profile_asked"
         private const val KEY_HISTORY_RETENTION = "history_retention_days"
         private const val KEY_USE_GPU = "use_gpu"
         private const val KEY_SPECULATIVE = "speculative_decoding"

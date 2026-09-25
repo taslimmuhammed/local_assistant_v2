@@ -15,6 +15,7 @@ import com.local.assistant.llm.LlmService
 import com.local.assistant.media.AttachmentStore
 import com.local.assistant.media.AudioRecorder
 import com.local.assistant.memory.MemoryControls
+import com.local.assistant.memory.notes.SavedImages
 import com.local.assistant.memory.db.ArchiveRepository
 import com.local.assistant.memory.db.MemoryRepository
 import com.local.assistant.memory.db.SessionTracker
@@ -137,10 +138,14 @@ class AppContainer(context: Context) {
     /** Every exchange, keyword-indexed and embedded, for recall across chats. */
     val archive: ArchiveRepository = ArchiveRepository(database, vectorIndex)
 
+    /** Images the user asked to have remembered, kept outside their chats. */
+    val savedImages: SavedImages = SavedImages(context.filesDir, database.noteDao(), chatRepository)
+
     private val retriever = Retriever(
         facts = memoryRepository,
         archive = archive,
         embedder = embedder,
+        notes = savedImages,
         // Similarities in debug builds, to calibrate the threshold on real pairs.
         logScores = (context.applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE) != 0,
     )
@@ -173,6 +178,7 @@ class AppContainer(context: Context) {
         scope = appScope,
         inForeground = { appForeground.isForeground },
         unloadWhenDrained = totalMemoryBytes(context) <= SMALL_DEVICE_BYTES,
+        notes = database.noteDao(),
     )
 
     val reminderScheduler = AlarmReminderScheduler(context)
@@ -187,9 +193,13 @@ class AppContainer(context: Context) {
         log = ChatToolLog(chatRepository),
         now = ZonedDateTime::now,
         archive = ArchiveSearch { query, limit ->
-            retriever.search(query, limit).map { Snippet(it.chunk.text, it.chunk.createdAt) }
+            val images = retriever.searchImages(query, limit).map {
+                Snippet("Saved image “${it.title}”: ${it.details} (the user can ask about it and you will see it again)", it.createdAt)
+            }
+            (images + retriever.search(query, limit).map { Snippet(it.chunk.text, it.chunk.createdAt) }).take(limit)
         },
         memoryPaused = { settings.memoryPaused },
+        images = savedImages,
     )
 
     private val toolLoop = ToolLoop(
@@ -199,7 +209,9 @@ class AppContainer(context: Context) {
     )
 
     val turnRunner = TurnRunner(conversations, modelScheduler, toolLoop, onExchangeStored = { userMessageId ->
-        if (archive.recordExchange(userMessageId)) embeddingQueue.kick()
+        // A saved image from this turn needs a vector too, so kick either way.
+        archive.recordExchange(userMessageId)
+        embeddingQueue.kick()
     })
 
     val attachmentStore = AttachmentStore(context)
@@ -224,6 +236,7 @@ class AppContainer(context: Context) {
         chats = chatRepository,
         reminders = reminderScheduler,
         onChanged = { conversations.prefixMayHaveChanged() },
+        images = savedImages,
     )
 
     val consolidation = Consolidation(
@@ -244,6 +257,7 @@ class AppContainer(context: Context) {
                 embedder.unload()
             }
         },
+        pruneSavedImages = savedImages::prune,
     )
 
     /** "Forget everything", including the nightly pass's place in the history. */
