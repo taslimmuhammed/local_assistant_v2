@@ -43,7 +43,8 @@ class TurnRunner(
      * user's own words are stored, never the envelope the model actually receives.
      *
      * If the runtime refuses the turn as too long before anything was said, the conversation is
-     * replanned conservatively and the turn sent once more.
+     * replanned conservatively and the turn sent once more. If the model's first answer is a tool
+     * call the runtime can't read, the turn is sent once more with a fresh seed.
      */
     fun run(
         chatId: Long,
@@ -53,9 +54,11 @@ class TurnRunner(
     ): Flow<TurnEvent> = flow {
         scheduler.runUser {
             var retried = false
+            var reseeded = false
             while (true) {
                 val turn = conversations.prepareTurn(chatId, userMessageId, userText)
                 var overflowed = false
+                var unreadable = false
                 val reply = StringBuilder()
                 // A saved image the message is about is looked at again, as if sent with it.
                 val sent = attachment ?: turn.recalledImage?.let { PromptAttachment(it, AttachmentKind.IMAGE) }
@@ -67,8 +70,13 @@ class TurnRunner(
                         }
                         is LoopEvent.Memory -> emit(TurnEvent.Memory(event.recordId, event.chip))
                         is LoopEvent.Done -> {
-                            // The model saw the change in its own history, so it needs no rebuild.
-                            if (event.changedPrefix) conversations.acknowledgePrefixChange(chatId)
+                            if (event.staleConversation) {
+                                // Finished without the runtime: rebuild from what is stored.
+                                conversations.forget(chatId)
+                            } else if (event.changedPrefix) {
+                                // The model saw the change in its own history, so it needs no rebuild.
+                                conversations.acknowledgePrefixChange(chatId)
+                            }
                             // A plain text turn is a clean sample of what text costs.
                             if (event.toolRounds == 0 && sent == null) {
                                 conversations.learnFromTurn(chatId, turn.envelope.text, reply.toString())
@@ -79,11 +87,23 @@ class TurnRunner(
                             if (retried) error("That message is too long for the model's window.")
                             overflowed = true
                         }
+                        LoopEvent.Unreadable -> {
+                            if (reseeded) error("The model's answer couldn't be read. Please try again.")
+                            unreadable = true
+                        }
                     }
                 }
-                if (!overflowed) break
-                conversations.recoverFromOverflow(chatId)
-                retried = true
+                when {
+                    overflowed -> {
+                        conversations.recoverFromOverflow(chatId)
+                        retried = true
+                    }
+                    unreadable -> {
+                        conversations.reseed(chatId)
+                        reseeded = true
+                    }
+                    else -> break
+                }
             }
         }
     }

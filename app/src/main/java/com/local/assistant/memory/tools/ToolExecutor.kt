@@ -52,6 +52,8 @@ class ToolExecutor(
     private val images: ImageNotes = NoImageNotes,
     /** Calls, messages, timers, apps, phone settings and arithmetic; none when not wired in. */
     private val device: DeviceTools? = null,
+    /** web_search; none when not wired in. */
+    private val web: WebTools? = null,
 ) {
 
     data class Outcome(
@@ -97,9 +99,9 @@ class ToolExecutor(
 
         fun recordOf(applied: Applied) = ToolRecord(call.name, call.arguments, gson.toJson(applied.result), applied.chip, applied.undo)
 
-        val (applied, recordId) = if (call.name in ToolCatalog.DEVICE) {
+        val (applied, recordId) = if (call.name in ToolCatalog.OUTSIDE_MEMORY) {
             // Outside the transaction: finding a contact can wait on the user's answer to a
-            // permission dialog, and none of these write to memory.
+            // permission dialog, a search on the network, and none of these write to memory.
             val applied = try {
                 device(call)
             } catch (e: ToolError) {
@@ -124,7 +126,7 @@ class ToolExecutor(
             in ToolCatalog.WRITES -> dedupeWindowMs
             // A model that repeats itself within a turn must not open the dialer twice, but
             // "call her again" a minute later is a real request.
-            in ToolCatalog.DEVICE_ACTIONS -> DEVICE_DEDUPE_WINDOW_MS
+            in ToolCatalog.DEVICE_ACTIONS, ToolCatalog.WEB_SEARCH -> DEVICE_DEDUPE_WINDOW_MS
             else -> 0L
         }
         if (ok && window > 0) recentMutex.withLock { recent[key] = (nowMs + window) to outcome }
@@ -132,8 +134,12 @@ class ToolExecutor(
     }
 
     private suspend fun device(call: ToolCall): Applied {
-        val tools = device ?: throw ToolError("That isn't available in this app.")
         val args = Args(call.arguments)
+        if (call.name == ToolCatalog.WEB_SEARCH) {
+            val done = (web ?: throw ToolError("Web search isn't set up.")).search(args)
+            return Applied(done.result, done.chip)
+        }
+        val tools = device ?: throw ToolError("That isn't available in this app.")
         val done = when (call.name) {
             ToolCatalog.CALL -> tools.call(args)
             ToolCatalog.SEND_MESSAGE -> tools.sendMessage(args)

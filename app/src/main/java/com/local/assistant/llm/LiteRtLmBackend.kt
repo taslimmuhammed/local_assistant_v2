@@ -115,7 +115,10 @@ class LiteRtLmBackend(
     private fun thinkingOff(): ThinkingConfig? =
         if (capabilities?.thinking == true) ThinkingConfig(enableThinking = false) else null
 
-    private fun Sampling.toConfig() = SamplerConfig(topK = topK, topP = topP, temperature = temperature)
+    override fun isUnreadableToolCall(error: Throwable): Boolean =
+        error.message?.contains("Failed to parse tool calls") == true
+
+    private fun Sampling.toConfig() = SamplerConfig(topK = topK, topP = topP, temperature = temperature, seed = seed)
 
     private fun MessageEntity.toLiteRtMessage(): Message? = when (role) {
         Role.USER -> Message.user(contentsOf(text, attachmentPath, attachmentKind))

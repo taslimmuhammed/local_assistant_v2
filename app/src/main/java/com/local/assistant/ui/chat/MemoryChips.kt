@@ -49,6 +49,7 @@ fun MemoryChips(
     onUndo: (Long) -> Unit,
     onEditTime: (Long, Long) -> Unit,
     onOpenClock: () -> Unit,
+    onOpenLink: (String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     if (chips.isEmpty()) return
@@ -61,6 +62,7 @@ fun MemoryChips(
                 onUndo = { onUndo(item.recordId) },
                 onEdit = { editing = item },
                 onOpenClock = onOpenClock,
+                onOpenLink = onOpenLink,
             )
         }
     }
@@ -78,7 +80,13 @@ fun MemoryChips(
 }
 
 @Composable
-private fun MemoryChipRow(item: ChatViewModel.ChipItem, onUndo: () -> Unit, onEdit: () -> Unit, onOpenClock: () -> Unit) {
+private fun MemoryChipRow(
+    item: ChatViewModel.ChipItem,
+    onUndo: () -> Unit,
+    onEdit: () -> Unit,
+    onOpenClock: () -> Unit,
+    onOpenLink: (String) -> Unit,
+) {
     val chip = item.chip
     val text = listOfNotNull(chip.label, chip.detail, chip.at?.let { formatWhen(it, chip.allDay) })
         .filter { it.isNotBlank() }
@@ -109,6 +117,7 @@ private fun MemoryChipRow(item: ChatViewModel.ChipItem, onUndo: () -> Unit, onEd
             if (item.canUndo) ChipAction("Undo", onUndo)
             // A clock alarm or timer is the clock app's once set: that is where it is changed or stopped.
             if (chip.kind == MemoryChip.Kind.ALARM || chip.kind == MemoryChip.Kind.TIMER) ChipAction("Open clock", onOpenClock)
+            chip.link?.let { link -> ChipAction("Open") { onOpenLink(link) } }
         }
     }
 }

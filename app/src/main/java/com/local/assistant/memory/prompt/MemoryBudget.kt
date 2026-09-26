@@ -77,8 +77,10 @@ data class MemoryBudget(
         val SIXTEEN_K = MemoryBudget(
             name = "16K",
             contextTokens = 16_384,
-            instructionsCap = 500,
-            toolDeclarationsCap = 700,
+            // Measured by the runtime (RoutingEvalTest), 26 Sep 2026: instructions 571 tokens with
+            // the tool rules, 1,272 for 15 tool declarations; web search adds one tool and a rule.
+            instructionsCap = 650,
+            toolDeclarationsCap = 1_400,
             coreCap = 1_200,
             coreTarget = 800,
             summaryCap = 400,

@@ -6,8 +6,8 @@ import kotlin.math.pow
 import kotlin.math.sqrt
 
 /**
- * Arithmetic for the calculate tool, so sums, percentages and splits are exact rather than
- * whatever a 4B model works out in its head.
+ * Arithmetic and unit conversions for the calculate tool, so sums, percentages and splits are
+ * exact rather than whatever a 4B model works out in its head.
  *
  * `+ - * / ^`, parentheses, `%` as a percentage ("18% of 2450" or "2450*18%"), `sqrt(…)`, and
  * numbers written with thousands separators ("1,00,000", "2,450.50"). `×`, `x` between numbers
@@ -16,6 +16,14 @@ import kotlin.math.sqrt
 object Calculator {
 
     class Error(message: String) : Exception(message)
+
+    /** A sum or a unit conversion ([Units]), worked out and written for the model: "441", "8.04672 km". */
+    fun run(expression: String): String {
+        val conversion = Units.parse(expression) ?: return format(evaluate(expression))
+        val (amount, from, to) = conversion
+        val value = Units.convert(evaluate(amount), from, to)
+        return format(value, CONVERSION_DIGITS) + " " + to.name
+    }
 
     fun evaluate(expression: String): Double {
         val parser = Parser(tokens(normalize(expression)))
@@ -26,8 +34,11 @@ object Calculator {
     }
 
     /** Up to 10 significant digits, no trailing zeros, no exponent: "441", "862.5", "0.3333333333". */
-    fun format(value: Double): String =
-        BigDecimal(value).round(MathContext(10)).stripTrailingZeros().toPlainString().let { if (it == "-0") "0" else it }
+    fun format(value: Double, digits: Int = 10): String =
+        BigDecimal(value).round(MathContext(digits)).stripTrailingZeros().toPlainString().let { if (it == "-0") "0" else it }
+
+    /** Conversion factors are rarely exact past this: 37.7778 °C, not 37.77777778. */
+    private const val CONVERSION_DIGITS = 6
 
     private fun normalize(text: String): String =
         text.lowercase()

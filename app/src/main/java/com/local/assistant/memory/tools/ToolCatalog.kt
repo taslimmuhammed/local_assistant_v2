@@ -26,6 +26,8 @@ object ToolCatalog {
     const val OPEN_APP = "open_app"
     const val PHONE_SETTING = "phone_setting"
     const val CALCULATE = "calculate"
+    /** Not "web_search": beside search_memory the model blended the two ("web_search_memory"). */
+    const val WEB_SEARCH = "web_lookup"
 
     /** Tools that change something, as opposed to reading it. */
     val WRITES = setOf(ADD_TASK, UPDATE_TASK, ADD_EVENT, SAVE_FACT, FORGET, SET_ALARM, REMEMBER_IMAGE)
@@ -36,7 +38,29 @@ object ToolCatalog {
     /** Device tools with an effect a repeat would duplicate: a second dialer, a second timer. */
     val DEVICE_ACTIONS = DEVICE - CALCULATE
 
-    val declarations: List<String> = listOf(
+    /** Tools that don't touch memory, run outside its transaction: they wait on apps, dialogs or the network. */
+    val OUTSIDE_MEMORY = DEVICE + WEB_SEARCH
+
+    /** Every tool the model is given; web search only once the user has set it up. */
+    fun declarations(web: Boolean): List<String> = if (web) declarations + WEB_DECLARATION else declarations
+
+    /** How to use the tools, appended to the instructions (section A) when tools are declared. */
+    fun rules(web: Boolean): String = RULES.replace(WEB_SLOT, if (web) WEB_RULE + "\n" else "")
+
+    private val WEB_DECLARATION = function(
+        WEB_SEARCH,
+        "Use only for things that change or are too recent for you to know: news, weather, prices, scores, schedules; or when asked to look something up online. query: a short search phrase; topic: news for recent events.",
+        required = listOf("query"),
+        "query" to "string",
+        "topic" to "string",
+    )
+
+    private const val WEB_RULE =
+        "- News, weather, prices, scores and other things that change, or when asked to look something up online → web_lookup; answer from its results and name the site. General knowledge, how-to, advice and recipes: answer yourself."
+    private const val WEB_SLOT = "{web}\n"
+
+    /** The tools declared whatever is set up; see [declarations] for the full list. */
+    private val declarations: List<String> = listOf(
         function(
             ADD_TASK,
             "Use when the user wants to be reminded or to do something later (\\\"remind me\\\", \\\"don't let me forget\\\"). Put the user's own time words in when, copied exactly.",
@@ -136,31 +160,31 @@ object ToolCatalog {
         ),
         function(
             PHONE_SETTING,
-            "Use to change a phone setting now (\\\"flashlight jalao\\\"). setting: flashlight, ringer, volume, do_not_disturb, wifi, bluetooth, mobile_data or airplane_mode; value: on, off, silent, vibrate, up, down or a percent.",
+            "Use to change a phone setting now. setting: flashlight, ringer, volume, do_not_disturb, wifi, bluetooth, mobile_data or airplane_mode; value: on, off, silent, vibrate, up, down or a percent.",
             required = listOf("setting"),
             "setting" to "string",
             "value" to "string",
         ),
         function(
             CALCULATE,
-            "Use for any arithmetic. expression: the sum, like 2450*18/100.",
+            "Use for any arithmetic or unit conversion. expression: the sum or conversion, like 2450*18/100 or 5 miles in km.",
             required = listOf("expression"),
             "expression" to "string",
         ),
     )
 
-    /** How to use the tools, appended to the instructions (section A) when tools are declared. */
-    val RULES = """
+    private val RULES = """
         Tools — call them rather than only saying you will:
         - Reminders and to-dos → add_task, with the user's own time words in when.
         - Alarms ("set an alarm", "wake me up") → set_alarm, which rings in the phone's clock app.
         - "Remember this" about an image → remember_image, with everything you can read in details (not save_fact).
         - Calls, messages, timers, apps and phone settings only when asked for now: "remind me to call amma at 6" is add_task, "I should call her" is no tool.
-        - Any arithmetic → calculate.
+        - Any arithmetic or unit conversion → calculate.
         - Changing, finishing or moving an existing reminder → update_task.
         - Appointments, meetings, birthdays, trips → add_event.
-        - Lasting facts about the user or their people and places → save_fact. How they want you to reply from now on ("keep answers short", "reply in Hindi") → save_fact with core=true, then follow it. Never for questions, hypotheticals, other people's opinions, passing moods or jokes.
+        - Lasting facts about the user or their people and places → save_fact. How they want you to reply from now on ("keep answers short", "reply in Hindi") → save_fact with core=true, then follow it. Never for questions, hypotheticals, wishes, other people's opinions, passing moods or jokes.
         - "What's coming up" beyond the agenda → get_upcoming. Something told before that is not above → search_memory. "Forget …" → forget.
+        {web}
         After a tool succeeds, confirm in one short sentence. If it returns ok:false, ask the user for what is missing.
     """.trimIndent()
 

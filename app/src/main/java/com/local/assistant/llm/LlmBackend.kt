@@ -43,6 +43,9 @@ interface LlmBackend {
      * failure that shrinking the prompt and trying again can fix.
      */
     fun isContextOverflow(error: Throwable): Boolean
+
+    /** The model wrote a tool call the runtime could not read. */
+    fun isUnreadableToolCall(error: Throwable): Boolean = false
 }
 
 data class BackendCapabilities(
@@ -60,7 +63,11 @@ data class BackendCapabilities(
  * Sampler settings. In LiteRT-LM 0.17.1 these are fixed per conversation, not per message, so
  * chat turns and tool follow-ups necessarily share one setting.
  */
-data class Sampling(val topK: Int, val topP: Double, val temperature: Double) {
+/**
+ * [seed]: the runtime's sampler is seeded, so the same conversation and seed always give the
+ * same reply; a new seed is how a turn gets a fresh attempt.
+ */
+data class Sampling(val topK: Int, val topP: Double, val temperature: Double, val seed: Int = 0) {
     companion object {
         /** Gemma's recommended settings, and what chat has always used. */
         val CHAT = Sampling(topK = 64, topP = 0.95, temperature = 1.0)

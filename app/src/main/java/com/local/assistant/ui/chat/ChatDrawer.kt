@@ -43,6 +43,7 @@ fun ChatDrawer(
     onOpenModelSettings: () -> Unit,
     onOpenMemory: () -> Unit,
     onOpenProfile: () -> Unit,
+    onOpenWebSearch: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     Column(
@@ -125,6 +126,20 @@ fun ChatDrawer(
         ) {
             Text(
                 text = "What I know about you",
+                style = MaterialTheme.typography.labelLarge,
+                color = AppColors.TextSecondary,
+            )
+        }
+
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clickable(onClick = onOpenWebSearch)
+                .padding(horizontal = 20.dp, vertical = 16.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                text = "Web search",
                 style = MaterialTheme.typography.labelLarge,
                 color = AppColors.TextSecondary,
             )

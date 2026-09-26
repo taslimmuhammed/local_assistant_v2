@@ -22,20 +22,17 @@ class DeviceTools(
     private val now: () -> ZonedDateTime,
 ) {
 
-    /** What a device tool gives back: the model's JSON and the chip, if any. */
-    data class Done(val result: Map<String, Any?>, val chip: MemoryChip? = null)
-
-    internal suspend fun call(args: Args): Done {
+    internal suspend fun call(args: Args): ActionResult {
         val who = args.required("who")
         val person = find(who, Need.PHONE)
         check(phone.dial(person.address), "the dialer")
-        return Done(
+        return ActionResult(
             ok("dialer" to "open with ${person.name} (${person.address}); the user taps call"),
             MemoryChip(MemoryChip.Kind.CALL, "Call", "${person.name} · ${person.address}", note = "Tap call in the dialer"),
         )
     }
 
-    internal suspend fun sendMessage(args: Args): Done {
+    internal suspend fun sendMessage(args: Args): ActionResult {
         val to = args.required("to")
         val text = args.text("text")
         val app = when (args.text("app")?.lowercase(Locale.ROOT)?.replace(Regex("[^a-z]"), "")) {
@@ -51,13 +48,13 @@ class DeviceTools(
             throw ToolError("$appName isn't installed. Offer ${if (app == MessageApp.WHATSAPP) "an SMS" else "another way"} instead.")
         }
         check(handoff, appName)
-        return Done(
+        return ActionResult(
             ok("ready" to "$appName to ${person.name} with the message written; the user taps send"),
             MemoryChip(MemoryChip.Kind.MESSAGE, appName, person.name + (text?.let { ": ${it.take(CHIP_TEXT)}" } ?: ""), note = "Tap send in $appName"),
         )
     }
 
-    internal fun setTimer(args: Args): Done {
+    internal fun setTimer(args: Args): ActionResult {
         val words = args.required("duration")
         val seconds = DurationParser.seconds(words) ?: throw ToolError("I couldn't understand '$words' as a length of time. Ask how long.")
         if (seconds > MAX_TIMER_SECONDS) throw ToolError("Timers go up to 24 hours. Offer a reminder or an alarm instead.")
@@ -66,13 +63,13 @@ class DeviceTools(
         if (!alarms.available()) throw ToolError("This phone's clock app doesn't take timers from other apps.")
         if (!alarms.setTimer(seconds, label)) throw ToolError("The clock app couldn't be reached. Ask the user to try again with the app open.")
         val length = DurationParser.describe(seconds)
-        return Done(
+        return ActionResult(
             ok("timer" to length, "ends" to TIME.format(now().plusSeconds(seconds.toLong()))),
             MemoryChip(MemoryChip.Kind.TIMER, "Timer", listOfNotNull(length, label).joinToString(" · ")),
         )
     }
 
-    internal fun openApp(args: Args): Done {
+    internal fun openApp(args: Args): ActionResult {
         val app = args.required("app")
         val query = args.text("query")
         val found = when (val result = AppMatcher.resolve(app, query, phone.installedApps())) {
@@ -83,13 +80,13 @@ class DeviceTools(
         val target = found.target
         val what = describe(target)
         check(phone.open(target), what)
-        return Done(
+        return ActionResult(
             ok("opened" to what, "note" to found.note),
             MemoryChip(MemoryChip.Kind.APP, "Opened", what),
         )
     }
 
-    internal fun phoneSetting(args: Args): Done {
+    internal fun phoneSetting(args: Args): ActionResult {
         val setting = args.required("setting").lowercase(Locale.ROOT).replace(Regex("[^a-z]+"), "_").trim('_')
         val value = args.text("value")?.lowercase(Locale.ROOT)?.trim()
         return when (setting) {
@@ -115,7 +112,7 @@ class DeviceTools(
                     "Unknown setting '$setting'. Use flashlight, ringer, volume, do_not_disturb, wifi, bluetooth, mobile_data, airplane_mode, hotspot or location.",
                 )
                 check(phone.openPanel(panel), "the ${panel.label} settings")
-                Done(
+                ActionResult(
                     ok("opened" to "the ${panel.label} settings", "note" to "Android doesn't let apps switch ${panel.label} themselves; the user switches it there"),
                     MemoryChip(MemoryChip.Kind.SETTING, "Opened", "${panel.label.replaceFirstChar { it.titlecase(Locale.ROOT) }} settings"),
                 )
@@ -123,19 +120,19 @@ class DeviceTools(
         }
     }
 
-    internal fun calculate(args: Args): Done {
+    internal fun calculate(args: Args): ActionResult {
         val expression = args.required("expression")
-        val value = try {
-            Calculator.evaluate(expression)
+        val result = try {
+            Calculator.run(expression)
         } catch (e: Calculator.Error) {
             throw ToolError(e.message.orEmpty())
         }
-        return Done(ok("result" to Calculator.format(value)))
+        return ActionResult(ok("result" to result))
     }
 
     // ---- Settings ----
 
-    private fun ringer(value: String?, setting: String): Done {
+    private fun ringer(value: String?, setting: String): ActionResult {
         // "silent mode on", "vibrate off": when the setting names a mode, on and off are about it.
         val named = when (setting) {
             "silent", "silent_mode", "mute" -> RingerMode.SILENT
@@ -166,7 +163,7 @@ class DeviceTools(
         }
     }
 
-    private fun volume(value: String?): Done {
+    private fun volume(value: String?): ActionResult {
         val change = when {
             value == null || value in setOf("up", "louder", "increase", "raise", "higher", "badhao") -> VolumeChange.Up
             value in setOf("down", "lower", "decrease", "softer", "quieter", "reduce", "kam") -> VolumeChange.Down
@@ -182,7 +179,7 @@ class DeviceTools(
     }
 
     private fun setting(vararg fields: Pair<String, Any?>, chip: String) =
-        Done(ok(*fields), MemoryChip(MemoryChip.Kind.SETTING, chip, ""))
+        ActionResult(ok(*fields), MemoryChip(MemoryChip.Kind.SETTING, chip, ""))
 
     private fun onOff(value: String?): Boolean? = when (value) {
         null -> null

@@ -11,6 +11,7 @@ import com.local.assistant.llm.ChatSpec
 import com.local.assistant.llm.LlmBackend
 import com.local.assistant.llm.ContextWindow
 import com.local.assistant.llm.LlmService
+import com.local.assistant.llm.Sampling
 import com.local.assistant.memory.db.MemoryRepository
 import com.local.assistant.memory.retrieval.Recall
 import com.local.assistant.memory.retrieval.Retriever
@@ -59,8 +60,13 @@ class ConversationManager(
     private val scheduler: ModelScheduler,
     private val scope: CoroutineScope,
     private val estimator: MeasuredTokenEstimator,
-    /** OpenAPI declarations for the tools the model may call; part of the stable prefix. */
-    private val tools: List<String> = emptyList(),
+    /**
+     * OpenAPI declarations for the tools the model may call; part of the stable prefix, so read
+     * at each rebuild. They change when web search is set up or removed ([webSearch]).
+     */
+    private val tools: () -> List<String> = { emptyList() },
+    /** Whether web_search is among [tools], which adds its line to the instructions. */
+    private val webSearch: () -> Boolean = { false },
     /** Per-turn recall of facts and archived exchanges; none when null. */
     private val retriever: Retriever? = null,
     /** Folds older turns into the chat's rolling summary; without it they are simply dropped. */
@@ -117,6 +123,9 @@ class ConversationManager(
 
     private val mutex = Mutex()
     private var live: Live? = null
+
+    /** The sampler seed conversations are built with; changes only to retry an unreadable answer. */
+    private var seed = 0
     private var maintenance: Job? = null
 
     private val _droppedFromContext = MutableStateFlow(0)
@@ -298,6 +307,16 @@ class ConversationManager(
         live?.takeIf { it.chatId == chatId }?.let(::close)
     }
 
+    /**
+     * The model's answer was a tool call the runtime couldn't read. The same conversation and seed
+     * would write it again, so the next one is built with a different seed.
+     */
+    suspend fun reseed(chatId: Long) = mutex.withLock {
+        seed++
+        Log.w(TAG, "Unreadable tool call; retrying with seed $seed")
+        live?.takeIf { it.chatId == chatId }?.let(::close)
+    }
+
     /** Drops the conversation for [chatId], e.g. after its messages were deleted. */
     suspend fun forget(chatId: Long) = mutex.withLock {
         live?.takeIf { it.chatId == chatId }?.let(::close)
@@ -431,7 +450,7 @@ class ConversationManager(
         live?.let(::close)
         val prefixInputs = prefixInputs(chatId, budget)
 
-        val declared = tools.takeIf { capabilities.tools }.orEmpty()
+        val declared = tools().takeIf { capabilities.tools }.orEmpty()
         val toolTokens = toolTokens(capabilities)
 
         suspend fun open(): Pair<PromptPlan, ChatSession> {
@@ -441,6 +460,7 @@ class ConversationManager(
                 systemPrefix = plan.prefix.text,
                 history = plan.history.messages,
                 toolDeclarations = declared,
+                sampling = Sampling.CHAT.copy(seed = seed),
                 maxOutputTokens = minOf(settings.maxOutputTokens, budget.generationReserve),
                 prefillOnOpen = true,
             )
@@ -493,7 +513,11 @@ class ConversationManager(
             ?.let { SummaryBlock(SummaryBlock.Kind.EARLIER_IN_CHAT, it) }
             ?: memory.latestSessionSummary()?.let { SummaryBlock(SummaryBlock.Kind.LAST_SESSION, it) }
         return PrefixInputs(
-            instructions = Instructions.render(settings.systemPrompt, withTools = tools.isNotEmpty() && backend.capabilities?.tools == true),
+            instructions = Instructions.render(
+                settings.systemPrompt,
+                withTools = tools().isNotEmpty() && backend.capabilities?.tools == true,
+                webSearch = webSearch(),
+            ),
             coreFacts = memory.coreFacts(),
             summary = summary,
             agendaDate = now().toLocalDate(),
@@ -522,7 +546,7 @@ class ConversationManager(
      * conservative stand-in for what they cost.
      */
     private fun toolTokens(capabilities: BackendCapabilities): Int {
-        val declared = tools.takeIf { capabilities.tools }.orEmpty()
+        val declared = tools().takeIf { capabilities.tools }.orEmpty()
         return if (declared.isEmpty()) 0 else estimator.estimate(declared.joinToString("\n"))
     }
 

@@ -21,6 +21,8 @@ import com.local.assistant.ui.chat.ChatViewModel
 import com.local.assistant.llm.LlmService
 import com.local.assistant.ui.setup.ModelScreen
 import com.local.assistant.ui.startup.LoadingScreen
+import com.local.assistant.ui.web.WebSearchScreen
+import com.local.assistant.ui.web.WebSearchViewModel
 import com.local.assistant.ui.theme.LocalAssistantTheme
 
 class MainActivity : ComponentActivity() {
@@ -43,6 +45,7 @@ private fun AppRoot(container: AppContainer) {
     var showModelScreen by remember { mutableStateOf(false) }
     var showMemoryScreen by remember { mutableStateOf(false) }
     var showProfileScreen by remember { mutableStateOf(false) }
+    var showWebSearchScreen by remember { mutableStateOf(false) }
     var profileAsked by remember { mutableStateOf(container.settings.profileAsked) }
 
     // First launch: a few details about the user before anything else. Skippable.
@@ -93,6 +96,13 @@ private fun AppRoot(container: AppContainer) {
         return
     }
 
+    if (showWebSearchScreen) {
+        BackHandler { showWebSearchScreen = false }
+        val webViewModel: WebSearchViewModel = viewModel(factory = WebSearchViewModel.factory(container))
+        WebSearchScreen(viewModel = webViewModel, onBack = { showWebSearchScreen = false })
+        return
+    }
+
     if (showMemoryScreen) {
         BackHandler { showMemoryScreen = false }
         val memoryViewModel: MemoryViewModel = viewModel(factory = MemoryViewModel.factory(container))
@@ -106,5 +116,6 @@ private fun AppRoot(container: AppContainer) {
         onOpenModelSettings = { showModelScreen = true },
         onOpenMemory = { showMemoryScreen = true },
         onOpenProfile = { showProfileScreen = true },
+        onOpenWebSearch = { showWebSearchScreen = true },
     )
 }

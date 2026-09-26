@@ -12,8 +12,10 @@ import com.local.assistant.data.repo.ChatRepository
 import com.local.assistant.llm.LiteRtLmBackend
 import com.local.assistant.llm.LlmBackend
 import com.local.assistant.llm.LlmService
+import com.local.assistant.llm.ToolCallRepair
 import com.local.assistant.media.AttachmentStore
 import com.local.assistant.media.AudioRecorder
+import com.local.assistant.data.prefs.SecretStore
 import com.local.assistant.device.AndroidContacts
 import com.local.assistant.device.AndroidPhone
 import com.local.assistant.device.PermissionBroker
@@ -41,6 +43,7 @@ import com.local.assistant.memory.tools.DeviceTools
 import com.local.assistant.memory.tools.ToolCatalog
 import com.local.assistant.memory.tools.ToolExecutor
 import com.local.assistant.memory.tools.ToolLoop
+import com.local.assistant.memory.tools.WebTools
 import com.local.assistant.memory.extract.ExtractionRouter
 import com.local.assistant.memory.extract.Extractor
 import com.local.assistant.memory.summary.SessionSummaries
@@ -57,6 +60,7 @@ import com.local.assistant.reminders.AlarmReminderScheduler
 import com.local.assistant.reminders.ClockAlarms
 import com.local.assistant.reminders.ReminderNotifications
 import com.local.assistant.ui.setup.MemorySearchControls
+import com.local.assistant.web.TavilySearch
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
@@ -162,6 +166,12 @@ class AppContainer(context: Context) {
 
     val modelScheduler = ModelScheduler()
 
+    /** Secrets the user pastes in, encrypted with a Keystore key. */
+    val secrets = SecretStore(context)
+
+    /** Tavily, with the user's own key; off (and undeclared to the model) until there is one. */
+    val webSearch = TavilySearch(key = { secrets.get(SecretStore.TAVILY_KEY) })
+
     val conversations = ConversationManager(
         backend = llmBackend,
         chats = chatRepository,
@@ -170,7 +180,8 @@ class AppContainer(context: Context) {
         scheduler = modelScheduler,
         scope = appScope,
         estimator = tokenEstimator,
-        tools = ToolCatalog.declarations,
+        tools = { ToolCatalog.declarations(web = webSearch.enabled) },
+        webSearch = { webSearch.enabled },
         retriever = retriever,
         summarizer = summarizer,
     )
@@ -217,12 +228,15 @@ class AppContainer(context: Context) {
         memoryPaused = { settings.memoryPaused },
         images = savedImages,
         device = deviceTools,
+        web = WebTools(webSearch),
     )
 
     private val toolLoop = ToolLoop(
         executor = toolExecutor,
         maxRounds = MemoryBudget.SIXTEEN_K.maxToolRounds,
         isOverflow = llmBackend::isContextOverflow,
+        isUnreadable = llmBackend::isUnreadableToolCall,
+        repair = ToolCallRepair(ToolCatalog.declarations(web = true))::repair,
     )
 
     val turnRunner = TurnRunner(conversations, modelScheduler, toolLoop, onExchangeStored = { userMessageId ->

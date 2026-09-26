@@ -26,8 +26,10 @@ data class MemoryChip(
     val note: String? = null,
     /** Whether the time can be changed from the chip. */
     val editable: Boolean = false,
+    /** A web page the chip can open: a web search's top source. */
+    val link: String? = null,
 ) {
-    enum class Kind { FACT, TASK, EVENT, FORGET, ALARM, IMAGE, CALL, MESSAGE, TIMER, APP, SETTING }
+    enum class Kind { FACT, TASK, EVENT, FORGET, ALARM, IMAGE, CALL, MESSAGE, TIMER, APP, SETTING, WEB }
 }
 
 /**

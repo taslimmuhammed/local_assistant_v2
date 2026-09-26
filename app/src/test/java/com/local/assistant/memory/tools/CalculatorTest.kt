@@ -43,4 +43,24 @@ class CalculatorTest {
         assertThrows(Calculator.Error::class.java) { Calculator.evaluate("") }
         assertThrows(Calculator.Error::class.java) { Calculator.evaluate("5 # 3") }
     }
+
+    @Test
+    fun `unit conversions`() {
+        assertEquals("8.04672 km", Calculator.run("5 miles in km"))
+        assertEquals("37 °C", Calculator.run("98.6 f to c"))
+        assertEquals("212 °F", Calculator.run("100 °C in °F"))
+        assertEquals("111.484 sq m", Calculator.run("1,200 sq ft in sq m"))
+        assertEquals("473.176 ml", Calculator.run("2 cups in ml"))
+        assertEquals("9.9208 lb", Calculator.run("3*1.5 kg in lb"))
+        assertEquals("12.7 cm", Calculator.run("5 in in cm"))
+        assertEquals("210 min", Calculator.run("3.5 hours in minutes"))
+        assertEquals("2.47105 acre", Calculator.run("1 hectare to acres"))
+        assertEquals("100 cent", Calculator.run("1 acre in cents"))
+        assertEquals("441", Calculator.run("18% of 2450"))
+    }
+
+    @Test
+    fun `units of different kinds do not convert`() {
+        assertThrows(Calculator.Error::class.java) { Calculator.run("5 kg in km") }
+    }
 }

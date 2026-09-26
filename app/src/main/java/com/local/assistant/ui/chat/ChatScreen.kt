@@ -65,6 +65,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextAlign
@@ -87,6 +88,7 @@ fun ChatScreen(
     onOpenModelSettings: () -> Unit,
     onOpenMemory: () -> Unit,
     onOpenProfile: () -> Unit,
+    onOpenWebSearch: () -> Unit,
 ) {
     val chats by viewModel.chats.collectAsStateWithLifecycle()
     val activeChatId by viewModel.activeChatId.collectAsStateWithLifecycle()
@@ -110,6 +112,11 @@ fun ChatScreen(
     val snackbarHostState = remember { SnackbarHostState() }
     val listState = rememberLazyListState()
     val context = LocalContext.current
+    val uriHandler = LocalUriHandler.current
+    // A web search chip's top source, in the browser; only web addresses, whatever the chip says.
+    val openLink: (String) -> Unit = { url ->
+        if (url.startsWith("https://") || url.startsWith("http://")) runCatching { uriHandler.openUri(url) }
+    }
 
     val imagePicker = rememberLauncherForActivityResult(
         ActivityResultContracts.PickVisualMedia(),
@@ -203,6 +210,10 @@ fun ChatScreen(
                         scope.launch { drawerState.close() }
                         onOpenProfile()
                     },
+                    onOpenWebSearch = {
+                        scope.launch { drawerState.close() }
+                        onOpenWebSearch()
+                    },
                 )
             }
         },
@@ -254,6 +265,7 @@ fun ChatScreen(
                                         onUndo = viewModel::undo,
                                         onEditTime = viewModel::editTime,
                                         onOpenClock = viewModel::openClock,
+                                        onOpenLink = openLink,
                                     )
                                 }
                             }
@@ -270,6 +282,7 @@ fun ChatScreen(
                                             onUndo = viewModel::undo,
                                             onEditTime = viewModel::editTime,
                                             onOpenClock = viewModel::openClock,
+                                            onOpenLink = openLink,
                                         )
                                     }
                                 }

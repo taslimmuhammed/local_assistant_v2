@@ -251,9 +251,9 @@ and they are never re-read).
 
 ### Tools and reminders
 
-The model can call fifteen tools — `add_task`, `update_task`, `add_event`, `save_fact`,
+The model can call up to sixteen tools — `add_task`, `update_task`, `add_event`, `save_fact`,
 `get_upcoming`, `search_memory`, `forget`, `set_alarm`, `remember_image`, and the everyday ones
-below — declared in `memory/tools/ToolCatalog.kt` with short
+and web search below — declared in `memory/tools/ToolCatalog.kt` with short
 routing-style descriptions. Tool calling is manual (`automaticToolCalling = false`): the runtime
 reports a call, and `ToolLoop` hands it to `ToolExecutor`, which validates the arguments, ignores
 a repeat of the same call within two minutes, applies it and its TOOL-row record in one
@@ -284,17 +284,20 @@ alarm is either one-off within the next 24 hours or repeating on days of the wee
 is refused and the model offers a reminder. For alarms a bare hour means whichever comes first —
 "5:30" set at night is 5:30 AM — rather than the daytime rule reminders use.
 
-Routing is measured, not assumed: `RoutingEvalTest` runs 34 requests — reminders, reschedules,
-facts, events, Hinglish, and negatives that must not save anything — through the real model. On
-the target phone it has scored 102/102 at temperature 1.0 (three samples each); on 25 Sep 2026 it
-scored 33/34 at both 1.0 and 0.7, with and without `remember_image` alike — the miss being the
-hypothetical "if I had a dentist, what should I ask them?", saved as a fact. The tool declarations
-cost 809 tokens (698 before `remember_image`).
+Routing is measured, not assumed: `RoutingEvalTest` sends 62 requests — reminders, reschedules,
+facts, events, calls, messages, timers, apps, settings, sums, web lookups, and negatives that must
+not call anything — through the real model with the real instructions and all 16 declarations,
+three times each with seeds 0–2 (`-e samples 3`). On 26 Sep 2026 it scored 171/186 counting the
+calls `ToolCallRepair` fixes (165 without): positives 144/147, negatives 27/39. The misses: "I live
+in Bengaluru" answered as a bracketed note instead of `save_fact`, and, with web search on, four
+general or personal questions ("what is WhatsApp?") looked up online — harmless but a credit
+each. The declarations cost 1,371 tokens and the instructions 627 (809 and 520 with 9 tools).
 
 ### Everyday tools
 
-`call`, `send_message`, `set_timer`, `open_app`, `phone_setting` and `calculate`
-(`memory/tools/DeviceTools.kt`, Android side in `device/`):
+`phone_call`, `send_message`, `set_timer`, `open_app`, `phone_setting` and `calculate`
+(`memory/tools/DeviceTools.kt`, Android side in `device/`). The first is not called `call`:
+Gemma writes a tool call as `call:<name>{…}`, and the runtime could not parse `call:call`.
 
 - **Calls and messages are prepared, never placed or sent.** "Call amma" opens the dialer with her
   number; "WhatsApp Priya I'm late" opens WhatsApp with the text written (SMS and email the same).
@@ -320,10 +323,40 @@ cost 809 tokens (698 before `remember_image`).
   panel opens and the model says so.
 - **calculate** is a small exact evaluator (`Calculator.kt`): `+ - * / ^`, brackets, `18% of
   2450`, `sqrt`, and Indian digit grouping. A 4B model's multi-digit arithmetic is not reliable.
+  It also converts units (`Units.kt`): "5 miles in km", "98.6 f to c", "1200 sq ft in sq m",
+  "2 cups in ml" — length, weight, volume, area (acres, hectares, cents), speed, time, data and
+  temperature.
+
+### Web search
+
+`web_lookup` looks things up through Tavily with the user's own API key, pasted in under "Web
+search" in the drawer (free plan: 1,000 searches a month; a basic search is one credit). The key
+is stored encrypted with a key held in the Android Keystore (`SecretStore`). Until there is a key
+the tool isn't declared at all and costs no context; adding or removing it rebuilds the
+conversation when the chat is next idle.
+
+Only the search words the model writes leave the phone. The answer and the top three results
+come back cut to about 350 tokens, inside what the budget keeps for tool rounds; the model
+answers from them and names the site, and the chip under the reply opens the top source. Being
+offline, a refused key and a used-up plan each come back as a plain error the model passes on.
 
 Opening another app's screen only works while this app is in front, so each tool checks and
 tells the model when it isn't. A repeat of the same device call within 15 seconds is ignored (a
 model that repeats itself mustn't open the dialer twice); a minute later it is a real request.
+
+Now and then the model slips in the call format — a key left out
+(`call:add_task{title:<|"|>Renew passport<|"|>, next month<|"|>}`) or quoted with its value
+(`<|"|>to:landlord<|"|>`) — and the runtime rejects the call ("Failed to parse tool calls from code
+block: …"). The rejected text is in the error, so `ToolCallRepair` reads it leniently, into a
+declared tool with declared parameters only (a value with no key goes to the first parameter still
+unset). A repaired call to a tool that acts — a reminder, fact, message, timer, setting — is carried
+out as usual, chip and undo included, and confirmed with "Done."; the live conversation is then
+dropped, since the runtime never recorded that turn, and the next message rebuilds it from what is
+stored. Anything else unreadable — a lookup, or a repair that fails validation — is sent once more
+with a new seed, before anything is shown.
+Constrained decoding (`enableConversationConstrainedDecoding`) would prevent unreadable calls
+outright, but measured on the phone it made the first token 2.7× slower and the model stopped
+filling optional arguments like `repeat`, so it is off.
 
 Note that the model file reports `supportsFunctionCalling = false`; native tool calls work
 regardless (measured in `EngineProbeTest.toolCalling`), so the flag is not trusted.

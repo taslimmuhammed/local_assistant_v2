@@ -43,8 +43,27 @@ class ToolRoutingTest {
     )
     private val people = mutableMapOf<String, PersonHints>()
     private val device = DeviceTools(phone, { contacts }, { who -> people[who] ?: PersonHints.NONE }, clock, now = { now })
-    private val executor = ToolExecutor(store, reminders, clock, log, now = { now }, memoryPaused = { paused }, images = images, device = device)
-    private val loop = ToolLoop(executor, maxRounds = 3, isOverflow = { "too long" in it.message.orEmpty() })
+    private val web = object : WebSearch {
+        var searched = mutableListOf<Pair<String, Boolean>>()
+        var failure: String? = null
+        override val enabled = true
+        override suspend fun search(query: String, news: Boolean): WebResults {
+            failure?.let { throw WebSearchError(it) }
+            searched += query to news
+            return WebResults(
+                answer = "It is 29°C and humid in Kochi. " + "More detail. ".repeat(80),
+                results = List(5) { WebResult("Result $it", "https://www.site$it.com/page", "Snippet $it " + "words ".repeat(100)) },
+            )
+        }
+    }
+    private val executor = ToolExecutor(store, reminders, clock, log, now = { now }, memoryPaused = { paused }, images = images, device = device, web = WebTools(web))
+    private val loop = ToolLoop(
+        executor,
+        maxRounds = 3,
+        isOverflow = { "too long" in it.message.orEmpty() },
+        isUnreadable = { "Failed to parse tool calls" in it.message.orEmpty() },
+        repair = com.local.assistant.llm.ToolCallRepair(ToolCatalog.declarations(web = true))::repair,
+    )
     private val context = ToolContext(chatId = 1, userMessageId = 10)
 
     private fun call(name: String, vararg args: Pair<String, Any?>) = ToolCall(name, mapOf(*args))
@@ -376,6 +395,38 @@ class ToolRoutingTest {
     }
 
     @Test
+    fun `an unreadable first tool call is reported for a retry, one after a tool round is not`() {
+        val unreadable = listOf(GenEvent.Error(IllegalStateException("Status Code: 3. Message: Failed to parse tool calls")))
+        val first = ScriptedSession(ArrayDeque(listOf(unreadable)))
+        assertEquals(listOf(LoopEvent.Unreadable), runBlocking { loop.run(first, "envelope", null, context).toList() })
+
+        // The first round already ran a tool: trying the whole turn again would run it twice.
+        val later = ScriptedSession(ArrayDeque(listOf(ScriptedSession.calls(call("calculate", "expression" to "2+2")), unreadable)))
+        val thrown = runCatching { runBlocking { loop.run(later, "envelope", null, context).toList() } }.exceptionOrNull()
+        assertTrue(thrown?.message.orEmpty().contains("Failed to parse"))
+    }
+
+    @Test
+    fun `a call that only slipped in its format is carried out and confirmed, and the conversation rebuilt`() {
+        val slipped = listOf(GenEvent.Error(IllegalStateException("Failed to parse tool calls from code block: call:add_task{title:<|\"|>Renew passport<|\"|>, next month<|\"|>}")))
+        val events = runBlocking { loop.run(ScriptedSession(ArrayDeque(listOf(slipped))), "envelope", null, context).toList() }
+        val task = store.tasks.values.single()
+        assertEquals("Renew passport", task.title)
+        assertEquals(LoopEvent.Text("Done."), events.filterIsInstance<LoopEvent.Text>().single())
+        assertTrue(events.last().let { it is LoopEvent.Done && it.staleConversation })
+        assertEquals(MemoryChip.Kind.TASK, events.filterIsInstance<LoopEvent.Memory>().single().chip.kind)
+    }
+
+    @Test
+    fun `a slipped call that only looks something up, or that fails, is retried instead`() {
+        val lookup = listOf(GenEvent.Error(IllegalStateException("Failed to parse tool calls from code block: call:calculate{<|\"|>2+2<|\"|>}")))
+        assertEquals(listOf(LoopEvent.Unreadable), runBlocking { loop.run(ScriptedSession(ArrayDeque(listOf(lookup))), "envelope", null, context).toList() })
+        val badTime = listOf(GenEvent.Error(IllegalStateException("Failed to parse tool calls from code block: call:add_task{title:<|\"|>Call mom<|\"|>, more often}")))
+        assertEquals(listOf(LoopEvent.Unreadable), runBlocking { loop.run(ScriptedSession(ArrayDeque(listOf(badTime))), "envelope", null, context).toList() })
+        assertTrue(store.tasks.isEmpty())
+    }
+
+    @Test
     fun `without exact alarms the chip says it may be late`() {
         reminders.exact = false
         val (_, events) = turn(call("add_task", "title" to "Call the CA", "when" to "tomorrow at 11"))
@@ -567,5 +618,39 @@ class ToolRoutingTest {
         now = now.plusMinutes(1)
         turn(call("phone_call", "who" to "amma"))
         assertEquals(2, phone.done.size)
+    }
+
+    // ---- Web search ----
+
+    @Test
+    fun `web search returns a short answer and three sources, and the chip opens the top one`() {
+        val (session, events) = turn(call("web_lookup", "query" to "weather in Kochi today"))
+        assertEquals(listOf("weather in Kochi today" to false), web.searched)
+        val json = session.sentResults.first().single().json
+        assertTrue("fits the tool-round budget: ${json.length} chars", json.length < 1_600)
+        val sources = result(session)["sources"] as List<*>
+        assertEquals(3, sources.size)
+        assertEquals("site0.com", (sources[0] as Map<*, *>)["site"])
+        val chip = events.filterIsInstance<LoopEvent.Memory>().single().chip
+        assertEquals(MemoryChip.Kind.WEB, chip.kind)
+        assertEquals("https://www.site0.com/page", chip.link)
+    }
+
+    @Test
+    fun `news goes as news, and failures reach the model as errors`() {
+        turn(call("web_lookup", "query" to "ISRO launch", "topic" to "news"))
+        assertEquals(listOf("ISRO launch" to true), web.searched)
+        web.failure = "The phone may be offline."
+        val (session, _) = turn(call("web_lookup", "query" to "IPL score"))
+        assertTrue(error(session).contains("offline"))
+    }
+
+    @Test
+    fun `web search is declared, and its rule given, only when it is set up`() {
+        assertFalse(ToolCatalog.declarations(web = false).any { "\"web_lookup\"" in it })
+        assertTrue(ToolCatalog.declarations(web = true).any { "\"web_lookup\"" in it })
+        assertFalse("web_lookup" in ToolCatalog.rules(web = false))
+        assertTrue("web_lookup" in ToolCatalog.rules(web = true))
+        assertFalse("{web}" in ToolCatalog.rules(web = false))
     }
 }

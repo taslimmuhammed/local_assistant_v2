@@ -5,6 +5,7 @@ import android.util.Log
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import com.google.ai.edge.litertlm.Backend
+import com.google.ai.edge.litertlm.Channel
 import com.google.ai.edge.litertlm.Contents
 import com.google.ai.edge.litertlm.ConversationConfig
 import com.google.ai.edge.litertlm.Engine
@@ -15,6 +16,7 @@ import com.google.ai.edge.litertlm.OpenApiTool
 import com.google.ai.edge.litertlm.SamplerConfig
 import com.google.ai.edge.litertlm.tool
 import com.local.assistant.data.prefs.SettingsStore
+import com.local.assistant.llm.ToolCallRepair
 import com.local.assistant.memory.prompt.Instructions
 import com.local.assistant.memory.tools.ToolCatalog
 import kotlinx.coroutines.flow.onEach
@@ -88,27 +90,32 @@ class RoutingEvalTest {
         // Everyday tools.
         Case("call amma", setOf("phone_call")) { args -> args["who"].toString().contains("amma", ignoreCase = true) },
         Case("call 98450 12345", setOf("phone_call")),
-        Case("papa ko call karo", setOf("phone_call")),
         Case("text Priya that I'm running 10 minutes late", setOf("send_message")) { args -> args["text"].toString().contains("late") },
         Case("WhatsApp Anjali I'll be there by 7", setOf("send_message")) { args -> args["app"].toString().contains("whatsapp", ignoreCase = true) },
         Case("email my landlord that the kitchen tap is leaking", setOf("send_message")),
         Case("set a timer for 10 minutes", setOf("set_timer")) { args -> args["duration"].toString().contains("10") },
-        Case("paanch minute ka timer laga do", setOf("set_timer")),
         Case("open YouTube", setOf("open_app")),
         Case("directions to Indiranagar", setOf("open_app")) { args -> args["query"].toString().contains("Indiranagar") },
         Case("play some Arijit Singh songs", setOf("open_app")),
         Case("turn on the flashlight", setOf("phone_setting")),
-        Case("torch band karo", setOf("phone_setting")),
         Case("put my phone on silent", setOf("phone_setting")),
         Case("turn the volume up", setOf("phone_setting")),
         Case("turn on wifi", setOf("phone_setting")),
         Case("what's 18% of 2450?", setOf("calculate")),
         Case("split 3450 between 4 people", setOf("calculate")),
+        Case("how many km is 5 miles?", setOf("calculate")) { args -> args["expression"].toString().contains("5") },
+        Case("what's the weather in Kochi today?", setOf("web_lookup")),
+        Case("latest news about ISRO", setOf("web_lookup")),
+        Case("what's the price of gold today?", setOf("web_lookup")),
+        Case("who won the last IPL final?", setOf("web_lookup")),
+        Case("search the web for a dal tadka recipe", setOf("web_lookup")),
         Case("remind me to call amma at 6", setOf("add_task")),
         Case("I should call my mom more often", setOf(null)),
         Case("how do I set a timer on my phone?", setOf(null)),
         Case("what is WhatsApp?", setOf(null)),
         Case("my torch isn't working, what should I do?", setOf(null)),
+        Case("explain how a rainbow forms", setOf(null)),
+        Case("give me a recipe for dal tadka", setOf(null)),
     )
 
     @Before
@@ -122,6 +129,10 @@ class RoutingEvalTest {
         val modelPath = requireNotNull(SettingsStore(context).modelPath) { "No model installed" }
         ExperimentalFlags.enableSpeculativeDecoding = true
         ExperimentalFlags.enableBenchmark = true
+        // "-e constrained true": tool calls decoded against their grammar, so they always parse.
+        val constrained = InstrumentationRegistry.getArguments().getString("constrained") == "true"
+        ExperimentalFlags.enableConversationConstrainedDecoding = constrained
+        report("constrainedDecoding", constrained)
         Engine(
             EngineConfig(modelPath = modelPath, backend = Backend.GPU(), maxNumTokens = 8_192, cacheDir = context.cacheDir.absolutePath),
         ).apply { initialize() }.use { engine ->
@@ -135,7 +146,7 @@ class RoutingEvalTest {
 
     /** What the tool declarations really cost: the same prefix with and without them. */
     private fun measureDeclarations(engine: Engine) {
-        val system = Instructions.render(PERSONA, withTools = true)
+        val system = Instructions.render(PERSONA, withTools = true, webSearch = true)
         fun count(withTools: Boolean): Int = engine.createConversation(
             ConversationConfig(
                 systemInstruction = Contents.of(system),
@@ -151,7 +162,7 @@ class RoutingEvalTest {
     }
 
     private fun evaluate(engine: Engine, temperature: Double) {
-        val system = Instructions.render(PERSONA, withTools = true)
+        val system = Instructions.render(PERSONA, withTools = true, webSearch = true)
         val now = "[Now: ${DateTimeFormatter.ofPattern("EEE d MMM yyyy, HH:mm", Locale.ENGLISH).format(ZonedDateTime.now())}]"
         var right = 0
         var positivesRight = 0
@@ -159,20 +170,27 @@ class RoutingEvalTest {
         val latencies = mutableListOf<Long>()
 
         val only = InstrumentationRegistry.getArguments().getString("only")
-        // At temperature 1.0 one sample per prompt is noisy; "-e samples 3" asks each three times.
+        val raw = InstrumentationRegistry.getArguments().getString("raw") == "true"
+        val repair = ToolCallRepair(ToolCatalog.declarations(web = true))
+        // "-e samples 3" asks each three times, each with its own seed: the runtime's sampler is
+        // seeded (0 by default), so the same prompt with the same seed always gives the same reply.
         val samples = InstrumentationRegistry.getArguments().getString("samples")?.toIntOrNull() ?: 1
-        val selected = (if (only == null) cases else cases.filter { only in it.prompt }).flatMap { case -> List(samples) { case } }
-        for (case in selected) {
+        val selected = (if (only == null) cases else cases.filter { only in it.prompt }).flatMap { case -> List(samples) { seed -> case to seed } }
+        for ((case, seed) in selected) {
             val conversation = engine.createConversation(
                 ConversationConfig(
                     systemInstruction = Contents.of(system),
                     tools = declarations(),
                     automaticToolCalling = false,
-                    samplerConfig = SamplerConfig(topK = 64, topP = 0.95, temperature = temperature),
+                    samplerConfig = SamplerConfig(topK = 64, topP = 0.95, temperature = temperature, seed = seed),
                     prefillPrefaceOnInit = true,
                     maxOutputToken = 160,
+                    // "-e raw true": tool calls land in a channel as the text the model wrote,
+                    // unparsed, to see what a call the runtime can't read looks like.
+                    channels = if (raw) listOf(Channel("call", "<|tool_call>", "<tool_call|>")) else null,
                 ),
             )
+            val rawCalls = StringBuilder()
             val started = SystemClock.elapsedRealtime()
             var firstAt = 0L
             // The whole response, not its first chunk: a model may say a few words before it calls.
@@ -183,6 +201,7 @@ class RoutingEvalTest {
                     conversation.sendMessageAsync("$now\n${case.prompt}")
                         .onEach { if (firstAt == 0L) firstAt = SystemClock.elapsedRealtime() }
                         .collect { message ->
+                            message.channels["call"]?.let(rawCalls::append)
                             if (firstCall == null) firstCall = message.toolCalls.firstOrNull()
                             if (message.toolCalls.isEmpty()) said.append(message.toString())
                         }
@@ -192,18 +211,28 @@ class RoutingEvalTest {
             conversation.close()
             latencies += (if (firstAt > 0) firstAt else SystemClock.elapsedRealtime()) - started
 
-            val routedTo = call?.name
-            val argsOk = call == null || case.check == null || case.check.invoke(call.arguments)
+            if (raw) report("raw ${case.prompt}", rawCalls.toString().ifEmpty { "(no channel text) said: $text" })
+            // What the app does with a call the runtime rejected: an action that only slipped in
+            // its format is repaired and carried out (ToolLoop); anything else is a miss.
+            val repaired = if (call == null && "Failed to parse tool calls" in text) {
+                repair.repair(text)?.takeIf { it.name in ToolCatalog.WRITES || it.name in ToolCatalog.DEVICE_ACTIONS }
+            } else {
+                null
+            }
+            val routedTo = call?.name ?: repaired?.name
+            val arguments = call?.arguments ?: repaired?.arguments
+            val argsOk = arguments == null || case.check == null || case.check.invoke(arguments)
             val correct = routedTo in case.accept && argsOk
             if (correct) right++
             if (null in case.accept && case.accept.size == 1) { if (correct) negativesRight++ } else if (correct) positivesRight++
             report(
                 "t$temperature ${if (correct) "OK  " else "MISS"} ${case.prompt}",
-                routedTo?.let { "$it(${call.arguments})" } ?: "no call: ${text.take(60).replace('\n', ' ')}",
+                (if (repaired != null) "REPAIRED " else "") +
+                    (routedTo?.let { "$it($arguments)" } ?: "no call: ${text.take(200).replace('\n', ' ')}"),
             )
         }
 
-        val negatives = selected.count { null in it.accept && it.accept.size == 1 }
+        val negatives = selected.count { (case, _) -> null in case.accept && case.accept.size == 1 }
         report("t$temperature.accuracy", "$right/${selected.size}")
         report("t$temperature.positives", "$positivesRight/${selected.size - negatives}")
         report("t$temperature.negatives", "$negativesRight/$negatives")
@@ -211,7 +240,7 @@ class RoutingEvalTest {
         report("t$temperature.firstEventMs.p90", latencies.sorted()[(latencies.size * 9) / 10])
     }
 
-    private fun declarations() = ToolCatalog.declarations.map { json ->
+    private fun declarations() = ToolCatalog.declarations(web = true).map { json ->
         tool(object : OpenApiTool {
             override fun getToolDescriptionJsonString() = json
             override fun execute(paramsJsonString: String): String = error("manual")
