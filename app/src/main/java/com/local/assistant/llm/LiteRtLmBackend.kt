@@ -163,10 +163,9 @@ private class LiteRtChatSession(
         try {
             conversation.sendMessageAsync(
                 message,
-                repetitionPenaltyConfig = RepetitionPenaltyConfig(
-                    repetitionPenalty = settings.repetitionPenalty,
-                    windowSize = settings.repetitionWindow,
-                ),
+                repetitionPenaltyConfig = settings.repetitionPenalty.takeIf { it > 1f }?.let {
+                    RepetitionPenaltyConfig(repetitionPenalty = it, windowSize = settings.repetitionWindow)
+                },
             ).collect { chunk ->
                 if (chunk.toolCalls.isNotEmpty()) {
                     emit(GenEvent.ToolCalls(chunk.toolCalls.map { ToolCall(it.name, it.arguments) }))

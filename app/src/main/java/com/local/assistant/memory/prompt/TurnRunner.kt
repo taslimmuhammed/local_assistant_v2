@@ -6,6 +6,7 @@ import com.local.assistant.llm.GenStats
 import com.local.assistant.llm.PromptAttachment
 import com.local.assistant.memory.tools.LoopEvent
 import com.local.assistant.memory.tools.MemoryChip
+import com.local.assistant.memory.tools.NumberGrounding
 import com.local.assistant.memory.tools.ToolContext
 import com.local.assistant.memory.tools.ToolLoop
 import com.local.assistant.memory.work.ModelScheduler
@@ -52,6 +53,17 @@ class TurnRunner(
         userText: String,
         attachment: PromptAttachment? = null,
     ): Flow<TurnEvent> = flow {
+        // A message that is nothing but a sum is answered here: the model would only misread its
+        // digits (see NumberGrounding). The live conversation never saw the exchange, so it goes;
+        // the next message rebuilds it with this one in its history.
+        if (attachment == null) {
+            NumberGrounding.directAnswer(userText)?.let { answer ->
+                conversations.forget(chatId)
+                emit(TurnEvent.Text(answer))
+                emit(TurnEvent.Done(null))
+                return@flow
+            }
+        }
         scheduler.runUser {
             var retried = false
             var reseeded = false
@@ -62,7 +74,7 @@ class TurnRunner(
                 val reply = StringBuilder()
                 // A saved image the message is about is looked at again, as if sent with it.
                 val sent = attachment ?: turn.recalledImage?.let { PromptAttachment(it, AttachmentKind.IMAGE) }
-                tools.run(turn.session, turn.envelope.text, sent, ToolContext(chatId, userMessageId)).collect { event ->
+                tools.run(turn.session, turn.envelope.text, sent, ToolContext(chatId, userMessageId, userText)).collect { event ->
                     when (event) {
                         is LoopEvent.Text -> {
                             reply.append(event.delta)

@@ -38,6 +38,32 @@ object ChunkPolicy {
         return if (answer == null) "User: $question" else "User: $question\nAssistant: $answer"
     }
 
+    /** Marks an exchange deliberately left out: a sum, or working the phone. Empty, never embedded. */
+    const val SKIPPED = "skipped"
+
+    /** Tools whose turns hold nothing about the user worth recalling. */
+    val UTILITY_TOOLS = setOf("calculate", "set_timer", "open_app", "phone_setting")
+
+    /**
+     * Whether an exchange is left out of the archive: all it did was work something out or work
+     * the phone. Such turns hold nothing about the user, and they do harm when recalled — every
+     * sum looks like every other sum, so old ones were recalled beside a new one, and the model
+     * mixed their digits into it ("256 × 4" came back as "2*5*4"). A sum answered without the tool
+     * counts too; any other tool makes it a turn worth keeping.
+     */
+    fun isUtility(userText: String, tools: Collection<String>): Boolean =
+        tools.all { it in UTILITY_TOOLS } && (tools.isNotEmpty() || looksLikeArithmetic(userText))
+
+    private fun looksLikeArithmetic(text: String): Boolean {
+        val lower = text.lowercase()
+        return lower.any(Char::isDigit) && QueryText.words(lower).size <= ARITHMETIC_MAX_WORDS && ARITHMETIC.containsMatchIn(lower)
+    }
+
+    private const val ARITHMETIC_MAX_WORDS = 12
+
+    /** Operators and their words. Not "-", "/" or "%": dates, times and ranges use them too. */
+    private val ARITHMETIC = Regex("[+*×÷^=]|\\b(plus|minus|times|multiplied|divided|square root|sqrt|squared|cubed)\\b")
+
     /** Trivial exchanges are stored and keyword-searchable, but not embedded. */
     fun shouldEmbed(userText: String): Boolean = !QueryText.isTrivial(userText)
 

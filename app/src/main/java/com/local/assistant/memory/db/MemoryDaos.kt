@@ -346,6 +346,14 @@ interface ChunkDao {
     )
     suspend fun unchunkedUserMessages(after: Long, before: Long, limit: Int): List<MessageEntity>
 
+    /** The tool records of the turn between [afterId] and [beforeId]: the JSON of each call. */
+    @Query("SELECT text FROM messages WHERE chatId = :chatId AND id > :afterId AND id < :beforeId AND role = 'TOOL' ORDER BY id")
+    suspend fun toolRecordsBetween(chatId: Long, afterId: Long, beforeId: Long): List<String>
+
+    /** Chunks that still hold an exchange, for re-checking them against [ChunkPolicy]. */
+    @Query("SELECT * FROM chunks WHERE modelId IS NULL OR modelId NOT IN ('forgotten', 'skipped')")
+    suspend fun liveChunks(): List<ChunkEntity>
+
     /** The turn after [afterId] in its chat, skipping tool records: a reply, or the next question. */
     @Query("SELECT * FROM messages WHERE chatId = :chatId AND id > :afterId AND role != 'TOOL' ORDER BY id LIMIT 1")
     suspend fun nextTurn(chatId: Long, afterId: Long): MessageEntity?

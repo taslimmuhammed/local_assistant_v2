@@ -61,8 +61,11 @@ data class ToolRecord(
     val undone: Boolean = false,
 )
 
-/** Where a tool call happens: which chat, and the user message that asked for it. */
-data class ToolContext(val chatId: Long, val userMessageId: Long)
+/**
+ * Where a tool call happens: which chat, and the user message that asked for it. [userText] is
+ * that message as typed, which numbers in the call's arguments are checked against.
+ */
+data class ToolContext(val chatId: Long, val userMessageId: Long, val userText: String = "")
 
 /** Persists tool calls as TOOL rows in the chat. */
 interface ToolLog {

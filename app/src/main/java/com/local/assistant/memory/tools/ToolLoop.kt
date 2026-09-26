@@ -110,6 +110,7 @@ class ToolLoop(
             }
 
             rounds++
+            val sums = mutableListOf<String>()
             val results = calls.map { call ->
                 if (rounds > maxRounds) {
                     ToolResult(call.name, LIMIT_REACHED)
@@ -117,14 +118,29 @@ class ToolLoop(
                     val outcome = executor.execute(call, context)
                     changedPrefix = changedPrefix || outcome.changedPrefix
                     if (outcome.chip != null && outcome.recordId != null) emit(LoopEvent.Memory(outcome.recordId, outcome.chip))
+                    if (call.name == ToolCatalog.CALCULATE && outcome.ok) answerOf(outcome.result)?.let(sums::add)
                     ToolResult(call.name, outcome.result)
                 }
+            }
+            // Only sums, all worked out: the reply is the result itself, written here. The model
+            // would only restate it, and past token 2,048 it can't be trusted to copy the digits
+            // (see NumberGrounding). The runtime never hears the results, so rebuild next turn.
+            if (sums.isNotEmpty() && sums.size == calls.size) {
+                emit(LoopEvent.Text((if (spoke) "\n" else "") + sums.joinToString("\n")))
+                emit(LoopEvent.Done(stats, changedPrefix, rounds, staleConversation = true))
+                return@flow
             }
             reply = session.sendToolResults(results)
         }
     }
 
+    private fun answerOf(json: String): String? = runCatching {
+        val result = gson.fromJson(json, Map::class.java)
+        Calculator.answer(result["expression"] as String, result["result"] as String)
+    }.getOrNull()
+
     companion object {
+        private val gson = com.google.gson.Gson()
         const val REPAIRED_REPLY = "Done."
         const val LIMIT_REACHED = """{"ok":false,"error":"Tool limit reached for this message. Answer the user now."}"""
     }

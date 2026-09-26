@@ -1,5 +1,6 @@
 package com.local.assistant.memory.tools
 
+import android.util.Log
 import com.google.gson.Gson
 import com.local.assistant.llm.ToolCall
 import com.local.assistant.memory.core.FactDecision
@@ -89,7 +90,9 @@ class ToolExecutor(
     /** Recent successful calls: when each stops counting as a repeat, and what it returned. */
     private val recent = LinkedHashMap<String, Pair<Long, Outcome>>()
 
-    suspend fun execute(call: ToolCall, context: ToolContext): Outcome {
+    suspend fun execute(model: ToolCall, context: ToolContext): Outcome {
+        val call = grounded(model, context.userText)
+        if (call != model) Log.i(TAG, "Numbers in ${model.name} taken from the user's words: ${model.arguments} -> ${call.arguments}")
         val nowMs = nowMs()
         val key = dedupeKey(call)
         recentMutex.withLock {
@@ -131,6 +134,22 @@ class ToolExecutor(
         }
         if (ok && window > 0) recentMutex.withLock { recent[key] = (nowMs + window) to outcome }
         return outcome
+    }
+
+    /**
+     * The call with every number the model mis-copied from the user's message put back (see
+     * [NumberGrounding]). What an image showed is left alone: its numbers were never the user's.
+     */
+    private fun grounded(call: ToolCall, userText: String): ToolCall {
+        if (userText.isBlank() || call.name == ToolCatalog.REMEMBER_IMAGE) return call
+        val arguments = call.arguments.mapValues { (key, value) ->
+            when {
+                value !is String -> value
+                call.name == ToolCatalog.CALCULATE && key == "expression" -> NumberGrounding.groundExpression(value, userText)
+                else -> NumberGrounding.ground(value, userText)
+            }
+        }
+        return if (arguments == call.arguments) call else call.copy(arguments = arguments)
     }
 
     private suspend fun device(call: ToolCall): Applied {
@@ -716,6 +735,7 @@ class ToolExecutor(
     private fun modelDate(at: ZonedDateTime): String = MODEL_DATE.format(at)
 
     companion object {
+        private const val TAG = "ToolExecutor"
         const val DEDUPE_WINDOW_MS = 2 * 60 * 1000L
         const val DEVICE_DEDUPE_WINDOW_MS = 15 * 1000L
         private const val MAX_FACT_LENGTH = 300

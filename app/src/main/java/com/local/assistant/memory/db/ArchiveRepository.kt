@@ -40,11 +40,15 @@ class ArchiveRepository(
     suspend fun recordExchange(userMessageId: Long): Boolean = transaction {
         val user = messages.message(userMessageId)?.takeIf { it.role == Role.USER && !it.offRecord } ?: return@transaction false
         val reply = chunks.nextTurn(user.chatId, user.id)?.takeIf { it.role == Role.ASSISTANT }
-        val text = ChunkPolicy.text(user.text, user.attachmentKind, reply?.text) ?: return@transaction false
-        val marker = if (ChunkPolicy.shouldEmbed(user.text)) null else ChunkPolicy.NOT_EMBEDDED
         val existing = chunks.forMessage(user.id)
         // Forgotten on purpose: an edit to the exchange must not bring it back.
         if (existing?.modelId == ChunkPolicy.FORGOTTEN) return@transaction false
+        if (ChunkPolicy.isUtility(user.text, toolsOf(user.chatId, user.id, reply?.id))) {
+            skip(existing, user.id, user.chatId, user.sessionId, user.createdAt)
+            return@transaction false
+        }
+        val text = ChunkPolicy.text(user.text, user.attachmentKind, reply?.text) ?: return@transaction false
+        val marker = if (ChunkPolicy.shouldEmbed(user.text)) null else ChunkPolicy.NOT_EMBEDDED
         when {
             existing == null -> chunks.insert(
                 ChunkEntity(
@@ -62,6 +66,40 @@ class ArchiveRepository(
             }
         }
         marker == null
+    }
+
+    /** The tools the turn after [userId] called, by name. */
+    private suspend fun toolsOf(chatId: Long, userId: Long, replyId: Long?): List<String> =
+        chunks.toolRecordsBetween(chatId, userId, replyId ?: Long.MAX_VALUE)
+            .mapNotNull { TOOL_NAME.find(it)?.groupValues?.get(1) }
+
+    /** An empty, never-embedded chunk: marks the exchange as seen, so the backfill leaves it be. */
+    private suspend fun skip(existing: ChunkEntity?, messageId: Long, chatId: Long, sessionId: Long?, createdAt: Long) {
+        if (existing == null) {
+            chunks.insert(ChunkEntity(messageId = messageId, chatId = chatId, sessionId = sessionId, text = "", modelId = ChunkPolicy.SKIPPED, createdAt = createdAt))
+        } else if (existing.modelId != ChunkPolicy.SKIPPED) {
+            chunks.replaceText(existing.id, "", ChunkPolicy.SKIPPED)
+            index.remove(listOf(existing.id))
+        }
+    }
+
+    /**
+     * Takes out of the archive the exchanges [ChunkPolicy.isUtility] now leaves out, archived
+     * before it did. Once per rule version; returns how many went.
+     */
+    suspend fun dropUtilityExchanges(): Int {
+        if (state.get(KEY_UTILITY_CLEANUP) == UTILITY_CLEANUP_VERSION) return 0
+        var dropped = 0
+        for (chunk in chunks.liveChunks()) {
+            val user = messages.message(chunk.messageId) ?: continue
+            val reply = chunks.nextTurn(user.chatId, user.id)?.takeIf { it.role == Role.ASSISTANT }
+            if (ChunkPolicy.isUtility(user.text, toolsOf(user.chatId, user.id, reply?.id))) {
+                transaction { skip(chunk, chunk.messageId, chunk.chatId, chunk.sessionId, chunk.createdAt) }
+                dropped++
+            }
+        }
+        state.put(AppStateEntity(KEY_UTILITY_CLEANUP, UTILITY_CLEANUP_VERSION))
+        return dropped
     }
 
     /**
@@ -202,5 +240,8 @@ class ArchiveRepository(
         const val TAG = "Archive"
         const val KEY_MODEL = "archive.embedding_model"
         const val BACKFILL_BATCH = 200
+        const val KEY_UTILITY_CLEANUP = "archive.utility_cleanup"
+        const val UTILITY_CLEANUP_VERSION = "1"
+        val TOOL_NAME = Regex("\"tool\"\\s*:\\s*\"([a-z_]+)\"")
     }
 }

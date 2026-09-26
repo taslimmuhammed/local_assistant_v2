@@ -63,4 +63,13 @@ class CalculatorTest {
     fun `units of different kinds do not convert`() {
         assertThrows(Calculator.Error::class.java) { Calculator.run("5 kg in km") }
     }
+
+    @Test
+    fun `the reply shows the sum with its answer`() {
+        assertEquals("256 × 4 = 1024", Calculator.answer("256*4", "1024"))
+        assertEquals("√25 = 5", Calculator.answer("sqrt 25", "5"))
+        assertEquals("18% of 2450 = 441", Calculator.answer("18 % of 2450", "441"))
+        assertEquals("3450 ÷ 4 = 862.5", Calculator.answer("3450/4", "862.5"))
+        assertEquals("5 mi = 8.04672 km", Calculator.answer("5 miles in km", "8.04672 km"))
+    }
 }

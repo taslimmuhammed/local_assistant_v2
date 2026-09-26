@@ -127,7 +127,7 @@ class DeviceTools(
         } catch (e: Calculator.Error) {
             throw ToolError(e.message.orEmpty())
         }
-        return ActionResult(ok("result" to result))
+        return ActionResult(ok("expression" to expression, "result" to result))
     }
 
     // ---- Settings ----

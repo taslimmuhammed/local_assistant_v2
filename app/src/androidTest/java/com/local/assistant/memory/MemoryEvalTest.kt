@@ -265,4 +265,295 @@ class MemoryEvalTest {
         }
         Unit
     }
+
+    /** Numbers copied from the question, with and without the repetition penalty. */
+    @Test
+    fun numbersAreCopiedExactly() = runBlocking {
+        enabled()
+        check(container.llmBackend.ensureReady())
+        val settings = container.settings
+        val original = settings.repetitionPenalty
+        val questions = InstrumentationRegistry.getArguments().getString("question")?.let { listOf(it) }
+            ?: listOf(
+                "whats 25 * 2", "what is root of 25", "what is 25+25", "what's 1234 plus 4321",
+                // Not only a sum: these go to the model, and its expression is grounded.
+                "split 3450 between 4 people", "I spent 1250 on food and 875 on travel, what's the total?",
+            )
+        val penalties = listOf(original)
+        try {
+            for (penalty in penalties) {
+                settings.repetitionPenalty = penalty
+                for (question in questions) {
+                    val chat = container.chatRepository.createChat("numbers eval")
+                    try {
+                        val (reply, _) = turn(chat, question)
+                        val calls = container.chatRepository.messagesFor(chat).filter { it.role == Role.TOOL }.map { it.text.substringAfter("\"arguments\":").substringBefore(",\"result\"") }
+                        report("penalty $penalty | $question -> ${calls.joinToString()} | ${reply.take(120).replace('\n', ' ')}")
+                    } finally {
+                        container.chatRepository.deleteChat(chat)
+                    }
+                }
+            }
+        } finally {
+            settings.repetitionPenalty = original
+        }
+        Unit
+    }
+
+    /** Where do the digits go? The app's backend, stripped down step by step. */
+    @Test
+    fun numbersProbe() = runBlocking {
+        enabled()
+        val backend = container.llmBackend
+        check(backend.ensureReady())
+        suspend fun ask(system: String, tools: List<String>, text: String): String = container.conversations.withModelFree {
+            backend.openChat(com.local.assistant.llm.ChatSpec(systemPrefix = system, history = emptyList(), toolDeclarations = tools, maxOutputTokens = 120)).use { chat ->
+                val out = StringBuilder()
+                chat.send(text).collect { event ->
+                    when (event) {
+                        is com.local.assistant.llm.GenEvent.TextDelta -> out.append(event.text)
+                        is com.local.assistant.llm.GenEvent.ToolCalls -> out.append("CALL ${event.calls}")
+                        is com.local.assistant.llm.GenEvent.Error -> out.append("ERROR ${event.cause.message}")
+                        else -> Unit
+                    }
+                }
+                out.toString().replace('\n', ' ').take(140)
+            }
+        }
+        val instructions = com.local.assistant.memory.prompt.Instructions.render("You are a helpful assistant.", withTools = true)
+        val tools = com.local.assistant.memory.tools.ToolCatalog.declarations(web = false)
+        for (q in listOf("what's 256 multiplied by 4", "what's square root of 25")) {
+            report("app instructions+tools | $q -> ${ask(instructions, tools, q)}")
+            report("bare, no tools | $q -> ${ask("You are a helpful assistant.", emptyList(), q)}")
+        }
+        report("echo | ${ask("You are a helpful assistant.", emptyList(), "Repeat exactly, nothing else: 256 1234 4321 25 98450")}")
+        report("complete echo | ${backend.complete("You are a helpful assistant.", "Repeat exactly, nothing else: 256 1234 4321 25 98450", maxTokens = 60).replace('\n', ' ')}")
+        Unit
+    }
+
+    /** Which part of the real system prompt makes the model drop digits? */
+    @Test
+    fun numbersBisect() = runBlocking {
+        enabled()
+        val backend = container.llmBackend
+        check(backend.ensureReady())
+        val memory = container.memoryRepository
+        val budget = com.local.assistant.memory.prompt.MemoryBudget.EIGHT_K
+        val zone = java.time.ZoneId.systemDefault()
+        val assembler = com.local.assistant.memory.prompt.PromptAssembler(budget, container.tokenEstimator, zone)
+        val instructions = com.local.assistant.memory.prompt.Instructions.render(container.settings.systemPrompt, withTools = true)
+        val core = memory.coreFacts()
+        val summary = memory.latestSessionSummary()?.let { com.local.assistant.memory.prompt.SummaryBlock(com.local.assistant.memory.prompt.SummaryBlock.Kind.LAST_SESSION, it) }
+        val agenda = memory.agenda(System.currentTimeMillis(), budget.agendaItems)
+        val tools = com.local.assistant.memory.tools.ToolCatalog.declarations(web = false)
+        val now = "[Now: " + java.time.format.DateTimeFormatter.ofPattern("EEE d MMM yyyy, HH:mm", java.util.Locale.ENGLISH).format(java.time.ZonedDateTime.now()) + "]\n"
+        fun prefix(withCore: Boolean, withSummary: Boolean, withAgenda: Boolean) = assembler.buildPrefix(
+            com.local.assistant.memory.prompt.PrefixInputs(
+                instructions, if (withCore) core else emptyList(), summary.takeIf { withSummary }, java.time.LocalDate.now(zone), if (withAgenda) agenda else emptyList(),
+            ),
+        ).text
+        suspend fun ask(system: String, text: String, prefill: Boolean, sampling: com.local.assistant.llm.Sampling = com.local.assistant.llm.Sampling.CHAT): String = container.conversations.withModelFree {
+            backend.openChat(com.local.assistant.llm.ChatSpec(systemPrefix = system, history = emptyList(), toolDeclarations = tools, sampling = sampling, maxOutputTokens = 60, prefillOnOpen = prefill)).use { chat ->
+                val out = StringBuilder()
+                chat.send(text).collect { event ->
+                    when (event) {
+                        is com.local.assistant.llm.GenEvent.TextDelta -> out.append(event.text)
+                        is com.local.assistant.llm.GenEvent.ToolCalls -> out.append(event.calls.joinToString { it.arguments.toString() })
+                        is com.local.assistant.llm.GenEvent.Error -> out.append("ERROR ${event.cause.message?.take(80)}")
+                        else -> Unit
+                    }
+                }
+                out.toString().replace('\n', ' ').take(if (InstrumentationRegistry.getArguments().getString("variants") == "speed") 40 else 70)
+            }
+        }
+        report("full prefix:\n" + prefix(true, true, true).takeLast(900))
+        val variants = listOf(
+            "full, prefilled" to Triple(prefix(true, true, true), true, now),
+            "full, not prefilled" to Triple(prefix(true, true, true), false, now),
+            "full, no Now line" to Triple(prefix(true, true, true), true, ""),
+            "no core" to Triple(prefix(false, true, true), true, now),
+            "no summary" to Triple(prefix(true, false, true), true, now),
+            "no agenda" to Triple(prefix(true, true, false), true, now),
+            "instructions only" to Triple(prefix(false, false, false), true, now),
+        )
+        val full = prefix(true, true, true)
+        val bare = prefix(false, false, false)
+        // Same length as the full prompt, no digits: is it the numbers or the length?
+        var padded = bare
+        val filler = "\nBe warm and plain in tone; avoid jargon, keep answers focused, and ask when something is unclear."
+        while (container.tokenEstimator.estimate(padded) < container.tokenEstimator.estimate(full)) padded += filler
+        val mode = InstrumentationRegistry.getArguments().getString("variants")
+        val questions = listOf("what is 25+25" to "25+25", "what's 256 multiplied by 4" to "256*4", "what's 1234 plus 4321" to "1234+4321")
+        if (mode == "mtp") {
+            suspend fun score(label: String) {
+                check(backend.ensureReady())
+                var right = 0
+                val wrong = mutableListOf<String>()
+                for (seed in 0..2) for ((q, expected) in questions) {
+                    val got = ask(full, now + q, true, com.local.assistant.llm.Sampling.CHAT.copy(seed = seed))
+                    if (got.replace(" ", "").contains(expected)) right++ else wrong += got
+                }
+                report("$label (${container.llmService.state.value}): $right/9 exact | wrong: ${wrong.joinToString(" ; ")}")
+            }
+            val settings = container.settings
+            val cpu = InstrumentationRegistry.getArguments().getString("cpu") == "true"
+            try {
+                if (cpu) settings.useGpu = false else settings.useSpeculativeDecoding = false
+                container.conversations.withModelFree { container.llmService.unload() }
+                score(if (cpu) "CPU" else "MTP off")
+            } finally {
+                settings.useGpu = true
+                settings.useSpeculativeDecoding = true
+                container.conversations.withModelFree { container.llmService.unload() }
+                check(backend.ensureReady())
+                report("restored: ${container.llmService.state.value}")
+            }
+            return@runBlocking
+        }
+        if (mode == "threshold") {
+            val bareInstructions = prefix(false, false, false)
+            val filler = "\nBe warm and plain in tone; avoid jargon, keep answers focused, and ask when something is unclear."
+            val probes = listOf("what is 25+25" to "25+25", "set an alarm for 6:35" to "6:35", "remind me to call the CA tomorrow at 11:45" to "11:45")
+            suspend fun sweep(label: String, padsList: List<Int>) {
+                check(backend.ensureReady())
+                for (pads in padsList) {
+                    val system = bareInstructions + filler.repeat(pads)
+                    var right = 0
+                    var tokens: Int? = null
+                    for ((q, expected) in probes) {
+                        val got = container.conversations.withModelFree {
+                            backend.openChat(com.local.assistant.llm.ChatSpec(systemPrefix = system, history = emptyList(), toolDeclarations = tools, maxOutputTokens = 40, prefillOnOpen = true)).use { chat ->
+                                if (tokens == null) tokens = chat.tokenCount()
+                                val out = StringBuilder()
+                                chat.send(now + q).collect { e -> if (e is com.local.assistant.llm.GenEvent.ToolCalls) out.append(e.calls.joinToString { it.arguments.toString() }) else if (e is com.local.assistant.llm.GenEvent.TextDelta) out.append(e.text) }
+                                out.toString()
+                            }
+                        }
+                        if (got.replace(" ", "").contains(expected)) right++
+                    }
+                    report("$label pads $pads: prefix $tokens tokens: $right/${probes.size}")
+                }
+            }
+            val sizes = (InstrumentationRegistry.getArguments().getString("sizes") ?: "8192").split(',').map { it.trim().toInt() }
+            val settings = container.settings
+            try {
+                for (size in sizes) {
+                    settings.manualContextTokens = if (size == 8192) 0 else size
+                    container.conversations.withModelFree { container.llmService.unload() }
+                    sweep("engine $size", listOf(4, 6, 7, 8, 9, 12))
+                }
+            } finally {
+                settings.manualContextTokens = 0
+                container.conversations.withModelFree { container.llmService.unload() }
+                check(backend.ensureReady())
+                report("restored: ${container.llmService.state.value}")
+            }
+            return@runBlocking
+        }
+        if (mode == "position") {
+            val bareInstructions = prefix(false, false, false)
+            val filler = "\nBe warm and plain in tone; avoid jargon, keep answers focused, and ask when something is unclear."
+            val probes = listOf("what is 25+25" to "25+25", "what's 1234 plus 4321" to "1234+4321", "set an alarm for 6:35" to "6:35", "remind me to call the CA tomorrow at 11:45" to "11:45", "call 98450 12345" to "9845012345")
+            for (pads in listOf(0, 10, 20, 40, 80)) {
+                val system = bareInstructions + filler.repeat(pads)
+                var right = 0
+                var tokens: Int? = null
+                val wrong = mutableListOf<String>()
+                for ((q, expected) in probes) {
+                    val got = container.conversations.withModelFree {
+                        backend.openChat(com.local.assistant.llm.ChatSpec(systemPrefix = system, history = emptyList(), toolDeclarations = tools, maxOutputTokens = 60, prefillOnOpen = true)).use { chat ->
+                            if (tokens == null) tokens = chat.tokenCount()
+                            val out = StringBuilder()
+                            chat.send(now + q).collect { e -> if (e is com.local.assistant.llm.GenEvent.ToolCalls) out.append(e.calls.joinToString { it.arguments.toString() }) else if (e is com.local.assistant.llm.GenEvent.TextDelta) out.append(e.text) }
+                            out.toString()
+                        }
+                    }
+                    if (got.replace(" ", "").contains(expected)) right++ else wrong += got.take(50)
+                }
+                report("pads $pads: prefix $tokens real tokens: $right/${probes.size} | ${wrong.joinToString(" ; ")}")
+            }
+            // And the real full prompt, for its real size.
+            val fullTokens = container.conversations.withModelFree {
+                backend.openChat(com.local.assistant.llm.ChatSpec(systemPrefix = full, history = emptyList(), toolDeclarations = tools, maxOutputTokens = 10, prefillOnOpen = true)).use { it.tokenCount() }
+            }
+            report("full prompt: $fullTokens real tokens")
+            return@runBlocking
+        }
+        if (mode == "speed") {
+            suspend fun measure(label: String) {
+                check(backend.ensureReady())
+                val loadStarted = System.currentTimeMillis()
+                for ((q, _) in questions.take(2) + listOf("write a short paragraph about the monsoon in Kerala" to "")) {
+                    val started = System.currentTimeMillis()
+                    val got = ask(full, now + q, true)
+                    val stats = container.llmService.lastGenerationStats.value
+                    report("$label | ${System.currentTimeMillis() - started} ms total | ttft ${stats?.timeToFirstTokenMs} ms | prefill ${stats?.prefillTokens} tok | decode ${stats?.decodeTokens} tok at ${stats?.tokensPerSecond?.let { "%.1f".format(it) }} tok/s | $got")
+                }
+            }
+            val settings = container.settings
+            measure("GPU+MTP")
+            try {
+                settings.useGpu = false
+                container.conversations.withModelFree { container.llmService.unload() }
+                measure("CPU")
+            } finally {
+                settings.useGpu = true
+                container.conversations.withModelFree { container.llmService.unload() }
+                check(backend.ensureReady())
+                report("restored: ${container.llmService.state.value}")
+            }
+            return@runBlocking
+        }
+        if (mode == "scope" || mode == "reorder") {
+            val bareInstructions = prefix(false, false, false)
+            val dynamic = full.removePrefix(bareInstructions).trim()
+            val system = if (mode == "reorder") dynamic + "\n\n" + bareInstructions else full
+            val probes = listOf(
+                "what is 25+25" to "25+25",
+                "what's 256 multiplied by 4" to "256*4",
+                "what's 1234 plus 4321" to "1234+4321",
+                "remind me to call the CA tomorrow at 11:45" to "11:45",
+                "set an alarm for 6:35" to "6:35",
+                "call 98450 12345" to "98450 12345",
+                "remind me on 17 October to renew the car insurance" to "17",
+                "what's 18% of 2450" to "2450",
+                "what's 3450 divided by 4" to "3450",
+                "what's 99 times 7" to "=99*7",
+                "what's 12 plus 30" to "12",
+            )
+            var right = 0
+            for ((q, expected) in probes) {
+                val got = ask(system, now + q, true)
+                val flat = "=" + got.replace(" ", "").substringAfter("=")
+                val ok = if (expected.startsWith("=")) flat.startsWith(expected) else got.replace(" ", "").contains(expected.replace(" ", ""))
+                if (ok) right++
+                report("${if (ok) "OK  " else "MISS"} $q -> $got")
+            }
+            report("$mode: $right/${probes.size}")
+            return@runBlocking
+        }
+        if (mode == "temperature") {
+            for (temperature in listOf(1.0, 0.7, 0.4, 0.2)) {
+                var right = 0
+                val wrong = mutableListOf<String>()
+                for (seed in 0..2) for ((q, expected) in questions) {
+                    val got = ask(full, now + q, true, com.local.assistant.llm.Sampling.CHAT.copy(temperature = temperature, seed = seed))
+                    if (got.replace(" ", "").contains(expected)) right++ else wrong += got
+                }
+                report("t=$temperature: $right/9 exact | wrong: ${wrong.joinToString(" ; ")}")
+            }
+            return@runBlocking
+        }
+        val chosen = when (mode) {
+            "length" -> listOf("instructions padded to full length" to Triple(padded, true, now), "full" to Triple(full, true, now))
+            "full" -> listOf("full" to Triple(full, true, now))
+            else -> variants
+        }
+        for ((name, v) in chosen) {
+            val (system, prefill, nowLine) = v
+            val answers = listOf("what is 25+25", "what's 256 multiplied by 4", "what's 1234 plus 4321").map { ask(system, nowLine + it, prefill) }
+            report("$name | ${answers.joinToString(" || ")}")
+        }
+        Unit
+    }
 }

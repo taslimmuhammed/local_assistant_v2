@@ -33,6 +33,19 @@ object Calculator {
         return value
     }
 
+    /** "256 × 4 = 1024", "√25 = 5", "5 miles = 8.04672 km": a calculation as the reply shows it. */
+    fun answer(expression: String, result: String): String {
+        val shown = Units.parse(expression)?.let { (amount, from, _) -> "$amount ${from.name}" } ?: expression
+            .replace(Regex("\\s*\\*\\s*"), " × ")
+            .replace(Regex("\\s*/\\s*"), " ÷ ")
+            .replace(Regex("\\s*\\+\\s*"), " + ")
+            .replace(Regex("sqrt\\s*"), "√")
+            .replace(Regex("\\s+%"), "%")
+            .replace(Regex("\\s+"), " ")
+            .trim()
+        return "$shown = $result"
+    }
+
     /** Up to 10 significant digits, no trailing zeros, no exponent: "441", "862.5", "0.3333333333". */
     fun format(value: Double, digits: Int = 10): String =
         BigDecimal(value).round(MathContext(digits)).stripTrailingZeros().toPlainString().let { if (it == "-0") "0" else it }
@@ -41,9 +54,9 @@ object Calculator {
     private const val CONVERSION_DIGITS = 6
 
     private fun normalize(text: String): String =
-        text.lowercase()
+        OPERATOR_WORDS.fold(" " + text.lowercase() + " ") { acc, (words, operator) -> acc.replace(Regex("\\s$words\\s"), " $operator ") }
             .replace(GROUPING, "")
-            .replace('×', '*').replace('÷', '/').replace('−', '-')
+            .replace('×', '*').replace('÷', '/').replace('−', '-').replace("√", " sqrt ")
             .replace(TIMES_X, "*")
             .replace("percent", "%")
             .replace(CURRENCY, "")
@@ -165,6 +178,25 @@ object Calculator {
             is Token.Word -> token.text
         }
     }
+
+    /** Operators as words, longest first: "256 multiplied by 4", "square root of 25". */
+    internal val OPERATOR_WORDS = listOf(
+        "square root of" to "sqrt",
+        "square root" to "sqrt",
+        "root of" to "sqrt",
+        "squared" to "^ 2",
+        "cubed" to "^ 3",
+        "multiplied by" to "*",
+        "divided by" to "/",
+        "to the power of" to "^",
+        "percent of" to "% of",
+        "percent" to "%",
+        "times" to "*",
+        "into" to "*",
+        "plus" to "+",
+        "minus" to "-",
+        "x" to "*",
+    )
 
     /** A comma between digits groups them ("1,00,000"); anywhere else it is not a number. */
     private val GROUPING = Regex("(?<=\\d),(?=\\d)")

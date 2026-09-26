@@ -313,6 +313,8 @@ class AppContainer(context: Context) {
         backgroundJobs.scheduleNightly()
         // Exchanges from before the archive existed, or missed by a crash, then their vectors.
         appScope.launch {
+            val dropped = archive.dropUtilityExchanges()
+            if (dropped > 0) android.util.Log.i("AppContainer", "Took $dropped sums and phone commands out of the archive")
             val archived = archive.backfill(beforeId = archive.lastMessageId() + 1)
             if (archived > 0) android.util.Log.i("AppContainer", "Archived $archived earlier exchanges")
             embeddingQueue.kick()

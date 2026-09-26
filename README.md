@@ -591,6 +591,37 @@ Two deliberate choices worth knowing:
 - **Single newlines are preserved** rather than collapsed into spaces as strict Markdown would,
   because chat models use them to mean a line break.
 
+## Numbers past token 2,048 (GPU)
+
+Measured on the target phone with LiteRT-LM 0.17.1: on the GPU backend, once a message sits past
+token position 2,048 of the conversation, the model no longer copies digits reliably. Words come
+through; digits are dropped, doubled or reordered — "11:45" became "1:45", "6:35" "6:5", "98450
+12345" "94501235", "25+25" "5+5+2". The boundary is sharp (a digit-free prompt of 2,008 tokens
+copied 3/3 numbers, one of 2,030 tokens 1/3) and the same with a 4K, 8K or 16K window, with or
+without MTP, at any temperature; the CPU backend copies them all, at about 40 s to the first token
+instead of 2. It looks like positions held in half precision, whose whole numbers stop being exact
+at 2,048. The instructions and 16 tool declarations alone are about 2,000 tokens, so every chat
+is past the line from its first message.
+
+The app works around it rather than trusting the model with digits:
+
+- **Tool arguments are grounded in the user's words** (`NumberGrounding`). An argument that
+  differs from the user's message only in its digits — the same words around them — is taken from
+  the message: "tomorrow at 1:45" becomes "tomorrow at 11:45", a phone number with digits missing
+  becomes the one the user said. Numbers the model rightly wrote itself ("in 30 minutes" for "half
+  an hour") are left alone, and so is what it read in an image.
+- **A message that is only a sum never reaches the model.** "whats 25 * 2", "what is root of
+  25", "18% of 2450?" are worked out by `NumberGrounding.directAnswer` and answered at once — "25 ×
+  2 = 50". Anything with more to it ("split 3450 between 4 people") goes to the model, whose
+  expression is grounded: numbers with digits dropped, or split in two ("8 75" for 875), are taken
+  from the message. A calculator turn is answered by the app itself — "3450 ÷ 4 = 862.5" — rather
+  than asking the model to restate a result it may garble.
+- **Sums and phone commands are kept out of the archive** (`ChunkPolicy.isUtility`): recalled
+  beside a new sum, old ones were mixed into it.
+
+What's left: numbers the model writes in its own prose, past token 2,048, can still be off. The
+chips under a reply show the exact reminder, alarm, call or timer that was set.
+
 ## Known limitations
 
 These are deliberate omissions, not bugs:

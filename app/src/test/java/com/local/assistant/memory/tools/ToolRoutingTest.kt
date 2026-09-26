@@ -401,7 +401,7 @@ class ToolRoutingTest {
         assertEquals(listOf(LoopEvent.Unreadable), runBlocking { loop.run(first, "envelope", null, context).toList() })
 
         // The first round already ran a tool: trying the whole turn again would run it twice.
-        val later = ScriptedSession(ArrayDeque(listOf(ScriptedSession.calls(call("calculate", "expression" to "2+2")), unreadable)))
+        val later = ScriptedSession(ArrayDeque(listOf(ScriptedSession.calls(call("get_upcoming", "days" to 7)), unreadable)))
         val thrown = runCatching { runBlocking { loop.run(later, "envelope", null, context).toList() } }.exceptionOrNull()
         assertTrue(thrown?.message.orEmpty().contains("Failed to parse"))
     }
@@ -596,10 +596,30 @@ class ToolRoutingTest {
     }
 
     @Test
-    fun `calculate works the sum out exactly`() {
+    fun `calculate answers with the sum itself, without asking the model to restate it`() {
         val (session, events) = turn(call("calculate", "expression" to "18% of 2450"))
-        assertEquals("441", result(session)["result"])
+        assertEquals(listOf(LoopEvent.Text("18% of 2450 = 441")), events.filterIsInstance<LoopEvent.Text>())
+        assertTrue("the model is not asked to restate it", session.sentResults.isEmpty())
+        assertTrue((events.last() as LoopEvent.Done).staleConversation)
         assertTrue("no chip for arithmetic", events.none { it is LoopEvent.Memory })
+    }
+
+    /** What the phone's GPU does past token 2,048: digits dropped in copying. */
+    @Test
+    fun `numbers the model mis-copied are taken from the user's own words`() {
+        val said = ToolContext(chatId = 1, userMessageId = 10, userText = "what is 25+25")
+        val sum = ScriptedSession(ArrayDeque(listOf(ScriptedSession.calls(call("calculate", "expression" to "5+5+2")))))
+        val events = runBlocking { loop.run(sum, "envelope", null, said).toList() }
+        assertEquals(LoopEvent.Text("25 + 25 = 50"), events.filterIsInstance<LoopEvent.Text>().single())
+
+        val alarm = ScriptedSession(ArrayDeque(listOf(ScriptedSession.calls(call("set_alarm", "when" to "6:5")), ScriptedSession.says("Done."))))
+        runBlocking { loop.run(alarm, "envelope", null, ToolContext(1, 11, "set an alarm for 6:35")).toList() }
+        // 6:35 said at 10:00 is this evening's; what matters is the 35 the model dropped.
+        assertEquals(FakeSystemAlarms.Set(18, 35, emptySet(), null), clock.set.single())
+
+        val dial = ScriptedSession(ArrayDeque(listOf(ScriptedSession.calls(call("phone_call", "who" to "94501235")), ScriptedSession.says("Opening."))))
+        runBlocking { loop.run(dial, "envelope", null, ToolContext(1, 12, "call 98450 12345")).toList() }
+        assertEquals(listOf("dial 98450 12345"), phone.done)
     }
 
     @Test

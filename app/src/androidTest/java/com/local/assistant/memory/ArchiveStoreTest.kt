@@ -8,6 +8,7 @@ import com.local.assistant.data.db.AttachmentKind
 import com.local.assistant.data.db.Role
 import com.local.assistant.data.repo.ChatRepository
 import com.local.assistant.memory.db.ArchiveRepository
+import com.local.assistant.memory.db.ChunkEntity
 import com.local.assistant.memory.db.MemoryRepository
 import com.local.assistant.memory.db.SessionTracker
 import com.local.assistant.memory.embed.EmbedKind
@@ -229,5 +230,28 @@ class ArchiveStoreTest {
         val recall = retriever.recall(chatId, query, windowStartMessageId = inWindow, maxFacts = 3, maxSnippets = 4)
         assertEquals(listOf("User: let's do Gokarna on the second weekend\nAssistant: Sounds good."), recall.snippets.map { it.text })
         assertTrue(recall.trace.candidates.none { it.chunk.messageId == inWindow })
+    }
+
+    @Test
+    fun sumsAreLeftOutAndOldOnesTakenOut() = runBlocking {
+        // A turn that only called calculate: marked seen, empty, never searched or embedded.
+        val sum = chats.addMessage(chatId, Role.USER, "what's 256 multiplied by 4")
+        chats.addMessage(chatId, Role.TOOL, "{\"arguments\":{\"expression\":\"256*4\"},\"result\":\"{}\",\"tool\":\"calculate\",\"undone\":false}")
+        chats.addMessage(chatId, Role.ASSISTANT, "It's 1024.")
+        assertFalse(archive.recordExchange(sum))
+        val skipped = chunks.forMessage(sum)!!
+        assertEquals(ChunkPolicy.SKIPPED, skipped.modelId)
+        assertEquals("", skipped.text)
+        assertEquals(0, archive.backfill(beforeId = Long.MAX_VALUE))
+
+        // Archived before the rule: taken out once, and the rest left alone.
+        val old = exchange("what is 25+25", "The sum of 25 and 5 is 10.")
+        val kept = exchange("my CA is Mr. Iyer", "Noted.")
+        database.chunkDao().insert(ChunkEntity(messageId = old, chatId = chatId, sessionId = null, text = "User: what is 25+25", modelId = null, createdAt = 0))
+        archive.recordExchange(kept)
+        assertEquals(1, archive.dropUtilityExchanges())
+        assertEquals(ChunkPolicy.SKIPPED, chunks.forMessage(old)!!.modelId)
+        assertNull(chunks.forMessage(kept)!!.modelId)
+        assertEquals("once per rule version", 0, archive.dropUtilityExchanges())
     }
 }
