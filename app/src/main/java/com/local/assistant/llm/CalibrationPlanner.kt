@@ -16,6 +16,8 @@ data class CalibrationSnapshot(
     val generationInFlight: Int,
     /** Consecutive launches that found a generation marker at the same size. */
     val generationCrashStreak: Int,
+    /** Consecutive launches that found an init marker. */
+    val initCrashStreak: Int = 0,
     val totalMemoryBytes: Long,
     /**
      * The largest window the app will run at, even where the device holds more. Calibration
@@ -49,7 +51,6 @@ object CalibrationPlanner {
         if (snapshot.manualOverride > 0) return CalibrationDecision.UseKnown(snapshot.manualOverride)
 
         // A marker left behind means the process died at that size without our cleanup running.
-        // An init marker is unambiguous: nothing but the load was happening.
         val initBad = snapshot.initInFlight.takeIf { it > 0 }
 
         // A generation marker is weaker evidence. Swiping the app away or force-stopping it
@@ -69,7 +70,14 @@ object CalibrationPlanner {
         val generationIsFatal = generationBad != null &&
             (snapshot.generationCrashStreak >= REPEATS_BEFORE_FATAL || generationBad != effective)
 
-        val knownBad = listOfNotNull(initBad, generationBad.takeIf { generationIsFatal }).minOrNull()
+        // An init marker at a size never confirmed here is taken at its word: the load itself is
+        // what died. At the size already confirmed, it is the same weak evidence as above — an
+        // install, a force-stop or a swipe during the few seconds of loading leave the same trace
+        // (measured: a phone confirmed at 8K slid to 4K through app updates) — so it earns a re-check.
+        val initIsFatal = initBad != null &&
+            (snapshot.initCrashStreak >= REPEATS_BEFORE_FATAL || initBad != effective)
+
+        val knownBad = listOfNotNull(initBad.takeIf { initIsFatal }, generationBad.takeIf { generationIsFatal }).minOrNull()
 
         val calibrationMatches = effective > 0 &&
             snapshot.calibratedKey == snapshot.currentKey &&
@@ -77,9 +85,10 @@ object CalibrationPlanner {
 
         if (calibrationMatches) {
             // Unexplained death at exactly this size: prove it still works before trusting it.
-            val needsRecheck = generationBad != null && !generationIsFatal && generationBad == effective
+            val needsRecheck = (generationBad != null && !generationIsFatal && generationBad == effective) ||
+                (initBad != null && !initIsFatal && initBad == effective)
             return if (needsRecheck) {
-                CalibrationDecision.Probe(ContextLadder.rungsToTry(start = effective, knownBad = initBad))
+                CalibrationDecision.Probe(ContextLadder.rungsToTry(start = effective, knownBad = knownBad))
             } else {
                 CalibrationDecision.UseKnown(effective)
             }

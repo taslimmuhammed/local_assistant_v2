@@ -249,6 +249,31 @@ extracted or saved by the model — reminders still work), **Keep chat history**
 everything** (asks twice; chats stay, but everything learned from them goes, saved images included,
 and they are never re-read).
 
+### Tool list
+
+Sixteen tools, declared in `memory/tools/ToolCatalog.kt`. Fifteen are always declared; `web_lookup`
+only once a Tavily key is saved. Nothing that calls or sends does so by itself: the dialer or the
+messaging app opens ready, and the user presses the button.
+
+| Tool | What it does | Arguments (required in bold) | Runs in |
+|---|---|---|---|
+| `add_task` | A reminder or to-do, with an alarm when it has a time | **title**, when, repeat | the app's reminders |
+| `update_task` | Completes, cancels, reopens or moves a reminder | **task**, status, when | the app's reminders |
+| `add_event` | Appointments, meetings, birthdays, trips; alert 30 min before | **title**, **when**, ends, repeat, notes | the app's events |
+| `save_fact` | A lasting fact about the user or their people, or how to reply from now on | **subject**, **attribute**, **value**, core | memory |
+| `get_upcoming` | What's coming up, beyond the agenda already in the prompt | days | memory |
+| `search_memory` | Something told before: facts, past conversations, saved images | **query** | memory |
+| `forget` | Deletes a fact (and leaves a tombstone so it isn't relearned) | **subject**, attribute | memory |
+| `remember_image` | Keeps an image the user sent, with what the model read in it | **title**, **details** | memory + `files/saved_images/` |
+| `set_alarm` | An alarm in the phone's clock app | **when**, label, repeat | clock app |
+| `set_timer` | A countdown in the phone's clock app, up to 24 h | **duration**, label | clock app |
+| `phone_call` | Opens the dialer with the number of the person named | **who** | dialer |
+| `send_message` | Opens SMS, WhatsApp or email with the message written | **to**, text, app | messaging app |
+| `open_app` | Opens an app, or directions, music, YouTube, a web search or the Play Store | **app**, query | other apps |
+| `phone_setting` | Flashlight, ringer, media volume, Do Not Disturb; opens the Wi-Fi, Bluetooth, mobile data, airplane mode, hotspot or location panel | **setting**, value | the phone |
+| `calculate` | Exact arithmetic and unit conversions | **expression** | the app |
+| `web_lookup` | News, weather, prices, scores — anything current (only with a Tavily key) | **query**, topic | Tavily |
+
 ### Tools and reminders
 
 The model can call up to sixteen tools — `add_task`, `update_task`, `add_event`, `save_fact`,
@@ -481,10 +506,12 @@ cleared afterwards. A marker still present at the next launch is the only eviden
 fatal, and the ladder resumes strictly below it. The same guard wraps ordinary generation, so a
 real chat that exhausts memory also steps the window down rather than looping on a crash.
 
-An init-time death is unambiguous and rules the size out at once. A death *mid-generation* is
-weaker evidence: swiping the app away or force-stopping it while it is replying leaves exactly the
-same trace, so the first one only earns a re-check at the same size, and it takes a repeat to
-shrink the window. Otherwise closing the app mid-reply would quietly shrink it every time.
+A death at a size never confirmed on this device rules it out at once. A death at the size
+already confirmed is weaker evidence: swiping the app away, force-stopping it or installing an
+update while it is loading or replying leaves exactly the same trace, so the first one only earns
+a re-check at the same size, and it takes a repeat to shrink the window. This used to apply to
+deaths mid-generation only; an init-time death counted at once, and a phone confirmed at 8K slid
+to 4K through a day of app updates installed while the model was loading.
 
 This state machine is unit-tested (`CalibrationPlannerTest`) precisely because it exists for the
 case where no code of ours gets to run.

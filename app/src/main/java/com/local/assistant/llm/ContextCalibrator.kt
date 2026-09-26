@@ -60,6 +60,7 @@ class ContextCalibrator(
         sessionGenerationInFlight = generationInFlight
         settings.generationCrashStreak =
             if (generationInFlight > 0) settings.generationCrashStreak + 1 else 0
+        settings.initCrashStreak = if (initInFlight > 0) settings.initCrashStreak + 1 else 0
         if (initInFlight != 0 || generationInFlight != 0) {
             Log.w(TAG, "Previous run died at init=$initInFlight generation=$generationInFlight")
         }
@@ -108,6 +109,7 @@ class ContextCalibrator(
             initInFlight = sessionInitInFlight,
             generationInFlight = sessionGenerationInFlight,
             generationCrashStreak = settings.generationCrashStreak,
+            initCrashStreak = settings.initCrashStreak,
             totalMemoryBytes = memory.totalMem,
             ceilingTokens = settings.contextCeilingTokens,
         )

@@ -15,6 +15,7 @@ class CalibrationPlannerTest {
         initInFlight: Int = 0,
         generationInFlight: Int = 0,
         generationCrashStreak: Int = 0,
+        initCrashStreak: Int = 0,
         totalMemoryBytes: Long = 16L shl 30,
         ceilingTokens: Int = Int.MAX_VALUE,
     ) = CalibrationSnapshot(
@@ -25,6 +26,7 @@ class CalibrationPlannerTest {
         initInFlight = initInFlight,
         generationInFlight = generationInFlight,
         generationCrashStreak = generationCrashStreak,
+        initCrashStreak = initCrashStreak,
         totalMemoryBytes = totalMemoryBytes,
         ceilingTokens = ceilingTokens,
     )
@@ -122,14 +124,26 @@ class CalibrationPlannerTest {
         assertTrue((decision as CalibrationDecision.Probe).rungs.none { it >= 8192 })
     }
 
-    /** An init-time death is unambiguous — nothing but the load was running. */
+    /**
+     * An install, a force-stop or a swipe while the model loads leaves the same trace as an
+     * out-of-memory kill; at a size already confirmed, one of them only earns a re-check.
+     */
     @Test
-    fun `a death during init shrinks immediately without a second chance`() {
+    fun `one death during init at the calibrated size re-checks it rather than shrinking`() {
+        val decision = CalibrationPlanner.decide(
+            snapshot(calibratedTokens = 8192, calibratedKey = "model-gpu-mtp", initInFlight = 8192, initCrashStreak = 1),
+        )
+        assertEquals(8192, (decision as CalibrationDecision.Probe).rungs.first())
+    }
+
+    @Test
+    fun `a repeated death during init at the calibrated size does shrink the window`() {
         val decision = CalibrationPlanner.decide(
             snapshot(
                 calibratedTokens = 8192,
                 calibratedKey = "model-gpu-mtp",
                 initInFlight = 8192,
+                initCrashStreak = CalibrationPlanner.REPEATS_BEFORE_FATAL,
             ),
         )
         assertTrue((decision as CalibrationDecision.Probe).rungs.none { it >= 8192 })
@@ -189,11 +203,15 @@ class CalibrationPlannerTest {
     }
 
     @Test
-    fun `an init death at the capped size shrinks below it`() {
-        val decision = CalibrationPlanner.decide(
-            snapshot(calibratedTokens = 16384, calibratedKey = "model-gpu-mtp", ceilingTokens = 8192, initInFlight = 8192),
+    fun `an init death at the capped size re-checks it once, and a repeat shrinks below it`() {
+        val once = CalibrationPlanner.decide(
+            snapshot(calibratedTokens = 16384, calibratedKey = "model-gpu-mtp", ceilingTokens = 8192, initInFlight = 8192, initCrashStreak = 1),
         )
-        assertEquals(CalibrationDecision.Probe(listOf(6144, 4096, 2048)), decision)
+        assertEquals(CalibrationDecision.Probe(listOf(8192, 6144, 4096, 2048)), once)
+        val twice = CalibrationPlanner.decide(
+            snapshot(calibratedTokens = 16384, calibratedKey = "model-gpu-mtp", ceilingTokens = 8192, initInFlight = 8192, initCrashStreak = 2),
+        )
+        assertEquals(CalibrationDecision.Probe(listOf(6144, 4096, 2048)), twice)
     }
 
     @Test

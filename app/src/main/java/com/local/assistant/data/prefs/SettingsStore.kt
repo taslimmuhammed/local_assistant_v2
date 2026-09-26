@@ -129,6 +129,11 @@ class SettingsStore(context: Context) {
         get() = prefs.getInt(KEY_GENERATION_CRASH_STREAK, 0)
         set(value) = prefs.edit(commit = true) { putInt(KEY_GENERATION_CRASH_STREAK, value) }
 
+    /** Consecutive launches that found an engine load killed part-way. */
+    var initCrashStreak: Int
+        get() = prefs.getInt(KEY_INIT_CRASH_STREAK, 0)
+        set(value) = prefs.edit(commit = true) { putInt(KEY_INIT_CRASH_STREAK, value) }
+
     /** Reads both crash markers and clears them, so each death is acted on exactly once. */
     fun consumeCrashMarkers(): Pair<Int, Int> {
         val markers = initInFlightTokens to generationInFlightTokens
@@ -196,6 +201,7 @@ class SettingsStore(context: Context) {
         private const val KEY_GENERATION_CRASH_STREAK = "generation_crash_streak"
         private const val KEY_MAX_OUTPUT = "max_output_tokens"
         private const val KEY_CONTEXT_CEILING = "context_ceiling_tokens"
+        private const val KEY_INIT_CRASH_STREAK = "init_crash_streak"
         private const val KEY_TOKEN_RATE = "latin_chars_per_token"
         private const val KEY_ASKED_NOTIFICATIONS = "asked_for_notifications"
         private const val KEY_OFFERED_EXACT_ALARMS = "offered_exact_alarms"
