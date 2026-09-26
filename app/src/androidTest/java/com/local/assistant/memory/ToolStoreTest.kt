@@ -67,6 +67,7 @@ class ToolStoreTest {
         val noClock = object : com.local.assistant.memory.tools.SystemAlarms {
             override fun available() = false
             override fun set(hour: Int, minute: Int, days: Set<java.time.DayOfWeek>, label: String?) = false
+            override fun setTimer(seconds: Int, label: String?) = false
             override fun openClock() = Unit
         }
         executor = ToolExecutor(memory, reminders, noClock, ChatToolLog(chats), now = { now })

@@ -9,8 +9,8 @@ import com.local.assistant.memory.tools.SystemAlarms
 import java.time.DayOfWeek
 
 /**
- * Alarms handed to the phone's clock app with the standard `ACTION_SET_ALARM` intent, set
- * without opening it. From then on the alarm is the clock app's: it rings like any other alarm,
+ * Alarms and timers handed to the phone's clock app with the standard `ACTION_SET_ALARM` and
+ * `ACTION_SET_TIMER` intents, set without opening it. From then on the alarm is the clock app's: it rings like any other alarm,
  * and that is where it is changed or deleted.
  *
  * Starting another app's activity is only allowed while this app is in front, which it is when
@@ -33,16 +33,28 @@ class ClockAlarms(
             .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         label?.let { intent.putExtra(AlarmClock.EXTRA_MESSAGE, it) }
         if (days.isNotEmpty()) intent.putExtra(AlarmClock.EXTRA_DAYS, ArrayList(days.map(::calendarDay)))
-        return try {
-            context.startActivity(intent)
-            true
-        } catch (e: ActivityNotFoundException) {
-            Log.w(TAG, "No clock app took the alarm", e)
-            false
-        } catch (e: SecurityException) {
-            Log.w(TAG, "Clock app refused the alarm", e)
-            false
-        }
+        return start(intent, "alarm")
+    }
+
+    override fun setTimer(seconds: Int, label: String?): Boolean {
+        if (!inForeground()) return false
+        val intent = Intent(AlarmClock.ACTION_SET_TIMER)
+            .putExtra(AlarmClock.EXTRA_LENGTH, seconds)
+            .putExtra(AlarmClock.EXTRA_SKIP_UI, true)
+            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        label?.let { intent.putExtra(AlarmClock.EXTRA_MESSAGE, it) }
+        return start(intent, "timer")
+    }
+
+    private fun start(intent: Intent, what: String): Boolean = try {
+        context.startActivity(intent)
+        true
+    } catch (e: ActivityNotFoundException) {
+        Log.w(TAG, "No clock app took the $what", e)
+        false
+    } catch (e: SecurityException) {
+        Log.w(TAG, "Clock app refused the $what", e)
+        false
     }
 
     override fun openClock() {

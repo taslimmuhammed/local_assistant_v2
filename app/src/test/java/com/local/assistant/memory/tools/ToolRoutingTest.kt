@@ -34,7 +34,16 @@ class ToolRoutingTest {
     private val clock = FakeSystemAlarms()
     private val images = FakeImageNotes()
     private var paused = false
-    private val executor = ToolExecutor(store, reminders, clock, log, now = { now }, memoryPaused = { paused }, images = images)
+    private val phone = FakePhone()
+    private var contacts: List<Contact>? = listOf(
+        Contact("Amma", listOf(ContactPhone("+91 98450 11111"))),
+        Contact("Priya Sharma", listOf(ContactPhone("98450 22222")), listOf("priya@example.com")),
+        Contact("Priya Nair", listOf(ContactPhone("98450 33333"))),
+        Contact("Dr Rao Clinic", listOf(ContactPhone("080 4444 5555"))),
+    )
+    private val people = mutableMapOf<String, PersonHints>()
+    private val device = DeviceTools(phone, { contacts }, { who -> people[who] ?: PersonHints.NONE }, clock, now = { now })
+    private val executor = ToolExecutor(store, reminders, clock, log, now = { now }, memoryPaused = { paused }, images = images, device = device)
     private val loop = ToolLoop(executor, maxRounds = 3, isOverflow = { "too long" in it.message.orEmpty() })
     private val context = ToolContext(chatId = 1, userMessageId = 10)
 
@@ -425,5 +434,138 @@ class ToolRoutingTest {
         val (session, _) = turn(call("remember_image", "title" to "receipt", "details" to "Total 450"))
         assertEquals(false, result(session)["ok"])
         assertTrue(images.saved.isEmpty())
+    }
+
+    // ---- Everyday tools ----
+
+    private fun error(session: ScriptedSession) = result(session)["error"].toString()
+
+    @Test
+    fun `call amma opens the dialer with her number, and nothing is placed`() {
+        val (_, events) = turn(call("phone_call", "who" to "amma"))
+        assertEquals(listOf("dial +91 98450 11111"), phone.done)
+        val chip = events.filterIsInstance<LoopEvent.Memory>().single().chip
+        assertEquals(MemoryChip.Kind.CALL, chip.kind)
+        assertEquals("Amma · +91 98450 11111", chip.detail)
+    }
+
+    @Test
+    fun `a number saved in memory is used before the contacts, which then need no permission`() {
+        people["mom"] = PersonHints(names = listOf("amma"), phone = "98470 12345")
+        contacts = null
+        turn(call("phone_call", "who" to "mom"))
+        assertEquals(listOf("dial 98470 12345"), phone.done)
+    }
+
+    @Test
+    fun `my dentist is found by the name memory has for them`() {
+        people["my dentist"] = PersonHints(names = listOf("Dr. Rao"))
+        turn(call("phone_call", "who" to "my dentist"))
+        assertEquals(listOf("dial 080 4444 5555"), phone.done)
+    }
+
+    @Test
+    fun `a number said out loud is dialled as it is`() {
+        turn(call("phone_call", "who" to "98450 12345"))
+        assertEquals(listOf("dial 98450 12345"), phone.done)
+    }
+
+    @Test
+    fun `two Priyas are asked about, no contacts access is explained, and nobody is dialled`() {
+        val (several, _) = turn(call("phone_call", "who" to "Priya"))
+        assertTrue(error(several).contains("Priya Sharma (…2222), Priya Nair (…3333)"))
+        now = now.plusMinutes(1)
+        contacts = null
+        val (denied, _) = turn(call("phone_call", "who" to "Anjali"))
+        assertTrue(error(denied).contains("allowed this app to read contacts"))
+        assertTrue(phone.done.isEmpty())
+    }
+
+    @Test
+    fun `messages open written, in the app asked for`() {
+        turn(call("send_message", "to" to "Priya Sharma", "text" to "Running 10 minutes late", "app" to "whatsapp"))
+        now = now.plusMinutes(1)
+        turn(call("send_message", "to" to "amma", "text" to "Reached home"))
+        now = now.plusMinutes(1)
+        turn(call("send_message", "to" to "Priya Sharma", "text" to "Notes attached", "app" to "email"))
+        assertEquals(
+            listOf("WHATSAPP 98450 22222: Running 10 minutes late", "SMS +91 98450 11111: Reached home", "EMAIL priya@example.com: Notes attached"),
+            phone.done,
+        )
+        phone.whatsapp = false
+        now = now.plusMinutes(1)
+        val (session, _) = turn(call("send_message", "to" to "amma", "text" to "hi", "app" to "WhatsApp"))
+        assertTrue(error(session).contains("WhatsApp isn't installed"))
+    }
+
+    @Test
+    fun `timers go to the clock app from the user's own words`() {
+        val (session, events) = turn(call("set_timer", "duration" to "10 minutes", "label" to "pasta"))
+        assertEquals(listOf(600 to "Pasta"), clock.timers)
+        assertEquals("10 min", result(session)["timer"])
+        assertEquals("10:10", result(session)["ends"])
+        assertEquals("10 min · Pasta", events.filterIsInstance<LoopEvent.Memory>().single().chip.detail)
+        now = now.plusMinutes(1)
+        val (tooLong, _) = turn(call("set_timer", "duration" to "30 hours"))
+        assertTrue(error(tooLong).contains("24 hours"))
+    }
+
+    @Test
+    fun `open_app launches, searches and navigates`() {
+        turn(call("open_app", "app" to "YouTube"))
+        now = now.plusMinutes(1)
+        turn(call("open_app", "app" to "maps", "query" to "Indiranagar"))
+        assertEquals(
+            listOf("open ${AppTarget.Launch(phone.apps[0])}", "open ${AppTarget.Directions("Indiranagar")}"),
+            phone.done,
+        )
+        now = now.plusMinutes(1)
+        val (missing, _) = turn(call("open_app", "app" to "Instagram"))
+        assertTrue(error(missing).contains("no app called"))
+    }
+
+    @Test
+    fun `phone settings switch what they can and open the panel for what they cannot`() {
+        turn(call("phone_setting", "setting" to "flashlight", "value" to "on"))
+        turn(call("phone_setting", "setting" to "silent mode", "value" to "on"))
+        val (volume, _) = turn(call("phone_setting", "setting" to "volume", "value" to "up"))
+        val (wifi, _) = turn(call("phone_setting", "setting" to "wifi", "value" to "on"))
+        assertEquals(listOf("torch true", "ringer SILENT", "panel WIFI"), phone.done)
+        assertEquals("60%", result(volume)["volume"])
+        assertTrue(result(wifi)["note"].toString().contains("the user switches it there"))
+    }
+
+    @Test
+    fun `silent without Do Not Disturb access falls back to vibrate, and Do Not Disturb asks for access`() {
+        phone.silentNeedsAccess = true
+        val (silent, _) = turn(call("phone_setting", "setting" to "ringer", "value" to "silent"))
+        assertEquals("vibrate", result(silent)["ringer"])
+        val (dnd, _) = turn(call("phone_setting", "setting" to "do_not_disturb", "value" to "on"))
+        assertTrue(error(dnd).contains("allow Do Not Disturb access"))
+    }
+
+    @Test
+    fun `calculate works the sum out exactly`() {
+        val (session, events) = turn(call("calculate", "expression" to "18% of 2450"))
+        assertEquals("441", result(session)["result"])
+        assertTrue("no chip for arithmetic", events.none { it is LoopEvent.Memory })
+    }
+
+    @Test
+    fun `with the app in the background nothing opens and the model is told why`() {
+        phone.foreground = false
+        val (session, _) = turn(call("phone_call", "who" to "amma"))
+        assertTrue(error(session).contains("background"))
+    }
+
+    @Test
+    fun `a repeated device call within seconds is not repeated, a minute later it is`() {
+        turn(call("phone_call", "who" to "amma"))
+        now = now.plusSeconds(5)
+        turn(call("phone_call", "who" to "amma"))
+        assertEquals(1, phone.done.size)
+        now = now.plusMinutes(1)
+        turn(call("phone_call", "who" to "amma"))
+        assertEquals(2, phone.done.size)
     }
 }

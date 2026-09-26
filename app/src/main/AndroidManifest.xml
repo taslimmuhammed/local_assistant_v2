@@ -15,12 +15,48 @@
     <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
 
-    <!-- "Wake me up at 6": alarms set in the phone's own clock app. -->
+    <!-- "Wake me up at 6", "timer for 10 minutes": set in the phone's own clock app. -->
     <uses-permission android:name="com.android.alarm.permission.SET_ALARM" />
+
+    <!-- "Call amma", "text Priya": asked the first time a name has to be looked up. Calls and
+         messages are only prepared — the dialer or messaging app opens and the user presses the
+         button — so neither CALL_PHONE nor SEND_SMS is needed. -->
+    <uses-permission android:name="android.permission.READ_CONTACTS" />
+
+    <!-- "Turn on Do Not Disturb": the user still has to allow it in Settings. -->
+    <uses-permission android:name="android.permission.ACCESS_NOTIFICATION_POLICY" />
+
     <queries>
         <intent>
             <action android:name="android.intent.action.SET_ALARM" />
         </intent>
+        <intent>
+            <action android:name="android.intent.action.SET_TIMER" />
+        </intent>
+        <!-- open_app: the apps with a launcher icon, which is what the user can name. -->
+        <intent>
+            <action android:name="android.intent.action.MAIN" />
+            <category android:name="android.intent.category.LAUNCHER" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.DIAL" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.SENDTO" />
+            <data android:scheme="smsto" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.SENDTO" />
+            <data android:scheme="mailto" />
+        </intent>
+        <intent>
+            <action android:name="android.media.action.MEDIA_PLAY_FROM_SEARCH" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.WEB_SEARCH" />
+        </intent>
+        <package android:name="com.whatsapp" />
+        <package android:name="com.whatsapp.w4b" />
     </queries>
 
     <application

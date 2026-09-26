@@ -119,6 +119,12 @@ class FakeSystemAlarms(var present: Boolean = true, var reachable: Boolean = tru
         set += Set(hour, minute, days, label)
         return true
     }
+    val timers = mutableListOf<Pair<Int, String?>>()
+    override fun setTimer(seconds: Int, label: String?): Boolean {
+        if (!reachable) return false
+        timers += seconds to label
+        return true
+    }
     override fun openClock() = Unit
 }
 
@@ -179,4 +185,37 @@ class FakeImageNotes : ImageNotes {
     override suspend fun delete(noteId: Long) {
         saved.remove(noteId)
     }
+}
+
+/** The phone as a log of what would have been opened or switched. */
+class FakePhone(var foreground: Boolean = true) : PhoneActions {
+    val done = mutableListOf<String>()
+    var apps = listOf(InstalledApp("YouTube", "com.google.android.youtube"), InstalledApp("Maps", "com.google.android.apps.maps"))
+    var whatsapp = true
+    var dndAccess = false
+    var silentNeedsAccess = false
+    var volumeLevel = 40
+
+    private fun act(what: String): Handoff = if (!foreground) Handoff.IN_BACKGROUND else Handoff.DONE.also { done += what }
+
+    override fun dial(number: String) = act("dial $number")
+    override fun compose(app: MessageApp, to: String, text: String?) =
+        if (app == MessageApp.WHATSAPP && !whatsapp) Handoff.NO_APP else act("$app $to: $text")
+    override fun installedApps() = apps
+    override fun open(target: AppTarget) = act("open $target")
+    override fun torch(on: Boolean) = Handoff.DONE.also { done += "torch $on" }
+    override fun ringer(mode: RingerMode) =
+        if (mode == RingerMode.SILENT && silentNeedsAccess) Handoff.NEEDS_ACCESS else Handoff.DONE.also { done += "ringer $mode" }
+    override fun volume(change: VolumeChange): Int {
+        volumeLevel = when (change) {
+            VolumeChange.Up -> (volumeLevel + 20).coerceAtMost(100)
+            VolumeChange.Down -> (volumeLevel - 20).coerceAtLeast(0)
+            VolumeChange.Mute -> 0
+            VolumeChange.Unmute -> 40
+            is VolumeChange.To -> change.percent
+        }
+        return volumeLevel
+    }
+    override fun doNotDisturb(on: Boolean) = if (dndAccess) Handoff.DONE.also { done += "dnd $on" } else Handoff.NEEDS_ACCESS
+    override fun openPanel(panel: SettingsPanel) = act("panel $panel")
 }

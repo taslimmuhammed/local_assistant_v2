@@ -13,6 +13,7 @@ import com.local.assistant.data.db.MessageEntity
 import com.local.assistant.data.db.Role
 import com.local.assistant.data.prefs.SettingsStore
 import com.local.assistant.data.repo.ChatRepository
+import com.local.assistant.device.PermissionBroker
 import com.local.assistant.llm.LlmService
 import com.local.assistant.llm.PromptAttachment
 import com.local.assistant.media.AttachmentStore
@@ -30,6 +31,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.flatMapLatest
@@ -49,7 +51,11 @@ class ChatViewModel(
     private val settings: SettingsStore,
     private val attachments: AttachmentStore,
     private val recorder: AudioRecorder,
+    permissions: PermissionBroker,
 ) : ViewModel() {
+
+    /** A tool waiting on the user's answer to a permission dialog, e.g. contacts for "call amma". */
+    val permissionRequests: SharedFlow<PermissionBroker.Request> = permissions.requests
 
     /** A memory chip as the chat shows it. [recordId] is the TOOL row it came from. */
     data class ChipItem(val recordId: Long, val chip: MemoryChip, val undone: Boolean, val canUndo: Boolean)
@@ -361,6 +367,7 @@ class ChatViewModel(
                     settings = container.settings,
                     attachments = container.attachmentStore,
                     recorder = container.audioRecorder,
+                    permissions = container.permissions,
                 )
             }
         }

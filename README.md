@@ -251,8 +251,9 @@ and they are never re-read).
 
 ### Tools and reminders
 
-The model can call nine tools — `add_task`, `update_task`, `add_event`, `save_fact`,
-`get_upcoming`, `search_memory`, `forget`, `set_alarm`, `remember_image` — declared in `memory/tools/ToolCatalog.kt` with short
+The model can call fifteen tools — `add_task`, `update_task`, `add_event`, `save_fact`,
+`get_upcoming`, `search_memory`, `forget`, `set_alarm`, `remember_image`, and the everyday ones
+below — declared in `memory/tools/ToolCatalog.kt` with short
 routing-style descriptions. Tool calling is manual (`automaticToolCalling = false`): the runtime
 reports a call, and `ToolLoop` hands it to `ToolExecutor`, which validates the arguments, ignores
 a repeat of the same call within two minutes, applies it and its TOOL-row record in one
@@ -289,6 +290,40 @@ the target phone it has scored 102/102 at temperature 1.0 (three samples each); 
 scored 33/34 at both 1.0 and 0.7, with and without `remember_image` alike — the miss being the
 hypothetical "if I had a dentist, what should I ask them?", saved as a fact. The tool declarations
 cost 809 tokens (698 before `remember_image`).
+
+### Everyday tools
+
+`call`, `send_message`, `set_timer`, `open_app`, `phone_setting` and `calculate`
+(`memory/tools/DeviceTools.kt`, Android side in `device/`):
+
+- **Calls and messages are prepared, never placed or sent.** "Call amma" opens the dialer with her
+  number; "WhatsApp Priya I'm late" opens WhatsApp with the text written (SMS and email the same).
+  The user presses the button. A 4B model does misroute now and then, and a call to the wrong
+  person can't be taken back — so neither `CALL_PHONE` nor `SEND_SMS` is requested.
+- **People are found memory first.** A number saved for someone ("amma's number is …") is used
+  as it is, with no contacts access at all. Otherwise the contacts are searched with the words the
+  user said, then what memory knows: a name ("my mother's name is Lakshmi"), the names filed on
+  the user's own facts ("my dentist" → "Dr. Rao"), merged aliases, and every word for the relation
+  ("mom" finds a contact saved as "Amma"). A whole-name match beats a partial one; two people who
+  fit equally are asked about ("Priya Sharma (…2222) or Priya Nair (…3333)?"). Contacts access is
+  asked for the first time it's needed, through `PermissionBroker`, which shows the system dialog
+  from the chat screen and lets the tool wait for the answer.
+- **Timers** go to the clock app like alarms (`ACTION_SET_TIMER`, up to 24 h). The length comes
+  from the user's own words via `DurationParser` — "1h30m", "an hour and a half", "dus minute",
+  "dedh ghanta" — never from the model's arithmetic.
+- **open_app** opens an app by its launcher label, or searches in the kind of app that answers:
+  directions (Maps), songs (any music app, through the standard play-from-search intent), YouTube,
+  the web, the Play Store.
+- **phone_setting** switches the flashlight, ringer (silent falls back to vibrate until the user
+  allows Do Not Disturb access), media volume and Do Not Disturb. Wi-Fi, Bluetooth, mobile data,
+  airplane mode, hotspot and location can't be switched by apps on Android 10+, so their settings
+  panel opens and the model says so.
+- **calculate** is a small exact evaluator (`Calculator.kt`): `+ - * / ^`, brackets, `18% of
+  2450`, `sqrt`, and Indian digit grouping. A 4B model's multi-digit arithmetic is not reliable.
+
+Opening another app's screen only works while this app is in front, so each tool checks and
+tells the model when it isn't. A repeat of the same device call within 15 seconds is ignored (a
+model that repeats itself mustn't open the dialer twice); a minute later it is a real request.
 
 Note that the model file reports `supportsFunctionCalling = false`; native tool calls work
 regardless (measured in `EngineProbeTest.toolCalling`), so the flag is not trusted.

@@ -14,6 +14,9 @@ import com.local.assistant.llm.LlmBackend
 import com.local.assistant.llm.LlmService
 import com.local.assistant.media.AttachmentStore
 import com.local.assistant.media.AudioRecorder
+import com.local.assistant.device.AndroidContacts
+import com.local.assistant.device.AndroidPhone
+import com.local.assistant.device.PermissionBroker
 import com.local.assistant.memory.MemoryControls
 import com.local.assistant.memory.notes.SavedImages
 import com.local.assistant.memory.db.ArchiveRepository
@@ -34,6 +37,7 @@ import com.local.assistant.memory.prompt.MeasuredTokenEstimator
 import com.local.assistant.memory.prompt.MemoryBudget
 import com.local.assistant.memory.prompt.TurnRunner
 import com.local.assistant.memory.tools.ChatToolLog
+import com.local.assistant.memory.tools.DeviceTools
 import com.local.assistant.memory.tools.ToolCatalog
 import com.local.assistant.memory.tools.ToolExecutor
 import com.local.assistant.memory.tools.ToolLoop
@@ -186,6 +190,18 @@ class AppContainer(context: Context) {
     /** Alarms in the phone's own clock app, for "wake me up at 6". */
     val clockAlarms = ClockAlarms(context, inForeground = { appForeground.isForeground })
 
+    /** Runtime permissions asked for from outside the UI, like contacts on the first "call amma". */
+    val permissions = PermissionBroker(context)
+
+    /** Calls, messages, timers, apps, phone settings and arithmetic. */
+    private val deviceTools = DeviceTools(
+        phone = AndroidPhone(context, inForeground = { appForeground.isForeground }),
+        contacts = AndroidContacts(context, permissions),
+        people = memoryRepository,
+        alarms = clockAlarms,
+        now = ZonedDateTime::now,
+    )
+
     val toolExecutor = ToolExecutor(
         store = memoryRepository,
         reminders = reminderScheduler,
@@ -200,6 +216,7 @@ class AppContainer(context: Context) {
         },
         memoryPaused = { settings.memoryPaused },
         images = savedImages,
+        device = deviceTools,
     )
 
     private val toolLoop = ToolLoop(

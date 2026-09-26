@@ -27,7 +27,7 @@ data class MemoryChip(
     /** Whether the time can be changed from the chip. */
     val editable: Boolean = false,
 ) {
-    enum class Kind { FACT, TASK, EVENT, FORGET, ALARM, IMAGE }
+    enum class Kind { FACT, TASK, EVENT, FORGET, ALARM, IMAGE, CALL, MESSAGE, TIMER, APP, SETTING }
 }
 
 /**
@@ -84,6 +84,9 @@ interface SystemAlarms {
      * comes round; with days it repeats on them. False if the clock app could not be reached.
      */
     fun set(hour: Int, minute: Int, days: Set<DayOfWeek>, label: String?): Boolean
+
+    /** Starts a countdown of [seconds] in the clock app. False if it could not be reached. */
+    fun setTimer(seconds: Int, label: String?): Boolean
 
     fun openClock()
 }

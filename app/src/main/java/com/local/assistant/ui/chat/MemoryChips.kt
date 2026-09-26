@@ -107,8 +107,8 @@ private fun MemoryChipRow(item: ChatViewModel.ChipItem, onUndo: () -> Unit, onEd
         } else {
             if (chip.editable) ChipAction("Edit", onEdit)
             if (item.canUndo) ChipAction("Undo", onUndo)
-            // A clock alarm is the clock app's once set: that is where it is changed or deleted.
-            if (chip.kind == MemoryChip.Kind.ALARM) ChipAction("Open clock", onOpenClock)
+            // A clock alarm or timer is the clock app's once set: that is where it is changed or stopped.
+            if (chip.kind == MemoryChip.Kind.ALARM || chip.kind == MemoryChip.Kind.TIMER) ChipAction("Open clock", onOpenClock)
         }
     }
 }

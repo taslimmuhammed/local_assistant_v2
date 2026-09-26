@@ -19,9 +19,22 @@ object ToolCatalog {
     const val FORGET = "forget"
     const val SET_ALARM = "set_alarm"
     const val REMEMBER_IMAGE = "remember_image"
+    /** Not "call": Gemma writes a tool call as `call:<name>{…}`, and `call:call` fails to parse. */
+    const val CALL = "phone_call"
+    const val SEND_MESSAGE = "send_message"
+    const val SET_TIMER = "set_timer"
+    const val OPEN_APP = "open_app"
+    const val PHONE_SETTING = "phone_setting"
+    const val CALCULATE = "calculate"
 
     /** Tools that change something, as opposed to reading it. */
     val WRITES = setOf(ADD_TASK, UPDATE_TASK, ADD_EVENT, SAVE_FACT, FORGET, SET_ALARM, REMEMBER_IMAGE)
+
+    /** The everyday tools (`DeviceTools`): they act on the phone, never on memory. */
+    val DEVICE = setOf(CALL, SEND_MESSAGE, SET_TIMER, OPEN_APP, PHONE_SETTING, CALCULATE)
+
+    /** Device tools with an effect a repeat would duplicate: a second dialer, a second timer. */
+    val DEVICE_ACTIONS = DEVICE - CALCULATE
 
     val declarations: List<String> = listOf(
         function(
@@ -93,6 +106,47 @@ object ToolCatalog {
             "subject" to "string",
             "attribute" to "string",
         ),
+        function(
+            CALL,
+            "Use when the user asks you to call someone now. who: their name, relation or number, as said.",
+            required = listOf("who"),
+            "who" to "string",
+        ),
+        function(
+            SEND_MESSAGE,
+            "Use when the user asks you to text, WhatsApp or email someone now. to: name, relation, number or email; text: the message to send; app: sms, whatsapp or email.",
+            required = listOf("to"),
+            "to" to "string",
+            "text" to "string",
+            "app" to "string",
+        ),
+        function(
+            SET_TIMER,
+            "Use for a countdown timer. duration: the user's words for how long, copied exactly.",
+            required = listOf("duration"),
+            "duration" to "string",
+            "label" to "string",
+        ),
+        function(
+            OPEN_APP,
+            "Use to open an app, or for directions, songs, videos or a web search. app: its name, or maps, music, youtube or browser; query: what to find.",
+            required = listOf("app"),
+            "app" to "string",
+            "query" to "string",
+        ),
+        function(
+            PHONE_SETTING,
+            "Use to change a phone setting now (\\\"flashlight jalao\\\"). setting: flashlight, ringer, volume, do_not_disturb, wifi, bluetooth, mobile_data or airplane_mode; value: on, off, silent, vibrate, up, down or a percent.",
+            required = listOf("setting"),
+            "setting" to "string",
+            "value" to "string",
+        ),
+        function(
+            CALCULATE,
+            "Use for any arithmetic. expression: the sum, like 2450*18/100.",
+            required = listOf("expression"),
+            "expression" to "string",
+        ),
     )
 
     /** How to use the tools, appended to the instructions (section A) when tools are declared. */
@@ -101,6 +155,8 @@ object ToolCatalog {
         - Reminders and to-dos → add_task, with the user's own time words in when.
         - Alarms ("set an alarm", "wake me up") → set_alarm, which rings in the phone's clock app.
         - "Remember this" about an image → remember_image, with everything you can read in details (not save_fact).
+        - Calls, messages, timers, apps and phone settings only when asked for now: "remind me to call amma at 6" is add_task, "I should call her" is no tool.
+        - Any arithmetic → calculate.
         - Changing, finishing or moving an existing reminder → update_task.
         - Appointments, meetings, birthdays, trips → add_event.
         - Lasting facts about the user or their people and places → save_fact. How they want you to reply from now on ("keep answers short", "reply in Hindi") → save_fact with core=true, then follow it. Never for questions, hypotheticals, other people's opinions, passing moods or jokes.

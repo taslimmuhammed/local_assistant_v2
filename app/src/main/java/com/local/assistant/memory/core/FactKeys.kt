@@ -39,6 +39,9 @@ object FactKeys {
         return RELATION_SYNONYMS[namespaced] ?: ATTRIBUTE_SYNONYMS[namespaced] ?: namespaced
     }
 
+    /** Every word that files under [subject]: "amma", "mummy", "mom"… for `mother`. */
+    fun relationWords(subject: String): List<String> = RELATION_SYNONYMS.filterValues { it == subject }.keys.toList()
+
     /** Display text as the user will see it: trimmed, with runs of whitespace collapsed. */
     fun value(raw: String): String = raw.trim().replace(WHITESPACE, " ")
 
@@ -104,6 +107,9 @@ object FactKeys {
         map("city", "current_city", "lives_in", "residence", "home_city")
         map("languages", "language", "languages_spoken", "spoken_languages")
         map("interests", "interest", "hobbies", "hobby")
+        // What the call and message tools look for before searching the phone's contacts.
+        map("phone", "phone_number", "number", "mobile", "mobile_number", "contact_number", "cell", "cell_number")
+        map("email", "email_address", "email_id", "mail", "mail_id")
     }
 
     /** Response-style keys the model sometimes writes without the namespace. */

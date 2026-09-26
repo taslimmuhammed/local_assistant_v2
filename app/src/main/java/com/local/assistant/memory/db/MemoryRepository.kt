@@ -10,6 +10,8 @@ import com.local.assistant.memory.core.FactWrite
 import com.local.assistant.memory.prompt.AgendaItem
 import com.local.assistant.memory.retrieval.FactSource
 import com.local.assistant.memory.tools.EventTimes
+import com.local.assistant.memory.tools.PeopleMemory
+import com.local.assistant.memory.tools.PersonHints
 import kotlinx.coroutines.flow.Flow
 import java.time.ZoneId
 
@@ -36,7 +38,7 @@ class MemoryRepository(
     private val database: AppDatabase,
     private val clock: () -> Long = System::currentTimeMillis,
     private val zone: () -> ZoneId = ZoneId::systemDefault,
-) : MemoryStore, FactSource {
+) : MemoryStore, FactSource, PeopleMemory {
     private val facts = database.factDao()
     private val agendaDao = database.agendaDao()
     private val sessions = database.sessionDao()
@@ -211,6 +213,29 @@ class MemoryRepository(
             emptyList()
         }
 
+    /**
+     * What memory knows about [who] that helps find them in the phone: a number or email saved
+     * for them, a name ("my mother's name is Lakshmi"), the other words the user calls them by,
+     * and — for "my dentist" or "the CA" — the name filed on the user's own fact.
+     */
+    override suspend fun hints(who: String): PersonHints {
+        val subject = resolveSubject(who)
+        if (subject.isEmpty() || subject == FactKeys.USER) return PersonHints.NONE
+        val about = facts.bySubject(subject)
+        val role = facts.find(FactKeys.USER, FactKeys.attribute(who))
+        val names = buildList {
+            about.filter { it.attribute in NAME_ATTRIBUTES }.forEach { add(it.value) }
+            role?.value?.let(::add)
+            facts.aliases().filter { it.subject == subject }.forEach { add(it.alias.replace('_', ' ')) }
+            FactKeys.relationWords(subject).forEach(::add)
+        }.distinctBy { it.lowercase() }
+        return PersonHints(
+            names = names,
+            phone = about.firstOrNull { it.attribute == "phone" }?.value,
+            email = about.firstOrNull { it.attribute == "email" }?.value,
+        )
+    }
+
     fun observeCoreFacts(): Flow<List<FactEntity>> = facts.observeCoreFacts()
 
     override suspend fun insertTask(task: TaskEntity): Long = agendaDao.insertTask(task)
@@ -257,6 +282,8 @@ class MemoryRepository(
     suspend fun latestSessionSummary(): String? = sessions.latestSummarised()?.summary
 
     companion object {
+        private val NAME_ATTRIBUTES = setOf("name", "full_name", "nickname", "first_name")
+
         /** Words as an FTS4 query: any of them, each as a prefix. Null if nothing is left. */
         fun ftsMatch(words: List<String>): String? =
             words.map { word -> word.filter { it.isLetterOrDigit() } }

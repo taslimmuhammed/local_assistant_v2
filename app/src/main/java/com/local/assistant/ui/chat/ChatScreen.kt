@@ -75,6 +75,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.local.assistant.data.db.AttachmentKind
 import com.local.assistant.data.db.Role
 import com.local.assistant.data.repo.ChatRepository
+import com.local.assistant.device.PermissionBroker
 import com.local.assistant.llm.LlmService
 import com.local.assistant.media.RecordingState
 import com.local.assistant.ui.theme.AppColors
@@ -141,6 +142,20 @@ fun ChatScreen(
         val needed = Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
             ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
         if (needed) notificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS) else viewModel.notificationsAsked()
+    }
+
+    // A tool asking for a permission it needs now, like contacts for "call amma": answer it with
+    // the system dialog, and the tool carries on with the result.
+    var permissionRequest by remember { mutableStateOf<PermissionBroker.Request?>(null) }
+    val toolPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        permissionRequest?.answer?.complete(granted)
+        permissionRequest = null
+    }
+    LaunchedEffect(viewModel) {
+        viewModel.permissionRequests.collect { request ->
+            permissionRequest = request
+            toolPermission.launch(request.permission)
+        }
     }
 
     LaunchedEffect(offerExactAlarms) {

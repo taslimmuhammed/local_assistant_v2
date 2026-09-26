@@ -50,6 +50,8 @@ class ToolExecutor(
     private val memoryPaused: () -> Boolean = { false },
     /** Images kept for remember_image; none when not wired in. */
     private val images: ImageNotes = NoImageNotes,
+    /** Calls, messages, timers, apps, phone settings and arithmetic; none when not wired in. */
+    private val device: DeviceTools? = null,
 ) {
 
     data class Outcome(
@@ -64,8 +66,6 @@ class ToolExecutor(
     )
 
     enum class UndoResult { UNDONE, ALREADY_UNDONE, CHANGED_SINCE, NOT_UNDOABLE }
-
-    private class ToolError(message: String) : Exception(message)
 
     private sealed interface AlarmChange {
         data class Schedule(val taskId: Long, val dueAt: Long) : AlarmChange
@@ -83,31 +83,67 @@ class ToolExecutor(
     )
 
     private val recentMutex = Mutex()
+
+    /** Recent successful calls: when each stops counting as a repeat, and what it returned. */
     private val recent = LinkedHashMap<String, Pair<Long, Outcome>>()
 
     suspend fun execute(call: ToolCall, context: ToolContext): Outcome {
         val nowMs = nowMs()
         val key = dedupeKey(call)
         recentMutex.withLock {
-            recent.entries.removeAll { nowMs - it.value.first > dedupeWindowMs }
+            recent.entries.removeAll { nowMs >= it.value.first }
             recent[key]?.let { (_, first) -> return first.copy(chip = null, changedPrefix = false) }
         }
 
-        val (applied, recordId) = store.transaction {
+        fun recordOf(applied: Applied) = ToolRecord(call.name, call.arguments, gson.toJson(applied.result), applied.chip, applied.undo)
+
+        val (applied, recordId) = if (call.name in ToolCatalog.DEVICE) {
+            // Outside the transaction: finding a contact can wait on the user's answer to a
+            // permission dialog, and none of these write to memory.
             val applied = try {
-                dispatch(call, context)
+                device(call)
             } catch (e: ToolError) {
                 Applied(failure(e.message.orEmpty()))
             }
-            val record = ToolRecord(call.name, call.arguments, gson.toJson(applied.result), applied.chip, applied.undo)
-            applied to log.record(context.chatId, record)
+            applied to log.record(context.chatId, recordOf(applied))
+        } else {
+            store.transaction {
+                val applied = try {
+                    dispatch(call, context)
+                } catch (e: ToolError) {
+                    Applied(failure(e.message.orEmpty()))
+                }
+                applied to log.record(context.chatId, recordOf(applied))
+            }
         }
         applied.alarms.forEach(::applyAlarm)
 
         val ok = applied.result["ok"] == true
         val outcome = Outcome(gson.toJson(applied.result), ok, recordId, applied.chip, applied.changedPrefix)
-        if (ok && call.name in ToolCatalog.WRITES) recentMutex.withLock { recent[key] = nowMs to outcome }
+        val window = when (call.name) {
+            in ToolCatalog.WRITES -> dedupeWindowMs
+            // A model that repeats itself within a turn must not open the dialer twice, but
+            // "call her again" a minute later is a real request.
+            in ToolCatalog.DEVICE_ACTIONS -> DEVICE_DEDUPE_WINDOW_MS
+            else -> 0L
+        }
+        if (ok && window > 0) recentMutex.withLock { recent[key] = (nowMs + window) to outcome }
         return outcome
+    }
+
+    private suspend fun device(call: ToolCall): Applied {
+        val tools = device ?: throw ToolError("That isn't available in this app.")
+        val args = Args(call.arguments)
+        val done = when (call.name) {
+            ToolCatalog.CALL -> tools.call(args)
+            ToolCatalog.SEND_MESSAGE -> tools.sendMessage(args)
+            ToolCatalog.SET_TIMER -> tools.setTimer(args)
+            ToolCatalog.OPEN_APP -> tools.openApp(args)
+            ToolCatalog.PHONE_SETTING -> tools.phoneSetting(args)
+            ToolCatalog.CALCULATE -> tools.calculate(args)
+            else -> throw ToolError("There is no tool called ${call.name}.")
+        }
+        return Applied(done.result, done.chip)
     }
 
     private suspend fun dispatch(call: ToolCall, context: ToolContext): Applied {
@@ -673,31 +709,9 @@ class ToolExecutor(
 
     private fun modelDate(at: ZonedDateTime): String = MODEL_DATE.format(at)
 
-    /** Lenient reads of the model's arguments, which may arrive as strings, numbers or booleans. */
-    private class Args(private val map: Map<String, Any?>) {
-        fun text(key: String): String? = map[key]
-            ?.let { if (it is Number && it.toDouble() == Math.floor(it.toDouble())) it.toLong().toString() else it.toString() }
-            ?.trim()
-            ?.takeIf { it.isNotEmpty() && !it.equals("null", ignoreCase = true) }
-
-        fun required(key: String): String = text(key) ?: throw ToolError("'$key' is missing.")
-
-        fun bool(key: String): Boolean? = when (val value = map[key]) {
-            is Boolean -> value
-            is String -> value.trim().lowercase(Locale.ROOT) in setOf("true", "yes", "1")
-            is Number -> value.toInt() != 0
-            else -> null
-        }
-
-        fun int(key: String): Int? = when (val value = map[key]) {
-            is Number -> value.toInt()
-            is String -> value.trim().toIntOrNull()
-            else -> null
-        }
-    }
-
     companion object {
         const val DEDUPE_WINDOW_MS = 2 * 60 * 1000L
+        const val DEVICE_DEDUPE_WINDOW_MS = 15 * 1000L
         private const val MAX_FACT_LENGTH = 300
         private const val MAX_LISTED = 8
         private const val MAX_FOUND = 5
@@ -724,4 +738,30 @@ private object NoImageNotes : ImageNotes {
     override suspend fun findImage(chatId: Long, upToMessageId: Long): FoundImage? = null
     override suspend fun save(title: String, details: String, image: FoundImage): Long = error("no image store")
     override suspend fun delete(noteId: Long) = Unit
+}
+
+/** A call the app cannot carry out, told to the model so it can ask the user. */
+internal class ToolError(message: String) : Exception(message)
+
+/** Lenient reads of the model's arguments, which may arrive as strings, numbers or booleans. */
+internal class Args(private val map: Map<String, Any?>) {
+    fun text(key: String): String? = map[key]
+        ?.let { if (it is Number && it.toDouble() == Math.floor(it.toDouble())) it.toLong().toString() else it.toString() }
+        ?.trim()
+        ?.takeIf { it.isNotEmpty() && !it.equals("null", ignoreCase = true) }
+
+    fun required(key: String): String = text(key) ?: throw ToolError("'$key' is missing.")
+
+    fun bool(key: String): Boolean? = when (val value = map[key]) {
+        is Boolean -> value
+        is String -> value.trim().lowercase(Locale.ROOT) in setOf("true", "yes", "1")
+        is Number -> value.toInt() != 0
+        else -> null
+    }
+
+    fun int(key: String): Int? = when (val value = map[key]) {
+        is Number -> value.toInt()
+        is String -> value.trim().toIntOrNull()
+        else -> null
+    }
 }
