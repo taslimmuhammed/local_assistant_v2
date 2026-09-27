@@ -103,6 +103,29 @@ class ArchiveRepository(
     }
 
     /**
+     * Keeps only the user's side of exchanges archived before [before] whose reply has a digit
+     * in it: replies the model wrote while its text decoder ran in fp16, when it garbled digits
+     * past token 2,048 ("Your Roll No. was 43610104" for 4361044). Recalled, the model now copies
+     * such a reply exactly, so a wrong number would outlive the fix. The user's words were never
+     * garbled, and the chat itself keeps everything. Returns how many changed.
+     */
+    suspend fun dropRepliesWithNumbers(before: Long): Int {
+        var changed = 0
+        for (chunk in chunks.liveChunks()) {
+            if (chunk.createdAt >= before) continue
+            val reply = chunk.text.substringAfter(REPLY, missingDelimiterValue = "")
+            if (reply.none(Char::isDigit)) continue
+            val marker = chunk.modelId?.takeIf { it == ChunkPolicy.NOT_EMBEDDED }
+            transaction {
+                chunks.replaceText(chunk.id, chunk.text.substringBefore(REPLY), marker)
+                index.remove(listOf(chunk.id))
+            }
+            changed++
+        }
+        return changed
+    }
+
+    /**
      * Archives user messages from before this feature existed, or whose chunk a crash prevented.
      * Only messages below [beforeId] are touched, so a turn in flight — whose reply is not stored
      * yet — is left to [recordExchange]. Returns how many were archived.
@@ -240,6 +263,9 @@ class ArchiveRepository(
         const val TAG = "Archive"
         const val KEY_MODEL = "archive.embedding_model"
         const val BACKFILL_BATCH = 200
+        /** Where the reply starts in a chunk's text ([ChunkPolicy.text]). */
+        private const val REPLY = "\nAssistant: "
+
         const val KEY_UTILITY_CLEANUP = "archive.utility_cleanup"
         const val UTILITY_CLEANUP_VERSION = "1"
         val TOOL_NAME = Regex("\"tool\"\\s*:\\s*\"([a-z_]+)\"")

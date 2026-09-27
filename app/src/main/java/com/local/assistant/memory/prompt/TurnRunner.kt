@@ -74,7 +74,7 @@ class TurnRunner(
                 val reply = StringBuilder()
                 // A saved image the message is about is looked at again, as if sent with it.
                 val sent = attachment ?: turn.recalledImage?.let { PromptAttachment(it, AttachmentKind.IMAGE) }
-                tools.run(turn.session, turn.envelope.text, sent, ToolContext(chatId, userMessageId, userText)).collect { event ->
+                tools.run(turn.session, turn.envelope.text, sent, ToolContext(chatId, userMessageId, userText), sources = listOf(turn.prefix)).collect { event ->
                     when (event) {
                         is LoopEvent.Text -> {
                             reply.append(event.delta)

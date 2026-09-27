@@ -49,6 +49,9 @@ interface ChatDao {
     @Query("UPDATE chats SET rollingSummary = NULL")
     suspend fun clearRollingSummaries()
 
+    @Query("SELECT * FROM chats WHERE rollingSummary IS NOT NULL")
+    suspend fun summarisedChats(): List<ChatEntity>
+
     @Query("UPDATE chats SET title = :title WHERE id = :chatId")
     suspend fun renameChat(chatId: Long, title: String)
 

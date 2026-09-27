@@ -147,6 +147,25 @@ class SavedImagesTest {
     }
 
     @Test
+    fun aDeletedImagesFileGoesOnceItsUndoHasPassedAndNoOtherOne() = runBlocking {
+        val sent = chats.addMessage(chatId, Role.USER, "", attachmentPath = sentImage("card.jpg"), attachmentKind = AttachmentKind.IMAGE)
+        val found = images.findImage(chatId, sent)!!
+        val first = database.noteDao().byId(images.save("Card", "details", found))!!
+        val second = database.noteDao().byId(images.save("Bill", "details", found))!!
+
+        // Two deleted one after the other: the first one's undo passes while the second's is still on offer.
+        controls.deleteSavedImage(first)
+        controls.deleteSavedImage(second)
+        controls.discardSavedImageFile(first)
+        assertFalse(File(first.imagePath!!).exists())
+        assertTrue("the second can still be undone, image and all", File(second.imagePath!!).exists())
+
+        controls.restoreSavedImage(second)
+        controls.discardSavedImageFile(second)
+        assertTrue("a note that is back keeps its image", File(second.imagePath!!).exists())
+    }
+
+    @Test
     fun embeddingSkipsWhatFailedForThisModelButRetriesForANewOne() = runBlocking {
         val sent = chats.addMessage(chatId, Role.USER, "", attachmentPath = sentImage("card.jpg"), attachmentKind = AttachmentKind.IMAGE)
         val found = images.findImage(chatId, sent)!!

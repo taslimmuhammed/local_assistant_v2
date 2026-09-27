@@ -6,6 +6,7 @@ import android.content.ComponentCallbacks2
 import android.content.Context
 import android.content.pm.ApplicationInfo
 import android.net.Uri
+import android.util.Log
 import androidx.lifecycle.ProcessLifecycleOwner
 import com.local.assistant.data.db.AppDatabase
 import com.local.assistant.data.prefs.SettingsStore
@@ -64,9 +65,13 @@ import com.local.assistant.reminders.ClockAlarms
 import com.local.assistant.reminders.ReminderNotifications
 import com.local.assistant.ui.setup.MemorySearchControls
 import com.local.assistant.web.TavilySearch
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.flow.first
+import com.local.assistant.memory.work.PrecisionUpgrade
 import java.io.File
 import java.time.ZonedDateTime
 
@@ -216,6 +221,69 @@ class AppContainer(context: Context) {
         now = ZonedDateTime::now,
     )
 
+    private val imageDescriber = ImageDescriber(llmBackend, modelScheduler, conversations)
+
+    /** Puts right, once, what the model wrote before its text decoder ran in fp32. */
+    internal val precisionUpgrade = PrecisionUpgrade(
+        database = database,
+        archive = archive,
+        images = savedImages,
+        // At idle, like the other background model work: the user's messages come first.
+        reread = { path -> modelScheduler.runBackground(ModelScheduler.Priority.COMPACTION) { imageDescriber.read(path) } },
+        onChanged = {
+            conversations.prefixMayHaveChanged()
+            embeddingQueue.kick()
+        },
+    )
+
+    init {
+        appScope.launch {
+            llmService.state.first { it is LlmService.State.Ready }
+            if (llmService.exactDigits) {
+                try {
+                    precisionUpgrade.run()
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    // Nothing is marked done, so the next start tries again.
+                    Log.w("AppContainer", "Putting right the fp16 era failed", e)
+                }
+            }
+        }
+    }
+
+    /** The latest [rereadSavedImage], for evals to wait on. */
+    @Volatile
+    internal var imageReread: Job? = null
+
+    /**
+     * For a model whose text decoder is still fp16 ([com.local.assistant.llm.ModelPrecision]
+     * couldn't set it): a "remember this" in a chat saves what the model wrote in its tool call,
+     * past token 2,048, where fp16 positions garble digits — a PIN 4417 was saved as "44417",
+     * 1800-209-4455 as "18000-2094555". So once the turn is over, the image is read again in a
+     * conversation of its own, short enough to copy every digit (as the Images tab's "+" does),
+     * and that replaces the details. It waits behind the turn and goes ahead of the next message,
+     * which then finds the live conversation closed and rebuilds it.
+     */
+    private fun rereadSavedImage(noteId: Long, said: String) {
+        // With the text decoder in fp32 the model's own details are exact: nothing to redo.
+        if (llmService.exactDigits) return
+        imageReread = appScope.launch {
+            try {
+                // The model's slot first: it frees once the turn is over, and by then the note —
+                // saved inside the tool's transaction, still open as this is called — is written.
+                val description = modelScheduler.runUser {
+                    database.noteDao().byId(noteId)?.imagePath?.let { imageDescriber.read(it, said) }
+                } ?: return@launch
+                if (savedImages.rewriteDetails(noteId, description.details) != null) embeddingQueue.kick()
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                Log.w("AppContainer", "Could not read saved image $noteId again", e)
+            }
+        }
+    }
+
     val toolExecutor = ToolExecutor(
         store = memoryRepository,
         reminders = reminderScheduler,
@@ -230,6 +298,7 @@ class AppContainer(context: Context) {
         },
         memoryPaused = { settings.memoryPaused },
         images = savedImages,
+        onImageSaved = ::rereadSavedImage,
         device = deviceTools,
         web = WebTools(webSearch),
     )
@@ -240,6 +309,8 @@ class AppContainer(context: Context) {
         isOverflow = llmBackend::isContextOverflow,
         isUnreadable = llmBackend::isUnreadableToolCall,
         repair = ToolCallRepair(ToolCatalog.declarations(web = true))::repair,
+        onNumberFixed = { wrote, source -> Log.i("ReplyGrounding", "Reply wrote $wrote; the source has $source") },
+        groundNumbers = { !llmService.exactDigits },
     )
 
     val turnRunner = TurnRunner(conversations, modelScheduler, toolLoop, onExchangeStored = { userMessageId ->
@@ -294,8 +365,6 @@ class AppContainer(context: Context) {
         pruneSavedImages = savedImages::prune,
         finishPastReminders = { memoryControls.finishPastReminders() },
     )
-
-    private val imageDescriber = ImageDescriber(llmBackend, modelScheduler, conversations)
 
     /**
      * The Images tab's "+": the picked image goes through the model like "remember this" in a

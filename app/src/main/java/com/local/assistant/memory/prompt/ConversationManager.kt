@@ -84,6 +84,8 @@ class ConversationManager(
         val envelope: Envelope,
         val budget: MemoryBudget,
         val recalledImage: String? = null,
+        /** The system prefix the conversation holds: what the reply may read numbers out of. */
+        val prefix: String = "",
     )
 
     private class Live(
@@ -218,7 +220,7 @@ class ConversationManager(
             })
         }
         current.tokensBeforeTurn = current.session.tokenCount()
-        PreparedTurn(current.session, envelope, budget, recalledImage = attached?.path)
+        PreparedTurn(current.session, envelope, budget, recalledImage = attached?.path, prefix = current.acknowledgedPrefix)
     }
 
     /** Recall is best-effort: a failure costs this turn its memory lines, never the turn. */

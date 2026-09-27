@@ -28,6 +28,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ArrowBack
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.PushPin
+import androidx.compose.material.icons.outlined.DeleteOutline
 import androidx.compose.material.icons.outlined.PushPin
 import androidx.compose.material.icons.outlined.Search
 import androidx.compose.material3.AlertDialog
@@ -116,7 +117,7 @@ fun MemoryScreen(viewModel: MemoryViewModel, onBack: () -> Unit) {
                 actionLabel = if (notice.undo != null) "Undo" else null,
                 duration = SnackbarDuration.Long,
             )
-            if (result == SnackbarResult.ActionPerformed) viewModel.undo(notice)
+            if (result == SnackbarResult.ActionPerformed) viewModel.undo(notice) else viewModel.settle(notice)
         }
     }
 
@@ -404,6 +405,7 @@ private fun ImagesTab(viewModel: MemoryViewModel) {
     val notes by viewModel.savedImages.collectAsStateWithLifecycle()
     val adding by viewModel.addingImage.collectAsStateWithLifecycle()
     var open by remember { mutableStateOf<NoteEntity?>(null) }
+    var deleting by remember { mutableStateOf<NoteEntity?>(null) }
     // Room at the bottom so the "+" never covers the last row.
     LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = 88.dp)) {
         item { SectionHeader("Saved images") }
@@ -413,12 +415,32 @@ private fun ImagesTab(viewModel: MemoryViewModel) {
         }
         items(notes, key = { "note-${it.id}" }) { note ->
             Dismissible(onDismiss = { viewModel.deleteSavedImage(note) }) {
-                SavedImageRow(note, onClick = { open = note })
+                SavedImageRow(note, onClick = { open = note }, onDelete = { deleting = note })
             }
         }
-        if (notes.isNotEmpty()) item { Note("Ask about a saved image in any chat and the assistant looks at it again. Swipe to delete.") }
+        if (notes.isNotEmpty()) item { Note("Ask about a saved image in any chat and the assistant looks at it again. Tap one to see it; the bin (or a swipe left) deletes it.") }
     }
-    open?.let { note -> SavedImageDialog(note, onDone = { open = null }) }
+    open?.let { note -> SavedImageDialog(note, onDone = { open = null }, onDelete = { deleting = note }) }
+    deleting?.let { note ->
+        AlertDialog(
+            onDismissRequest = { deleting = null },
+            title = { Text("Delete “${note.title}”?") },
+            text = {
+                Text(
+                    "The saved image and what was noted about it are removed, and the assistant won't recall it any more. " +
+                        "If it came from a chat, it stays in that chat.",
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    viewModel.deleteSavedImage(note)
+                    deleting = null
+                    open = null
+                }) { Text("Delete", color = AppColors.Danger) }
+            },
+            dismissButton = { TextButton(onClick = { deleting = null }) { Text("Cancel") } },
+        )
+    }
 }
 
 /** Where the new image will appear, while the model reads it. */
@@ -436,9 +458,9 @@ private fun AddingImageRow() {
 }
 
 @Composable
-private fun SavedImageRow(note: NoteEntity, onClick: () -> Unit) {
+private fun SavedImageRow(note: NoteEntity, onClick: () -> Unit, onDelete: () -> Unit) {
     Row(
-        Modifier.fillMaxWidth().background(AppColors.Background).clickable(onClick = onClick).padding(horizontal = 16.dp, vertical = 8.dp),
+        Modifier.fillMaxWidth().background(AppColors.Background).clickable(onClick = onClick).padding(start = 16.dp, end = 4.dp, top = 8.dp, bottom = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Thumbnail(note.imagePath)
@@ -446,6 +468,9 @@ private fun SavedImageRow(note: NoteEntity, onClick: () -> Unit) {
             Text(note.title, style = MaterialTheme.typography.bodyLarge, color = AppColors.TextPrimary, maxLines = 1, overflow = TextOverflow.Ellipsis)
             Text(note.details, style = MaterialTheme.typography.bodySmall, color = AppColors.TextSecondary, maxLines = 2, overflow = TextOverflow.Ellipsis)
             Text("Saved " + formatWhen(note.createdAt, true), style = MaterialTheme.typography.labelSmall, color = AppColors.TextSecondary)
+        }
+        IconButton(onClick = onDelete) {
+            Icon(Icons.Outlined.DeleteOutline, contentDescription = "Delete “${note.title}”", tint = AppColors.TextSecondary)
         }
     }
 }
@@ -467,7 +492,7 @@ private fun Thumbnail(path: String?) {
 }
 
 @Composable
-private fun SavedImageDialog(note: NoteEntity, onDone: () -> Unit) {
+private fun SavedImageDialog(note: NoteEntity, onDone: () -> Unit, onDelete: () -> Unit) {
     AlertDialog(
         onDismissRequest = onDone,
         title = { Text(note.title) },
@@ -479,6 +504,7 @@ private fun SavedImageDialog(note: NoteEntity, onDone: () -> Unit) {
             }
         },
         confirmButton = { TextButton(onClick = onDone) { Text("Close") } },
+        dismissButton = { TextButton(onClick = onDelete) { Text("Delete", color = AppColors.Danger) } },
     )
 }
 

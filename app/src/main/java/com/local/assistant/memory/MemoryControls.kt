@@ -122,6 +122,11 @@ class MemoryControls(
         images?.restore(note)
     }
 
+    /** A deleted saved image's file, now that its undo has passed. */
+    suspend fun discardSavedImageFile(note: NoteEntity) {
+        note.imagePath?.let { images?.discardFile(it) }
+    }
+
     // ---- Profile ----
 
     /** The profile fields as stored: attribute → value, for the fields that have one. */

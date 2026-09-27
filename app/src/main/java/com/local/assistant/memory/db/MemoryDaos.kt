@@ -425,6 +425,10 @@ interface NoteDao {
     @Query("UPDATE notes SET embedding = :embedding, modelId = :modelId WHERE id = :id")
     suspend fun setEmbedding(id: Long, embedding: ByteArray?, modelId: String?)
 
+    /** New details; the old vector no longer describes them, so it goes and is made again. */
+    @Query("UPDATE notes SET details = :details, embedding = NULL, modelId = NULL, updatedAt = :at WHERE id = :id")
+    suspend fun rewrite(id: Long, details: String, at: Long)
+
     /** Notes not yet embedded by [modelId]. */
     @Query("SELECT * FROM notes WHERE modelId IS NULL OR (modelId != :modelId AND modelId != '!' || :modelId) ORDER BY id")
     suspend fun unembedded(modelId: String): List<NoteEntity>

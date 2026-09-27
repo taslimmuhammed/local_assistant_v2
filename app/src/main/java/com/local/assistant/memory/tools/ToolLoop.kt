@@ -7,6 +7,7 @@ import com.local.assistant.llm.PromptAttachment
 import com.local.assistant.llm.ToolCall
 import com.local.assistant.llm.ToolResult
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.FlowCollector
 import kotlinx.coroutines.flow.flow
 
 /** What one turn produced, as it happens. */
@@ -50,18 +51,39 @@ class ToolLoop(
     private val isUnreadable: (Throwable) -> Boolean = { false },
     /** Reads a call the runtime rejected, when it is recoverable (`llm/ToolCallRepair`). */
     private val repair: (Throwable) -> ToolCall? = { null },
+    /** A number in a reply was put right from what the model read ([ReplyGrounding]). */
+    private val onNumberFixed: (wrote: String, source: String) -> Unit = { _, _ -> },
+    /**
+     * Whether replies' numbers need checking: not when the model copies digits exactly (its text
+     * decoder in fp32), where a check could only change a number that was right.
+     */
+    private val groundNumbers: () -> Boolean = { true },
 ) {
 
+    /**
+     * [sources]: what else the model has in front of it besides [envelope] — the prompt prefix
+     * with its memory. Numbers the reply reads out of them, or out of a tool result, are checked
+     * against them as it streams ([GroundedReply]).
+     */
     fun run(
         session: ChatSession,
         envelope: String,
         attachment: PromptAttachment?,
         context: ToolContext,
+        sources: List<String> = emptyList(),
     ): Flow<LoopEvent> = flow {
         var reply = session.send(envelope, attachment)
         var rounds = 0
         var spoke = false
         var changedPrefix = false
+        val grounding = ReplyGrounding(sources + envelope)
+        val text = if (groundNumbers()) GroundedReply(grounding, onNumberFixed) else null
+
+        /** A pause in the reply (a tool call, the end): what was held back goes out now. */
+        suspend fun FlowCollector<LoopEvent>.release() {
+            val rest = text?.flush().orEmpty()
+            if (rest.isNotEmpty()) emit(LoopEvent.Text(rest))
+        }
 
         while (true) {
             val calls = mutableListOf<ToolCall>()
@@ -72,7 +94,8 @@ class ToolLoop(
                 when (event) {
                     is GenEvent.TextDelta -> {
                         spoke = true
-                        emit(LoopEvent.Text(event.text))
+                        val shown = text?.push(event.text) ?: event.text
+                        if (shown.isNotEmpty()) emit(LoopEvent.Text(shown))
                     }
                     is GenEvent.ToolCalls -> calls += event.calls
                     is GenEvent.Done -> stats = event.stats
@@ -104,6 +127,7 @@ class ToolLoop(
                 emit(LoopEvent.Done(null, outcome.changedPrefix, toolRounds = 1, staleConversation = true))
                 return@flow
             }
+            release()
             if (calls.isEmpty() || rounds > maxRounds) {
                 emit(LoopEvent.Done(stats, changedPrefix, rounds))
                 return@flow
@@ -119,6 +143,7 @@ class ToolLoop(
                     changedPrefix = changedPrefix || outcome.changedPrefix
                     if (outcome.chip != null && outcome.recordId != null) emit(LoopEvent.Memory(outcome.recordId, outcome.chip))
                     if (call.name == ToolCatalog.CALCULATE && outcome.ok) answerOf(outcome.result)?.let(sums::add)
+                    grounding.add(outcome.result)
                     ToolResult(call.name, outcome.result)
                 }
             }

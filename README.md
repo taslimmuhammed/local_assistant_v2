@@ -228,14 +228,56 @@ the same image garbled long numbers (`1800-209-4455` read back as `18000-29-4555
 them right every time. A rebuilt conversation starts over and attaches it again. `search_memory`
 lists saved images too.
 
-On the real model (`MemoryEvalTest.aSavedImageIsLookedAtAgainWhenAskedAbout`): a card is saved in
-one chat, then a new chat asks for its PIN, its support number and its background colour. That was
-9/9 right over three runs, the colour coming from the image alone, when the prompt was shorter.
-With today's 16 tools, the question sits past token 2,048 and the GPU digit bug (see *Numbers past
-token 2,048*) reaches the reply. Measured 27 Sep 2026: the image is recalled and attached, the saved
-details are exact, and the reply still says the PIN is `44417` (it is `4417`) and the support number
-`18000-2095555`. The test used to check `"4417" in answer`, which `44417` passes. It now wants the
-number on its own, and fails until replies are fixed.
+With the text decoder in fp32 (see *Numbers past token 2,048*), the model copies digits exactly,
+and saving and answering need nothing more. The two guards below were built first. They now run
+only when the model file's precision couldn't be set, where both steps happen past token 2,048 in
+fp16. Measured 27 Sep 2026, in fp16:
+
+- **Saving.** In a chat, the details are what the model writes into its `remember_image` call. That
+  was already wrong when saved: "Admin PIN: 44417" for 4417, "Support: 18000-2094555" for
+  1800-209-4455. So once the turn is over, the app reads the image again in a conversation of its
+  own (`ImageDescriber`, the same one the Images tab's **+** uses). That conversation is one image,
+  a few lines of instructions and the reply, kept under token 2,048. Its details replace the
+  model's, and the note is embedded again (`AppContainer.rereadSavedImage`). The user's words go
+  with it, for context. The re-read waits behind the turn and runs ahead of the next message, about
+  5 s. It closes the live conversation, so the next message rebuilds it (about 3 s more, once).
+- **Answering.** A reply can still garble a number it reads out of an exact note: "44417" again.
+  Numbers in a reply are checked against the text the model was given — the prefix's memory, the
+  envelope with its recalled facts, snippets and saved image, and this turn's tool results
+  (`ReplyGrounding`). A number that appears in none of it gets replaced by the source's number when
+  both of these hold. First, it is one of the source's numbers with a digit or two wrong: at least
+  60% of the digits in common, in order, and at most two more or fewer. Second, it sits by the same
+  label, such as "admin PIN" or "support". The label is the words just before the number, or just
+  after it ("11:45 · Dentist"). Numbers are held back while the reply streams, only until each is
+  complete, so a wrong one is never shown and then swapped. Numbers left alone: any number the
+  sources contain (in any grouping, or a 24-hour time read as 12-hour), sums, conversions, general
+  knowledge, and a number said before its label.
+
+With both guards, the phone's evals give the PIN and support number exactly. The chat path
+(`aSavedImageIsLookedAtAgainWhenAskedAbout`) saves 4417 and 1800-209-4455 and reads both back. The
+Images-tab path (`anImageAddedFromTheImagesTabIsDescribedAndFound`) reads back 4417 in 4 of 4 runs;
+in one of them the reply wrote 44417 and grounding put it right (log tag `ReplyGrounding`). The
+evals match numbers on digit boundaries: an earlier check, `"4417" in answer`, passed "44417".
+The colour question ("what colour is the background of that wifi card?") got "I cannot tell" in
+every fp16 run on 27 Sep 2026. It was the same position problem: the image sat past token 2,048.
+With the fp32 text decoder, all three answers are right (PIN 4417, 1800-209-4455, "white"). The
+chat model's own `remember_image` details are exact too, so no re-read is needed.
+
+Each saved image has a bin on its row, and a **Delete** button when it is open (a swipe left works
+too). Deleting asks first. The note goes at once, with Undo in the snackbar. Once the Undo has
+passed, the image file goes too (`SavedImages.discardFile`), only that note's file, so another
+deletion still waiting on its own Undo keeps its image. The nightly tidy catches anything left, such
+as the screen being closed before the snackbar ended. A copy sent in a chat stays in that chat.
+
+**Reading numbers off a photo.** Photos are stored at up to 768 px on the long edge, and the
+vision encoder gets 280 tokens per image. That is the most this model file takes: with the runtime's
+`visualTokenBudget` at 560 or 1120, the image produced no tokens and the replies were empty. On a
+full-page mark sheet, asked to transcribe everything, the model dropped a digit from the roll
+number (436104 for 4361044) in 5 of 5 reads. Asked for just the values of the numbered labels, it
+read it right in 5 of 5. So `ImageDescriber` reads twice. It describes the image, then asks, in a
+fresh conversation, for exactly the labels whose values carry three or more digits (up to 8). Where
+the two reads disagree by a digit or two next to the same label, the second one's number goes into
+the details (`ReplyGrounding.correct`). This adds one short read, a few seconds, to saving an image.
 
 The Images tab (under *What I know about you*) has a **+** that does the same job without a chat:
 pick a photo, and the model names and describes it exactly as `remember_image` would
@@ -586,34 +628,82 @@ Two deliberate choices worth knowing:
 
 ## Numbers past token 2,048 (GPU)
 
-Measured on the target phone with LiteRT-LM 0.17.1: on the GPU backend, once a message sits past
-token position 2,048 of the conversation, the model no longer copies digits reliably. Words come
-through; digits are dropped, doubled or reordered — "11:45" became "1:45", "6:35" "6:5", "98450
-12345" "94501235", "25+25" "5+5+2". The boundary is sharp (a digit-free prompt of 2,008 tokens
-copied 3/3 numbers, one of 2,030 tokens 1/3) and the same with a 4K, 8K or 16K window, with or
-without MTP, at any temperature; the CPU backend copies them all, at about 40 s to the first token
-instead of 2. It looks like positions held in half precision, whose whole numbers stop being exact
-at 2,048. The instructions and 16 tool declarations alone are about 2,000 tokens, so every chat
-is past the line from its first message.
+**The cause.** On the GPU backend, once text sits past token position 2,048 of the conversation,
+the model stops copying digits reliably. Words come through, but digits are dropped, doubled or
+reordered: "11:45" became "1:45", "4361044" "43610104", "09/08/2001" "09/08/20001". The model
+file (Gemma 4 E4B `.litertlm`) asks LiteRT-LM to run its text decoder with **fp16 activations**
+(the `tf_lite_prefill_decode` section's `prefer_activation_type: "fp16"`). In fp16, whole numbers
+are exact only up to 2,048. Past that, neighbouring token positions round to the same value: two
+at a time up to 4,096, four at a time after. The rotary position encoding then can't tell those
+tokens apart. Gemma gives every digit a token of its own, so a run of digits is exactly what falls
+apart, while a word spread over one or two tokens mostly survives. The instructions and 16 tool
+declarations alone are about 2,000 tokens, so every chat was past the line from its first message.
+It isn't MTP, the window size or the sampler: it was the same at 4K, 8K and 16K, with MTP on or
+off, and at any temperature. The CPU backend (fp32) was always exact.
 
-The app works around it rather than trusting the model with digits:
+**How it's done elsewhere.** Server-side models (GPT, Claude, and open stacks such as vLLM or
+llama.cpp) keep positions as integers and compute the rotary angles in fp32, even when the rest of
+the model runs in 16 bits. Their tokenizers also group digits, so there are fewer digit tokens
+side by side. Speculative decoding and MTP draft tokens at the same positions and are checked by
+the main model, so they don't change this.
 
-- **Tool arguments are grounded in the user's words** (`NumberGrounding`). An argument that
-  differs from the user's message only in its digits — the same words around them — is taken from
-  the message: "tomorrow at 1:45" becomes "tomorrow at 11:45", a phone number with digits missing
-  becomes the one the user said. Numbers the model rightly wrote itself ("in 30 minutes" for "half
-  an hour") are left alone, and so is what it read in an image.
-- **A message that is only a sum never reaches the model.** "whats 25 * 2", "what is root of
-  25", "18% of 2450?" are worked out by `NumberGrounding.directAnswer` and answered at once — "25 ×
-  2 = 50". Anything with more to it ("split 3450 between 4 people") goes to the model, whose
-  expression is grounded: numbers with digits dropped, or split in two ("8 75" for 875), are taken
-  from the message. A calculator turn is answered by the app itself — "3450 ÷ 4 = 862.5" — rather
-  than asking the model to restate a result it may garble.
-- **Sums and phone commands are kept out of the archive** (`ChunkPolicy.isUtility`): recalled
-  beside a new sum, old ones were mixed into it.
+**The fix.** `llm/ModelPrecision` sets the text decoder's `prefer_activation_type` to "fp32" in the
+model file's header before the engine loads it. LiteRT-LM 0.17.1 reads the preference from the
+header (`runtime/util/litert_lm_loader.cc`) and offers no API for it. "fp16" and "fp32" are the
+same length, so it is a 2-byte write in place, and nothing else in the 3.6 GB file moves. The
+vision encoder keeps its fp16. The runtime keys its GPU program cache on the file's mtime, so it
+rebuilds the fp32 programs once. A file it can't read, or one that asks for something else, is
+left as it is, and the app falls back to the checks below.
 
-What's left: numbers the model writes in its own prose, past token 2,048, can still be off. The
-chips under a reply show the exact reminder, alarm, call or timer that was set.
+Measured on the phone (`MemoryEvalTest.digitPrecision`: eight numbers — phone numbers, dates, a
+PIN, an amount — copied after a digit-free prompt, twice each, GPU with MTP):
+
+| Numbers copied after | fp16 (as shipped) | fp32 | Decode, fp16 → fp32 | To first token, fp16 → fp32 |
+|---|---|---|---|---|
+| 232 tokens | 16/16 | 16/16 | 52 → 48 tok/s | 0.4 → 0.5 s |
+| 1,398 tokens | 16/16 | 16/16 | 58 → 54 tok/s | 1.5 → 2.2 s |
+| 1,882 tokens | 14/16 | 16/16 | 56 → 53 tok/s | 2.0 → 3.1 s |
+| 3,334 tokens | 0/16 | 16/16 | 39 → 51 tok/s | 3.7 → 5.9 s |
+| 4,786 tokens | 0/16 | 16/16 | 31 → 45 tok/s | 5.5 → 10.4 s |
+
+Decoding runs at about the same speed; at long positions fp16 was slower only because it was
+writing garbage. In a real chat (`MemoryEvalTest.precisionCostInAChat`, with the app's full prompt
+of about 2,300 tokens), a new chat's first reply starts after 5.3 s instead of 3.7 s. A follow-up
+("…the insurance renews on 09/08/2027. what's the renewal date?") took 3.1 s in all and came back
+exact. The app uses about 220 MB more memory (1,390 against 1,171 MB). Reading a prompt (prefill) takes 1.6–1.9× as long, which shows at the first
+message of a chat and after a rebuild. Later turns only read their own new text. `"fp32_fp16"`
+(fp32 with mixed precision) was just as exact but no faster (12.5 s to the first token at 4,786),
+so plain fp32 is used.
+
+**What fp16 left behind.** Everything the model wrote before the fix could hold garbled numbers:
+archived replies ("Your Roll No. was 43610104"), session summaries ("25th October 026"), and saved
+images' details ("Roll No: 436104", "12:0:05 PM"). The fp32 model copies what it is given exactly,
+so recalled into a new chat, those old mistakes came back word for word.
+`memory/work/PrecisionUpgrade` puts them right once, the first time the model loads in fp32:
+
+- Archived exchanges keep the user's words, but lose a reply with digits in it.
+- Summaries with digits go.
+- Saved images are read again from their photos.
+
+What the user typed was never garbled, so facts and the chats' own messages are left alone. A chat
+from before the fix still shows its old replies, and continuing it replays them; a new chat
+doesn't. The start of fp32 is stored, so a restart part-way through doesn't strip newer replies.
+
+**Checks kept as fallbacks.** These were written before the cause was found. Some stay on always;
+others run only when the model's precision couldn't be set (`LlmService.exactDigits` false):
+
+- Always: **a message that is only a sum never reaches the model.** "whats 25 * 2", "what is root
+  of 25", "18% of 2450?" are worked out by `NumberGrounding.directAnswer` and answered at once:
+  "25 × 2 = 50". A `calculate` turn is answered by the app itself ("3450 ÷ 4 = 862.5"). Both are
+  faster than the model and can't be wrong.
+- Always: **tool arguments are grounded in the user's words** (`NumberGrounding`). An argument that
+  differs from the user's message only in its digits is taken from the message. With exact digits
+  it no longer changes anything.
+- Always: **sums and phone commands are kept out of the archive** (`ChunkPolicy.isUtility`).
+- Only in fp16: **reply numbers are checked against what the model read** (`ReplyGrounding`, see
+  *Saved images*), and **a saved image is read again** after "remember this" in a chat. With exact
+  digits, the first could only change a number that was right, and the second would cost 5 s and a
+  rebuild for nothing.
 
 ## Known limitations
 

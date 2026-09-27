@@ -111,6 +111,20 @@ class LlmService(
     @Volatile
     private var activeConversation: Conversation? = null
 
+    /**
+     * The text decoder runs in fp32 ([ModelPrecision]), so the model copies digits exactly at any
+     * position. False until a model has loaded, and for a file whose precision couldn't be set:
+     * then the app's own checks on numbers ([com.local.assistant.memory.tools.ReplyGrounding],
+     * re-reading saved images) stand in.
+     */
+    @Volatile
+    var exactDigits: Boolean = false
+        private set
+
+    /** Off only in evals that measure the model file's own fp16 against fp32. */
+    @Volatile
+    internal var setsPrecision: Boolean = true
+
     /** True while a reply or background completion is being decoded. */
     val isGenerating: Boolean get() = activeConversation != null
 
@@ -141,6 +155,20 @@ class LlmService(
         }
 
         _state.value = State.Loading
+        // Before the engine opens the file: fp32 for the text decoder, or digits garble past token 2,048.
+        val precision = withContext(Dispatchers.IO) {
+            runCatching {
+                if (setsPrecision) {
+                    ModelPrecision.ensureFp32TextDecoder(File(modelPath))
+                } else {
+                    ModelPrecision.Outcome.ALREADY_FP32.takeIf { ModelPrecision.textDecoderPrecision(File(modelPath)) == "fp32" }
+                }
+            }
+                .onFailure { Log.w(TAG, "Could not set the text decoder's precision", it) }
+                .getOrNull()
+        }
+        exactDigits = precision == ModelPrecision.Outcome.PATCHED || precision == ModelPrecision.Outcome.ALREADY_FP32
+        Log.i(TAG, "Text decoder precision: $precision")
         val modalities = withContext(Dispatchers.IO) { probeModalities(modelPath) }
         _modalities.value = modalities
         visionTokensPerImage = withContext(Dispatchers.IO) { probeVisionTokens(modelPath) }

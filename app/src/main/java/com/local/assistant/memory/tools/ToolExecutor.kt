@@ -51,6 +51,11 @@ class ToolExecutor(
     private val memoryPaused: () -> Boolean = { false },
     /** Images kept for remember_image; none when not wired in. */
     private val images: ImageNotes = NoImageNotes,
+    /**
+     * remember_image saved a note with the details the model wrote in its call — past token
+     * 2,048, where it mis-copies digits — so the image is to be read again once the turn is over.
+     */
+    private val onImageSaved: (noteId: Long, userText: String) -> Unit = { _, _ -> },
     /** Calls, messages, timers, apps, phone settings and arithmetic; none when not wired in. */
     private val device: DeviceTools? = null,
     /** web_search; none when not wired in. */
@@ -492,6 +497,7 @@ class ToolExecutor(
         val image = images.findImage(context.chatId, context.userMessageId)
             ?: throw ToolError("There is no image in this chat to remember. Ask the user to send it.")
         val id = images.save(title, details, image)
+        onImageSaved(id, context.userText)
         return Applied(
             result = ok("id" to id, "saved" to "the image and your details; it will be shown to you again when the user asks about it"),
             chip = MemoryChip(MemoryChip.Kind.IMAGE, "Saved image", title),

@@ -81,7 +81,12 @@ data class FactsView(
 }
 
 /** A short-lived message under the screen, with an undo when there is one. */
-data class Notice(val message: String, val undo: (suspend () -> Unit)? = null)
+data class Notice(
+    val message: String,
+    val undo: (suspend () -> Unit)? = null,
+    /** Runs once the notice goes without its undo: what the undo needed kept can go now. */
+    val settle: (suspend () -> Unit)? = null,
+)
 
 class MemoryViewModel(
     private val controls: MemoryControls,
@@ -178,9 +183,16 @@ class MemoryViewModel(
         _notices.emit(Notice("Deleted “${event.title}”") { controls.restoreEvent(event) })
     }
 
+    /** The note goes now; its image file once the undo has passed. */
     fun deleteSavedImage(note: NoteEntity) = launch {
         controls.deleteSavedImage(note)
-        _notices.emit(Notice("Deleted “${note.title}”") { controls.restoreSavedImage(note) })
+        _notices.emit(
+            Notice(
+                "Deleted “${note.title}”",
+                undo = { controls.restoreSavedImage(note) },
+                settle = { controls.discardSavedImageFile(note) },
+            ),
+        )
     }
 
     fun addSavedImage(uri: Uri) {
@@ -231,6 +243,8 @@ class MemoryViewModel(
     }
 
     fun undo(notice: Notice) = launch { notice.undo?.invoke() }
+
+    fun settle(notice: Notice) = launch { notice.settle?.invoke() }
 
     private suspend fun refreshDuplicates() {
         _duplicates.value = controls.duplicates()

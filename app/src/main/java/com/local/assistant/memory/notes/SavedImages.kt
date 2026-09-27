@@ -73,6 +73,13 @@ class SavedImages(
         )
     }
 
+    /** Details read again from the image; null when the note is gone. */
+    suspend fun rewriteDetails(noteId: Long, details: String): NoteEntity? {
+        notes.byId(noteId) ?: return null
+        notes.rewrite(noteId, details, clock())
+        return notes.byId(noteId)
+    }
+
     /** The note and its copy of the image. */
     override suspend fun delete(noteId: Long) {
         val note = notes.byId(noteId) ?: return
@@ -95,6 +102,14 @@ class SavedImages(
     override suspend fun matching(match: String): List<NoteEntity> = notes.matching(match)
 
     override suspend fun embedded(modelId: String): List<NoteEntity> = notes.embedded(modelId)
+
+    /** A deleted note's image file, once its undo has passed; kept if a note still refers to it. */
+    suspend fun discardFile(path: String) {
+        if (path in notes.imagePaths()) return
+        withContext(Dispatchers.IO) {
+            File(path).takeIf { it.parentFile?.absolutePath == dir.absolutePath }?.delete()
+        }
+    }
 
     /** Image files no note refers to any more. */
     suspend fun prune(): Int {

@@ -232,10 +232,15 @@ class MemoryEvalTest {
             val (saidOnSave, chips) = turn(first, "remember this", image.path)
             report("save turn: ${System.currentTimeMillis() - started} ms, chips ${chips.map { "${it.kind}:${it.label}:${it.detail}" }}")
             report("reply: ${saidOnSave.take(300)}")
-            val note = container.memoryControls.observeSavedImages().first().firstOrNull { it.imagePath != null && it.createdAt >= started }
+            // The details the model wrote in its call are read again from the image once the turn is over.
+            started = System.currentTimeMillis()
+            container.imageReread?.join()
+            report("read again in ${System.currentTimeMillis() - started} ms")
+            val note = container.memoryControls.observeSavedImages().first().firstOrNull { it.imagePath != null && it.createdAt >= started - 60_000 }
             report("saved: ${note?.let { "“${it.title}”: ${it.details}" } ?: "nothing"}")
             assertNotNull("remember_image was called", note)
             noteId = note!!.id
+            assertTrue("the saved PIN is exact", EXACT_PIN in note.details)
 
             started = System.currentTimeMillis()
             container.embeddingQueue.drainNow()
@@ -378,6 +383,256 @@ class MemoryEvalTest {
         }
         report("echo | ${ask("You are a helpful assistant.", emptyList(), "Repeat exactly, nothing else: 256 1234 4321 25 98450")}")
         report("complete echo | ${backend.complete("You are a helpful assistant.", "Repeat exactly, nothing else: 256 1234 4321 25 98450", maxTokens = 60).replace('\n', ' ')}")
+        Unit
+    }
+
+    /**
+     * Digits copied at a given position in the conversation, and what that costs: the numbers
+     * users reported garbled ("4361044" came back "43610104", "09/08/2001" "09/08/20001") after a
+     * digit-free prompt of each size. Past 2,048 an fp16 position can't tell neighbouring tokens
+     * apart, and past 4,096 four of them; the text decoder's precision is what is under test.
+     *
+     *     adb shell am instrument -w -e eval memory -e class com.local.assistant.memory.MemoryEvalTest#digitPrecision \
+     *         com.local.assistant.test/androidx.test.runner.AndroidJUnitRunner
+     */
+    @Test
+    fun digitPrecision() = runBlocking {
+        enabled()
+        val backend = container.llmBackend
+        check(backend.ensureReady())
+        val numbers = listOf("4361044", "09/08/2001", "1800-209-4455", "98450 12345", "4417", "27.06.1994", "7300418826", "₹2,34,560")
+        val filler = "\nBe warm and plain in tone; avoid jargon, keep answers focused, and ask when something is unclear."
+        val base = "You are a helpful assistant."
+        val targets = (InstrumentationRegistry.getArguments().getString("sizes") ?: "300,1900,2600,4600,6600").split(',').map { it.trim().toInt() }
+        report("digit precision on ${container.llmService.state.value}")
+        for (target in targets) {
+            var system = base
+            while (container.tokenEstimator.estimate(system) < target) system += filler
+            var right = 0
+            var total = 0
+            val wrong = mutableListOf<String>()
+            var position: Int? = null
+            val speeds = mutableListOf<com.local.assistant.llm.GenStats>()
+            for (round in 0..1) {
+                val shuffled = if (round == 0) numbers else numbers.reversed()
+                val reply = container.conversations.withModelFree {
+                    backend.openChat(com.local.assistant.llm.ChatSpec(systemPrefix = system, history = emptyList(), maxOutputTokens = 120, prefillOnOpen = true)).use { chat ->
+                        if (position == null) position = chat.tokenCount()
+                        val out = StringBuilder()
+                        chat.send("Copy these exactly, one per line, nothing else:\n" + shuffled.joinToString("\n")).collect { e ->
+                            when (e) {
+                                is com.local.assistant.llm.GenEvent.TextDelta -> out.append(e.text)
+                                is com.local.assistant.llm.GenEvent.Done -> e.stats?.let(speeds::add)
+                                else -> Unit
+                            }
+                        }
+                        out.toString()
+                    }
+                }
+                for (n in shuffled) {
+                    total++
+                    if (Regex("(?<![\\d])" + Regex.escape(n) + "(?![\\d])").containsMatchIn(reply)) right++ else wrong += n
+                }
+                if (round == 0) report("  sample after ${position} tokens: " + reply.replace('\n', ' ').take(160))
+            }
+            val tps = speeds.map { it.tokensPerSecond }.average()
+            val ttft = speeds.map { it.timeToFirstTokenMs }.average()
+            report("after ${position} tokens: $right/$total exact · %.1f tok/s · %.0f ms to first token · missed ${wrong.distinct()}".format(tps, ttft))
+        }
+        Unit
+    }
+
+    /**
+     * What fp32 costs in a real chat: a new chat's first message (the whole prefix is read) and
+     * a follow-up (only its own text), with the text decoder in the model file's fp16 and in fp32.
+     * Uses a chat of its own and deletes it. Needs files/model-header-fp16-backup.bin, the model's
+     * first 16 KB as shipped.
+     */
+    @Test
+    fun precisionCostInAChat() = runBlocking {
+        enabled()
+        val llm = container.llmService
+        val context = instrumentation.targetContext
+        val model = File(checkNotNull(container.settings.modelPath))
+        val shipped = File(context.filesDir, "model-header-fp16-backup.bin").readBytes()
+        check(shipped.size == 16 * 1024 && String(shipped, 0, 8) == "LITERTLM")
+        suspend fun reload(fp16: Boolean) {
+            container.conversations.withModelFree { llm.unload() }
+            llm.setsPrecision = !fp16
+            if (fp16) java.io.RandomAccessFile(model, "rw").use { it.seek(0); it.write(shipped) }
+            check(container.llmBackend.ensureReady())
+        }
+        try {
+            for (fp16 in listOf(true, false)) {
+                reload(fp16)
+                val label = if (fp16) "fp16" else "fp32"
+                val pss = android.os.Debug.getPss() / 1024
+                val chatId = container.chatRepository.createChat("Precision eval")
+                try {
+                    for (text in listOf("hi, what can you help me with?", "my car's number is KL 07 CX 4361, and the insurance renews on 09/08/2027. what's the renewal date?")) {
+                        val userId = container.chatRepository.addMessage(chatId, Role.USER, text)
+                        val reply = StringBuilder()
+                        var stats: com.local.assistant.llm.GenStats? = null
+                        val started = System.currentTimeMillis()
+                        container.turnRunner.run(chatId, userId, text).collect { e ->
+                            when (e) {
+                                is TurnEvent.Text -> reply.append(e.delta)
+                                is TurnEvent.Done -> stats = e.stats
+                                else -> Unit
+                            }
+                        }
+                        val replyId = container.chatRepository.addMessage(chatId, Role.ASSISTANT, reply.toString())
+                        container.turnRunner.finish(chatId, userId, replyId, completed = true)
+                        report(
+                            "$label | ${System.currentTimeMillis() - started} ms turn, ${stats?.timeToFirstTokenMs} ms to first token, " +
+                                "%.1f tok/s, prefill ${stats?.prefillTokens} | ${reply.toString().replace('\n', ' ').take(120)}".format(stats?.tokensPerSecond ?: 0.0),
+                        )
+                    }
+                } finally {
+                    container.chatRepository.deleteChat(chatId)
+                }
+                report("$label | app PSS after load: $pss MB (exactDigits=${llm.exactDigits})")
+            }
+        } finally {
+            llm.setsPrecision = true
+            container.conversations.withModelFree { llm.unload() }
+            check(container.llmBackend.ensureReady())
+            report("restored: ${com.local.assistant.llm.ModelPrecision.textDecoderPrecision(model)}, exactDigits=${llm.exactDigits}")
+        }
+        Unit
+    }
+
+    /**
+     * Where a saved image's numbers go wrong, on a saved image of the user's own (read-only, by
+     * title: -e note "CBSE Mark Sheet"; -e expect "4361044,09/08/2001"). Each variant asks for
+     * the same two numbers; the chat variant uses a chat of its own and deletes it.
+     */
+    @Test
+    fun savedImageNumbersProbe() = runBlocking {
+        enabled()
+        val args = InstrumentationRegistry.getArguments()
+        val title = args.getString("note") ?: "CBSE Mark Sheet"
+        val expected = (args.getString("expect") ?: "4361044,09/08/2001").split(',')
+        val note = container.memoryControls.observeSavedImages().first().firstOrNull { it.title == title } ?: error("no saved image “$title”")
+        val image = checkNotNull(note.imagePath)
+        val backend = container.llmBackend
+        check(backend.ensureReady())
+        report("probe on ${container.llmService.state.value}, exactDigits=${container.llmService.exactDigits}, vision tokens ${backend.capabilities?.visionTokensPerImage}")
+        report("note says: " + expected.joinToString { e -> "$e ${if (Regex("(?<!\\d)" + Regex.escape(e) + "(?!\\d)").containsMatchIn(note.details)) "present" else "ABSENT"}" })
+        fun score(reply: String) = expected.joinToString { e -> "$e:" + if (Regex("(?<!\\d)" + Regex.escape(e) + "(?!\\d)").containsMatchIn(reply)) "ok" else "wrong" }
+        val question = "What is the Roll No, and the Date of Birth? Copy them exactly."
+        suspend fun ask(label: String, system: String, text: String, attach: Boolean) {
+            val reply = container.conversations.withModelFree {
+                backend.openChat(com.local.assistant.llm.ChatSpec(systemPrefix = system, history = emptyList(), sampling = com.local.assistant.llm.Sampling.BACKGROUND, maxOutputTokens = 80)).use { chat ->
+                    val out = StringBuilder()
+                    chat.send(text, if (attach) com.local.assistant.llm.PromptAttachment(image, com.local.assistant.data.db.AttachmentKind.IMAGE) else null).collect { e ->
+                        if (e is com.local.assistant.llm.GenEvent.TextDelta) out.append(e.text)
+                    }
+                    val tokens = chat.tokenCount()
+                    "$tokens tokens | " + out.toString().replace('\n', ' ').take(160)
+                }
+            }
+            report("$label | ${score(reply)} | $reply")
+        }
+        val filler = "\nBe warm and plain in tone; avoid jargon, keep answers focused, and ask when something is unclear."
+        var long = "You are a helpful assistant."
+        while (container.tokenEstimator.estimate(long) < 2600) long += filler
+        val line = "[Saved image “${note.title}”: ${note.details.replace('\n', ' ')}]"
+        ask("image only, short", "You are a helpful assistant.", question, attach = true)
+        ask("note only, short", "You are a helpful assistant.", "$line\n$question", attach = false)
+        ask("note only, after long prompt", long, "$line\n$question", attach = false)
+        ask("image only, after long prompt", long, question, attach = true)
+        ask("note + image, after long prompt", long, "$line\n$question", attach = true)
+
+        val chatId = container.chatRepository.createChat("Saved image numbers probe")
+        try {
+            for (text in listOf("what was my roll no for the exam", "what's my date of birth on my 10th mark sheet")) {
+                val userId = container.chatRepository.addMessage(chatId, Role.USER, text)
+                val reply = StringBuilder()
+                container.turnRunner.run(chatId, userId, text).collect { e -> if (e is TurnEvent.Text) reply.append(e.delta) }
+                val replyId = container.chatRepository.addMessage(chatId, Role.ASSISTANT, reply.toString())
+                container.turnRunner.finish(chatId, userId, replyId, completed = true)
+                report("app chat | ${score(reply.toString())} | ${container.conversations.contextUsage.value?.used} tokens | ${reply.toString().replace('\n', ' ').take(160)}")
+            }
+        } finally {
+            container.chatRepository.deleteChat(chatId)
+        }
+        Unit
+    }
+
+    /** How the saved-image prompt reads numbers off a real document (-e note, -e expect as above). */
+    @OptIn(com.google.ai.edge.litertlm.ExperimentalApi::class)
+    @Test
+    fun imageReadingProbe() = runBlocking {
+        enabled()
+        val args = InstrumentationRegistry.getArguments()
+        val title = args.getString("note") ?: "CBSE Mark Sheet"
+        val expected = (args.getString("expect") ?: "4361044,09/08/2001").split(',')
+        val note = container.memoryControls.observeSavedImages().first().firstOrNull { it.title == title } ?: error("no saved image “$title”")
+        val image = checkNotNull(note.imagePath)
+        val backend = container.llmBackend
+        check(backend.ensureReady())
+        fun score(reply: String) = expected.joinToString { e -> "$e:" + if (Regex("(?<!\\d)" + Regex.escape(e) + "(?!\\d)").containsMatchIn(reply)) "ok" else "wrong" }
+        val describe = "The user is saving an image to their memory. Look at it closely and reply in exactly this form:\nTitle: a few words naming it\nDetails: everything you can read and see in it: all the text, names, numbers, dates and amounts, copied exactly, and what it shows."
+        val numbers = "List every number, ID, code, date and amount printed in the image, exactly as printed, one per line as: label: value. Nothing else."
+        suspend fun converse(system: String, turns: List<String>): List<String> = container.conversations.withModelFree {
+            backend.openChat(com.local.assistant.llm.ChatSpec(systemPrefix = system, history = emptyList(), sampling = com.local.assistant.llm.Sampling.BACKGROUND, maxOutputTokens = 900)).use { chat ->
+                turns.mapIndexed { i, text ->
+                    val out = StringBuilder()
+                    chat.send(text, if (i == 0) com.local.assistant.llm.PromptAttachment(image, com.local.assistant.data.db.AttachmentKind.IMAGE) else null).collect { e ->
+                        if (e is com.local.assistant.llm.GenEvent.TextDelta) out.append(e.text)
+                    }
+                    out.toString()
+                }
+            }
+        }
+        fun lineWith(reply: String, word: String) = reply.lines().firstOrNull { it.contains(word, ignoreCase = true) }?.trim().orEmpty()
+        val budgets = args.getString("budgets")?.split(',')?.map { it.trim().toInt() }
+        if (budgets != null) {
+            val flags = com.google.ai.edge.litertlm.ExperimentalFlags
+            val original = flags.visualTokenBudget
+            try {
+                for (budget in budgets) {
+                    flags.visualTokenBudget = budget
+                    container.conversations.withModelFree { container.llmService.unload() }
+                    check(backend.ensureReady())
+                    val question = "What is the Roll No, and the Date of Birth? Copy them exactly."
+                    var tokens: Int? = null
+                    val focused = container.conversations.withModelFree {
+                        backend.openChat(com.local.assistant.llm.ChatSpec(systemPrefix = "You are a careful assistant.", history = emptyList(), sampling = com.local.assistant.llm.Sampling.BACKGROUND, maxOutputTokens = 80)).use { chat ->
+                            val out = StringBuilder()
+                            chat.send(question, com.local.assistant.llm.PromptAttachment(image, com.local.assistant.data.db.AttachmentKind.IMAGE)).collect { e -> if (e is com.local.assistant.llm.GenEvent.TextDelta) out.append(e.text) }
+                            tokens = chat.tokenCount()
+                            out.toString()
+                        }
+                    }
+                    val d = converse(describe, listOf("Save this image.")).single()
+                    report("budget $budget ($tokens tokens with the image) | focused ${score(focused)} ${focused.replace('\n', ' ').take(70)} | describe ${score(d)} ${lineWith(d, "roll")}")
+                }
+            } finally {
+                flags.visualTokenBudget = original
+                container.conversations.withModelFree { container.llmService.unload() }
+                check(backend.ensureReady())
+            }
+            return@runBlocking
+        }
+        val a = converse(describe, listOf("Save this image.")).single()
+        report("describe | ${score(a)} | ${lineWith(a, "roll")} | ${lineWith(a, "birth")}")
+        // The labels in the description that carry a number, asked for together in a fresh read.
+        val labels = a.lines().mapNotNull { line ->
+            val m = Regex("^\\W*([A-Za-z][A-Za-z .'/()-]{1,40}?)\\s*[:：]\\s*(.*\\d.*)$").find(line.trim()) ?: return@mapNotNull null
+            m.groupValues[1].trim().takeIf { m.groupValues[2].count(Char::isDigit) >= 3 }
+        }.distinct().take(8)
+        report("labels: $labels")
+        for (round in 1..2) {
+            val ask = "Copy these from the image exactly as printed, every digit, one per line as label: value.\n" + labels.joinToString("\n")
+            val f = converse("You are a careful assistant.", listOf(ask)).single()
+            report("focused on the labels #$round | ${score(f)} | ${f.replace("\n", " ; ").take(300)}")
+        }
+        val b = converse("You are a careful assistant.", listOf(numbers)).single()
+        report("numbers only | ${score(b)} | ${lineWith(b, "roll")} | ${lineWith(b, "birth")}")
+        val (c1, c2) = converse(describe, listOf("Save this image.", numbers))
+        report("describe, then numbers | ${score(c1)} then ${score(c2)} | ${lineWith(c2, "roll")} | ${lineWith(c2, "birth")}")
         Unit
     }
 
