@@ -1,9 +1,7 @@
 package com.local.assistant.llm
 
-import android.app.ActivityManager
 import android.content.Context
 import android.util.Log
-import androidx.core.content.getSystemService
 import com.google.ai.edge.litertlm.Backend
 import com.google.ai.edge.litertlm.Capabilities
 import com.google.ai.edge.litertlm.Conversation
@@ -31,7 +29,7 @@ import kotlinx.coroutines.withContext
 import java.io.File
 
 /**
- * Owns the LiteRT-LM engine: loading it, calibrating its window, and releasing it.
+ * Owns the LiteRT-LM engine: loading it at the window chosen in settings, and releasing it.
  *
  * There is exactly one [Engine] for the process — loading it costs seconds and gigabytes, so it
  * is shared across chats. Conversations on it are created through [createConversation], which
@@ -77,14 +75,6 @@ class LlmService(
      */
     private val _modalities = MutableStateFlow<SupportedModalities?>(null)
     val modalities: StateFlow<SupportedModalities?> = _modalities.asStateFlow()
-
-    private val calibrator = ContextCalibrator(
-        settings = settings,
-        activityManager = requireNotNull(context.getSystemService<ActivityManager>()),
-    )
-
-    /** Non-null only while the device's context ceiling is being measured. */
-    val calibrationProgress: StateFlow<CalibrationProgress?> = calibrator.progress
 
     /** Backend currently being attempted, for the startup screen's commentary. */
     private val _loadingBackend = MutableStateFlow<String?>(null)
@@ -136,6 +126,10 @@ class LlmService(
     /**
      * Loads the engine if it is not already loaded, trying the configured backend first and
      * falling back so a device without a working GPU path still ends up with a usable engine.
+     *
+     * The window is the one chosen in settings, 8K unless the user picked more. A larger one that
+     * fails to load falls back to 8K on the same backend; one that killed the process last time
+     * (a native out-of-memory leaves no exception to catch) is put back to 8K before trying.
      */
     private suspend fun ensureEngine(): Engine? = loadMutex.withLock {
         engine?.let { return@withLock it }
@@ -151,21 +145,27 @@ class LlmService(
         _modalities.value = modalities
         visionTokensPerImage = withContext(Dispatchers.IO) { probeVisionTokens(modelPath) }
         val features = withContext(Dispatchers.IO) { probeFeatures(modelPath) }
-        calibrator.beginSession()
+
+        val died = settings.initInFlightTokens
+        if (died > SettingsStore.DEFAULT_CONTEXT_TOKENS && died == settings.contextTokens) {
+            Log.w(TAG, "The last load at $died tokens killed the app; back to ${SettingsStore.DEFAULT_CONTEXT_TOKENS}")
+            settings.contextTokens = SettingsStore.DEFAULT_CONTEXT_TOKENS
+            settings.contextFellBack = true
+        }
+        settings.initInFlightTokens = 0
+        val sizes = listOf(settings.contextTokens, SettingsStore.DEFAULT_CONTEXT_TOKENS).distinct()
 
         for (attempt in attempts()) {
-            // Each backend has its own memory profile, so the ceiling is calibrated per backend
-            // rather than shared. Falling back to CPU on a context failure would otherwise hide
-            // the fact that the GPU could have managed a smaller window.
-            val key = "${File(modelPath).name}:${File(modelPath).length()}:${attempt.label}"
             _loadingBackend.value = attempt.label
-            val outcome = withContext(Dispatchers.IO) {
-                calibrator.obtainEngine(key) { tokens -> attempt.load(modelPath, modalities, tokens) }
-            }
-            if (outcome != null) {
+            for (tokens in sizes) {
+                val loaded = withContext(Dispatchers.IO) { loadAt(attempt, modelPath, modalities, tokens) } ?: continue
+                if (tokens != settings.contextTokens) {
+                    settings.contextTokens = tokens
+                    settings.contextFellBack = true
+                }
                 _loadingBackend.value = null
-                engine = outcome.engine
-                _activeContextTokens.value = outcome.tokens
+                engine = loaded
+                _activeContextTokens.value = tokens
                 _capabilities.value = BackendCapabilities(
                     // Not features.functionCalling: Gemma 4 E4B's file reports false, yet native
                     // tool calls work (measured on device, EngineProbeTest.toolCalling). The
@@ -177,19 +177,30 @@ class LlmService(
                     constrainedJson = true,
                     thinking = features.thinking,
                     speculativeDecoding = features.speculative && attempt.speculative,
-                    maxContextTokens = outcome.tokens,
+                    maxContextTokens = tokens,
                     visionTokensPerImage = visionTokensPerImage,
                 )
-                _state.value = State.Ready(attempt.label, outcome.tokens)
-                return@withLock outcome.engine
+                _state.value = State.Ready(attempt.label, tokens)
+                return@withLock loaded
             }
         }
 
         _loadingBackend.value = null
-        _state.value = State.Failed(
-            "Could not start the model on any backend or context size.",
-        )
+        _state.value = State.Failed("Could not start the model on this device.")
         null
+    }
+
+    /** One engine load, with the size written down first in case it takes the process with it. */
+    private fun loadAt(attempt: LoadAttempt, modelPath: String, modalities: SupportedModalities?, tokens: Int): Engine? {
+        settings.initInFlightTokens = tokens
+        return try {
+            attempt.load(modelPath, modalities, tokens)
+        } catch (e: Throwable) {
+            Log.w(TAG, "${attempt.label} failed to load at $tokens tokens", e)
+            null
+        } finally {
+            settings.initInFlightTokens = 0
+        }
     }
 
     /** Backends to try, best first. */
@@ -219,7 +230,6 @@ class LlmService(
                     modelPath = modelPath,
                     backend = backend(),
                     // Left unset this defaults to the runtime's own (small) context window.
-                    // The value comes from calibration, which measured what this device holds.
                     maxNumTokens = contextTokens,
                     // Only declared when the model actually has the encoder. They are loaded
                     // lazily, so naming them costs nothing until an attachment is sent.
@@ -284,20 +294,15 @@ class LlmService(
         synchronized(openConversations) { openConversations -= conversation }
     }
 
-    /**
-     * Brackets every generation. The marker is the same crash guard calibration uses: if a real
-     * chat is what finally exhausts memory, it is the only trace left after the process is killed.
-     */
+    /** Brackets every generation, so [stop] knows what to interrupt. */
     fun generationStarted(conversation: Conversation) {
         _lastGenerationStats.value = null
         activeConversation = conversation
-        settings.generationInFlightTokens = _activeContextTokens.value
     }
 
-    /** Clears the guard and returns the runtime's own measurement of the generation. */
+    /** Returns the runtime's own measurement of the generation. */
     fun generationFinished(conversation: Conversation): GenStats? {
         if (activeConversation === conversation) activeConversation = null
-        settings.generationInFlightTokens = 0
         return readGenerationStats(conversation).also { _lastGenerationStats.value = it }
     }
 
@@ -307,35 +312,20 @@ class LlmService(
             .onFailure { Log.w(TAG, "cancelProcess failed", it) }
     }
 
-    /** Forgets the measured ceiling so the next load measures again. Caller should unload first. */
-    fun invalidateCalibration() = calibrator.invalidate()
-
-    /**
-     * Abandons measurement and settles for a window known to be modest enough to just work.
-     *
-     * Measuring means filling the window for real, which is slow by nature. This is the way out
-     * for someone who would rather start chatting than wait for the largest possible answer.
-     */
-    fun useSafeWindow() {
-        settings.manualContextTokens = SAFE_CONTEXT_TOKENS
-        calibrator.cancel()
+    /** Loads again after a failure, or after a setting that needs a reload changed. */
+    fun retryLoad() {
         scope.launch {
             unload()
             ensureEngine()
         }
     }
 
-    /** Clears any manual choice and measures again from scratch. */
-    fun retryLoad(remeasure: Boolean) {
-        calibrator.cancel()
-        scope.launch {
-            unload()
-            if (remeasure) {
-                settings.manualContextTokens = 0
-                calibrator.invalidate()
-            }
-            ensureEngine()
-        }
+    /** Runs the model with a [tokens]-token window from now on; reloads it to take effect. */
+    fun setContextTokens(tokens: Int) {
+        if (tokens == settings.contextTokens) return
+        settings.contextTokens = tokens
+        settings.contextFellBack = false
+        retryLoad()
     }
 
     /** Releases the engine, every conversation on it, and all native memory. */
@@ -369,7 +359,5 @@ class LlmService(
         private const val NEARLY_FULL_FRACTION = 0.85f
         private const val DEFAULT_VISION_TOKENS = 256
 
-        /** Small enough that essentially any device that can hold the model can hold this too. */
-        const val SAFE_CONTEXT_TOKENS = 4096
     }
 }

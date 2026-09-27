@@ -21,6 +21,7 @@ import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -64,6 +65,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.text.TextStyle
@@ -85,10 +87,8 @@ import kotlinx.coroutines.launch
 @Composable
 fun ChatScreen(
     viewModel: ChatViewModel,
-    onOpenModelSettings: () -> Unit,
     onOpenMemory: () -> Unit,
-    onOpenProfile: () -> Unit,
-    onOpenWebSearch: () -> Unit,
+    onOpenSettings: () -> Unit,
 ) {
     val chats by viewModel.chats.collectAsStateWithLifecycle()
     val activeChatId by viewModel.activeChatId.collectAsStateWithLifecycle()
@@ -182,13 +182,18 @@ fun ChatScreen(
     ModalNavigationDrawer(
         drawerState = drawerState,
         drawerContent = {
+            // 85% of the screen, so the chat stays in sight behind it: the sheet's own cap
+            // (360dp) is the whole width of a ~360dp phone.
+            val drawerWidth = (LocalConfiguration.current.screenWidthDp * DRAWER_FRACTION).dp
             ModalDrawerSheet(
+                modifier = Modifier.width(drawerWidth),
                 drawerContainerColor = AppColors.Background,
                 drawerContentColor = AppColors.TextPrimary,
             ) {
                 ChatDrawer(
                     chats = chats,
                     activeChatId = activeChatId,
+                    onClose = { scope.launch { drawerState.close() } },
                     onNewChat = {
                         viewModel.startNewChat()
                         scope.launch { drawerState.close() }
@@ -198,21 +203,13 @@ fun ChatScreen(
                         scope.launch { drawerState.close() }
                     },
                     onDeleteChat = viewModel::deleteChat,
-                    onOpenModelSettings = {
-                        scope.launch { drawerState.close() }
-                        onOpenModelSettings()
-                    },
                     onOpenMemory = {
                         scope.launch { drawerState.close() }
                         onOpenMemory()
                     },
-                    onOpenProfile = {
+                    onOpenSettings = {
                         scope.launch { drawerState.close() }
-                        onOpenProfile()
-                    },
-                    onOpenWebSearch = {
-                        scope.launch { drawerState.close() }
-                        onOpenWebSearch()
+                        onOpenSettings()
                     },
                 )
             }
@@ -651,3 +648,6 @@ private fun PendingAttachmentChip(
 
 private const val STREAMING_ITEM_KEY = "streaming"
 private const val TRIMMED_NOTICE_KEY = "trimmed-notice"
+
+/** How much of the screen the chat history drawer takes. */
+private const val DRAWER_FRACTION = 0.85f

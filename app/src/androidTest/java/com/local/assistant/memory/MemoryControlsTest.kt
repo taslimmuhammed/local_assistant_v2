@@ -12,6 +12,8 @@ import com.local.assistant.memory.db.FactOrigin
 import com.local.assistant.memory.db.MemoryRepository
 import com.local.assistant.memory.db.SessionTracker
 import com.local.assistant.memory.db.TaskEntity
+import com.local.assistant.memory.db.TaskStatus
+import com.local.assistant.memory.db.EventEntity
 import com.local.assistant.memory.embed.Int8Vectors
 import com.local.assistant.memory.prompt.HeuristicTokenEstimator
 import com.local.assistant.memory.retrieval.ChunkPolicy
@@ -20,6 +22,7 @@ import com.local.assistant.memory.retrieval.SqliteVecIndex
 import com.local.assistant.memory.tools.ReminderScheduler
 import com.local.assistant.memory.work.AppForeground
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Assert.assertEquals
@@ -239,6 +242,35 @@ class MemoryControlsTest {
         assertNull(database.chunkDao().forMessage(secret))
         assertEquals(0, archive.backfill(archive.lastMessageId() + 1))
         assertTrue(database.maintenanceDao().userMessagesAfter(0, 10).isEmpty())
+    }
+
+    @Test
+    fun remindersWhoseTimeHasPassedAreFinishedAndEndedEventsDropOff() = runBlocking {
+        val now = System.currentTimeMillis()
+        val hour = 3_600_000L
+        fun task(title: String, due: Long?, repeat: String? = null) =
+            runBlocking { memory.insertTask(TaskEntity(title = title, dueAt = due, repeatRule = repeat, createdAt = now, updatedAt = now)) }
+        val rang = task("Call the CA", now - 2 * hour)
+        val late = task("Pay rent", now - 10 * 60_000L)
+        val daily = task("Take vitamins", now - 26 * hour, repeat = "FREQ=DAILY")
+        val undated = task("Buy a lamp", null)
+        val coming = task("Dentist", now + 3 * hour)
+
+        assertEquals(2, controls.finishPastReminders())
+        assertEquals(TaskStatus.DONE, memory.task(rang)!!.status)
+        assertEquals("a few minutes late may still ring", TaskStatus.OPEN, memory.task(late)!!.status)
+        val next = memory.task(daily)!!
+        assertEquals(TaskStatus.OPEN, next.status)
+        assertTrue("moved to its next time", next.dueAt!! > now)
+        assertEquals(TaskStatus.OPEN, memory.task(undated)!!.status)
+        assertEquals(TaskStatus.OPEN, memory.task(coming)!!.status)
+        assertTrue(rang in cancelled)
+
+        memory.insertEvent(EventEntity(title = "Standup", startsAt = now - 3 * hour, endsAt = now - 2 * hour, createdAt = now, updatedAt = now))
+        memory.insertEvent(EventEntity(title = "Workshop", startsAt = now - hour, endsAt = now + hour, createdAt = now, updatedAt = now))
+        memory.insertEvent(EventEntity(title = "Dinner", startsAt = now + 5 * hour, createdAt = now, updatedAt = now))
+        val shown = controls.observeEvents().first().map { it.title }
+        assertEquals(listOf("Workshop", "Dinner"), shown)
     }
 }
 

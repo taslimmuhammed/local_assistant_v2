@@ -114,7 +114,7 @@ this message — goes in front of the user's words in the user turn, as `[Now: �
 `[Memory: …]` lines. Only the user's own words are stored.
 
 Every token limit lives in `memory/prompt/MemoryBudget.kt`, with a 16K profile and an 8K one,
-chosen from the window calibration measured. The prompt is planned to stay well under the window
+chosen from the window the engine runs with (8K unless changed in Settings). The prompt is planned to stay well under the window
 (12,000 of 16,384 at most) and shed in a fixed order when it would not: recalled snippets, then
 recalled facts, then the summary, then the oldest turns, then core facts by priority — never the
 user's response preferences.
@@ -146,7 +146,7 @@ on a device where it fails to load, `KotlinVectorIndex` scores the same bytes wi
 arithmetic (`VectorParityTest` checks both return identical neighbours). Vectors from different
 models are never compared: changing the embedder sends the archive back to the backlog.
 
-The embedder is optional and installed from the Model screen ("Memory search"). The one to use
+The embedder is optional and installed under Settings → Model and memory search. The one to use
 is **EmbeddingGemma 300M**: on public per-language benchmarks it retrieves clearly better than the
 alternatives in English, Hindi, romanized Hindi, Malayalam, Tamil and Telugu. Google does not
 publish it in a form LiteRT-LM's `EmbeddingEngine` loads, so it is built from the original weights
@@ -208,7 +208,7 @@ age, work, city, languages and interests (`memory/core/UserProfile.kt`). They ar
 about the user, the user's own edits and pinned to "Always in mind", so they open every
 conversation's system prompt ("About the user (always keep in mind): …") and stay in step with
 chat: "I'm 31 now" updates the same row, and "occupation" or "profession" said in a chat files under
-Work. Editable any time from "Your profile" in the drawer; clearing a field forgets it.
+Work. Editable any time under Settings → Your profile; clearing a field forgets it.
 
 ### Saved images
 
@@ -243,7 +243,18 @@ A second tab lists reminders and events, a third the saved images (tap for the f
 details, swipe to delete with an undo; the file itself goes in the nightly tidy). Possible
 duplicates are asked about, never merged silently.
 
-Controls: **Pause memory** (chats go on; nothing new is archived, recalled from, summarised,
+### Settings
+
+One page, from the drawer's **Settings**: *Your profile*; *Model and memory search* (the model
+file and the embedder); *Context window* (4K, 8K, 12K or 16K); *Web search* (the Tavily key); and the
+memory controls below. The chat history drawer takes 85% of the screen and has a back arrow at the
+top, so it is plain how to close it; deleting a chat from it asks first.
+
+First launch asks two things before the chat: the profile, then web search — optional and only
+for web search, with a button to create a free Tavily key and a way to skip. Both are asked once
+and can be changed in Settings.
+
+Memory controls: **Pause memory** (chats go on; nothing new is archived, recalled from, summarised,
 extracted or saved by the model — reminders still work), **Keep chat history** (forever, 1 year,
 90 or 30 days; applied at once and nightly), **Export as JSON** (saved images as their titles and details, not the files), and **Forget
 everything** (asks twice; chats stay, but everything learned from them goes, saved images included,
@@ -290,6 +301,13 @@ The model never does date arithmetic. It copies the user's own words ("tomorrow 
 device's zone. A day with no time ("remind me on Friday") means 8:00 AM that day; a request with no
 time words at all is an undated to-do with no alarm. Repeats are an RRULE subset (`RepeatRule`);
 finishing a repeating reminder moves it to its next occurrence.
+
+**Reminders end.** A one-off reminder is marked done as it rings (Snooze reopens it), and at
+launch and every night any reminder more than 30 minutes past is finished too — one-off ones done,
+repeating ones moved to their next time and set again — so nothing lingers in the lists or the
+agenda. An event leaves the list once it has ended (an hour after it starts if it has no end, or
+the end of its day if all-day). Alarms handed to the clock app belong to it; Android gives apps no
+way to delete them, so a one-off alarm stays there, switched off, until removed in the clock app.
 
 Every change shows as a chip under the reply ("Saved · Dentist: Dr. Rao · Undo"). The TOOL row
 holds the state before the change, so Undo works after a restart without a separate table; Edit
@@ -355,7 +373,7 @@ Gemma writes a tool call as `call:<name>{…}`, and the runtime could not parse 
 ### Web search
 
 `web_lookup` looks things up through Tavily with the user's own API key, pasted in under "Web
-search" in the drawer (free plan: 1,000 searches a month; a basic search is one credit). The key
+search" in Settings (free plan: 1,000 searches a month; a basic search is one credit). The key
 is stored encrypted with a key held in the Android Keystore (`SecretStore`). Until there is a key
 the tool isn't declared at all and costs no context; adding or removing it rebuilds the
 conversation when the chat is next idle.
@@ -449,79 +467,38 @@ All four live in `SettingsStore` and are read on the next engine load / message:
 
 | Setting | Default | Notes |
 |---|---|---|
-| `manualContextTokens` | 0 (auto) | Override the measured window. 0 means calibrate. **Changing it needs an engine reload.** |
+| `contextTokens` | 8192 | The window the engine runs with; 4K, 8K, 12K or 16K from Settings, which restarts the model. |
 | `maxOutputTokens` | 2048 | Ceiling on one reply, also capped by the memory budget's reply reserve. |
-| `contextCeilingTokens` | 8192 | Largest window the engine runs at, even where calibration confirmed more. **Needs an engine reload.** |
 | `repetitionPenalty` | 1.1 | Damps degenerate loops. 1.0 disables. Keep it low — generated code and markup legitimately repeat. |
 | `repetitionWindow` | 256 | How many recent tokens the penalty looks at. |
 
 Leaving `maxNumTokens` unset in `EngineConfig` falls back to the runtime's own small default, which
-is why calibration sets it explicitly.
+is why the app always sets it.
 
 ## Startup
 
-`ui/startup/LoadingScreen.kt` sits between "model installed" and the chat. The first load can
-genuinely take minutes because measuring the context window means filling it for real, and a bare
-spinner is indistinguishable from a hang — so the screen names the current stage, counts elapsed
-time, and after 20 seconds offers **Skip — use 4096 tokens** to stop measuring and start chatting.
-Failures land here too, with *Try again* and *Measure again from scratch*.
+The model starts loading the moment the app does, and `ui/startup/LoadingScreen.kt` stays up until
+it reports `Ready` — typically a few seconds — naming the backend and counting the time. The chat is
+only composed after that, so nobody types into a composer whose message would just wait. The same
+screen covers a restart after the window is changed in Settings, and a failure, with *Try again*
+and a way into Settings.
 
-The chat is only composed once the engine reports `Ready`, so nobody waits at an idle composer.
+## Context window
 
-## Context window calibration
+The engine runs with an 8K window unless the user picks 4K, 12K or 16K under Settings → Context
+window, which restarts the model. 4K is for phones short on memory: the instructions and tool
+declarations alone are about 2,000 tokens, so it keeps only the last exchange or two in view. Nothing is measured: the app used to find the largest window each
+phone could hold by filling it for real, which took minutes on first launch and — through its crash
+guard — could quietly shrink the window after a few app updates installed mid-load. What it
+measured is why the choices stop at 16K: the 15.5 GB test phone held 16384 and was killed filling
+24576 (the KV cache grows as the window fills, so a clean `initialize()` proves nothing).
 
-Nothing in the runtime reports how large a context the device can hold. `Capabilities` has
-`maxVisionTokenBudget()` but no context equivalent, and the real limit depends on device RAM, the
-backend, and whether the model's KV cache is preallocated or grown lazily. So the app measures it.
-
-`llm/ContextCalibrator.kt` walks a descending ladder (32768 → 2048, `llm/ContextLadder.kt`),
-starting at a rung narrowed by free RAM. A size is only accepted once it has **survived a real
-generation that fills the window** — a token or two of warm-up proves nothing if the cache grows
-as it goes. The result is cached per model-and-backend and never measured again unless either
-changes, or you press **Recalibrate** on the model screen.
-
-Two shortcuts make this cheaper than a blind search:
-
-- Before filling anything, calibration sends a deliberately over-long prompt. The runtime rejects
-  it on a length check — cheap — and names its own ceiling in the error
-  (`"Exceeding the maximum number of tokens allowed: N"`). That is parsed and the search jumps
-  straight there, so the usual path is one load, one cheap question and one confirmation rather
-  than a walk down the whole ladder.
-- If the confirmation prompt fills far less of the window than we asked for, the runtime silently
-  clamped us, and the measured value is used instead of the requested one.
-
-**Measured on a real device.** A 15.5 GB phone confirms **16384** and is killed while filling
-24576. Init succeeded at 24576 and the process still died during the fill, which settles the open
-question from the design: this model's KV cache grows as the window fills, so `initialize()`
-returning is no evidence at all. The confirmation generation is what actually finds the ceiling.
-
-The starting rung is chosen from **total** RAM, not free RAM — Android reclaims cached pages on
-demand, so a 15.5 GB phone can report under 3 GB available purely because other apps are warm, and
-keying off that made the result a lottery decided by whatever else was open.
-
-**The crash guard.** A native out-of-memory kills the process outright: no exception, no
-`finally`. So the size being attempted is written to preferences *before* each attempt — with
-`commit`, not `apply`, since an async write may not reach disk before the process dies — and
-cleared afterwards. A marker still present at the next launch is the only evidence that a size was
-fatal, and the ladder resumes strictly below it. The same guard wraps ordinary generation, so a
-real chat that exhausts memory also steps the window down rather than looping on a crash.
-
-A death at a size never confirmed on this device rules it out at once. A death at the size
-already confirmed is weaker evidence: swiping the app away, force-stopping it or installing an
-update while it is loading or replying leaves exactly the same trace, so the first one only earns
-a re-check at the same size, and it takes a repeat to shrink the window. This used to apply to
-deaths mid-generation only; an init-time death counted at once, and a phone confirmed at 8K slid
-to 4K through a day of app updates installed while the model was loading.
-
-This state machine is unit-tested (`CalibrationPlannerTest`) precisely because it exists for the
-case where no code of ours gets to run.
-
-**The ceiling.** Calibration finds the most the device can hold; the app deliberately runs below
-it, at `contextCeilingTokens` (8192). The LLM shares memory with the embedding model and a voice
-model, and the KV cache is sized by the window the engine is loaded with rather than by how full
-it gets — measured on the 15.5 GB phone, 16K costs about 200 MB more than 8K and prefills 10–25%
-slower. Calibration never probes above the ceiling, and a device already confirmed higher simply
-loads at the ceiling.
+A larger window costs memory the embedder and a voice model share — measured on that phone, 16K
+takes about 200 MB more than 8K and prefills 10–25% slower — and the prompt budget
+(`MemoryBudget`) has a profile for each. If a larger window fails to load, the app falls back to 8K
+on the same backend and Settings says so. A native out-of-memory leaves no exception to catch, so
+the size being loaded is written down first (`initInFlightTokens`, with `commit`); if it is still
+there at the next launch and was above 8K, the setting goes back to 8K before loading.
 
 **Token estimates.** There is no tokenizer API, so prompts are planned from an estimate. Latin
 text starts at a pessimistic 3.5 characters per token; after each rebuild the runtime's own count

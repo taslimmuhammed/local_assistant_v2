@@ -108,7 +108,7 @@ class LiteRtLmBackend(
     /** "Input token ids are too long. Exceeding the maximum number of tokens allowed: N". */
     override fun isContextOverflow(error: Throwable): Boolean {
         val message = error.message ?: return false
-        return CalibrationPlanner.reportedMaxTokens(message) != null || "too long" in message
+        return ContextWindow.reportedMaxTokens(message) != null || "too long" in message
     }
 
     /** Thinking stays off for chat; it costs latency the replies do not need. */

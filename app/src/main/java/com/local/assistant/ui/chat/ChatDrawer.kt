@@ -16,14 +16,22 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.outlined.ArrowBack
 import androidx.compose.material.icons.outlined.Add
 import androidx.compose.material.icons.outlined.DeleteOutline
+import androidx.compose.material.icons.outlined.Settings
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -37,15 +45,36 @@ import com.local.assistant.ui.theme.AppColors
 fun ChatDrawer(
     chats: List<ChatEntity>,
     activeChatId: Long?,
+    onClose: () -> Unit,
     onNewChat: () -> Unit,
     onSelectChat: (Long) -> Unit,
     onDeleteChat: (Long) -> Unit,
-    onOpenModelSettings: () -> Unit,
     onOpenMemory: () -> Unit,
-    onOpenProfile: () -> Unit,
-    onOpenWebSearch: () -> Unit,
+    onOpenSettings: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    // A chat and its messages can't be brought back, so a tap on the bin asks first.
+    var deleting by remember { mutableStateOf<ChatEntity?>(null) }
+    deleting?.let { chat ->
+        AlertDialog(
+            onDismissRequest = { deleting = null },
+            title = { Text("Delete this chat?") },
+            text = {
+                Text(
+                    "“${chat.title}” and its messages will be deleted for good. What the assistant learned " +
+                        "from it — facts, reminders, saved images — stays, under What I know about you.",
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    deleting = null
+                    onDeleteChat(chat.id)
+                }) { Text("Delete", color = AppColors.Danger) }
+            },
+            dismissButton = { TextButton(onClick = { deleting = null }) { Text("Cancel") } },
+        )
+    }
+
     Column(
         modifier = modifier
             .fillMaxSize()
@@ -53,6 +82,16 @@ fun ChatDrawer(
             .statusBarsPadding()
             .navigationBarsPadding(),
     ) {
+        // A way back that doesn't depend on knowing to swipe or tap outside.
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(start = 4.dp, end = 16.dp, top = 4.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            IconButton(onClick = onClose) {
+                Icon(Icons.AutoMirrored.Outlined.ArrowBack, contentDescription = "Close chat history", tint = AppColors.TextPrimary)
+            }
+            Text("Chats", style = MaterialTheme.typography.titleMedium, color = AppColors.TextPrimary)
+        }
         Row(
             modifier = Modifier
                 .fillMaxWidth()
@@ -95,27 +134,13 @@ fun ChatDrawer(
                         chat = chat,
                         selected = chat.id == activeChatId,
                         onClick = { onSelectChat(chat.id) },
-                        onDelete = { onDeleteChat(chat.id) },
+                        onDelete = { deleting = chat },
                     )
                 }
             }
         }
 
         HorizontalDivider(color = AppColors.Border)
-
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .clickable(onClick = onOpenProfile)
-                .padding(horizontal = 20.dp, vertical = 16.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Text(
-                text = "Your profile",
-                style = MaterialTheme.typography.labelLarge,
-                color = AppColors.TextSecondary,
-            )
-        }
 
         Row(
             modifier = Modifier
@@ -134,28 +159,16 @@ fun ChatDrawer(
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .clickable(onClick = onOpenWebSearch)
+                .clickable(onClick = onOpenSettings)
                 .padding(horizontal = 20.dp, vertical = 16.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
+            Icon(Icons.Outlined.Settings, contentDescription = null, tint = AppColors.TextSecondary)
             Text(
-                text = "Web search",
+                text = "Settings",
                 style = MaterialTheme.typography.labelLarge,
                 color = AppColors.TextSecondary,
-            )
-        }
-
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .clickable(onClick = onOpenModelSettings)
-                .padding(horizontal = 20.dp, vertical = 16.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Text(
-                text = "Model",
-                style = MaterialTheme.typography.labelLarge,
-                color = AppColors.TextSecondary,
+                modifier = Modifier.padding(start = 12.dp),
             )
         }
     }

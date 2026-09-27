@@ -19,6 +19,7 @@ import com.local.assistant.ui.profile.ProfileViewModel
 import androidx.activity.compose.BackHandler
 import com.local.assistant.ui.chat.ChatViewModel
 import com.local.assistant.llm.LlmService
+import com.local.assistant.ui.settings.SettingsScreen
 import com.local.assistant.ui.setup.ModelScreen
 import com.local.assistant.ui.startup.LoadingScreen
 import com.local.assistant.ui.web.WebSearchScreen
@@ -42,11 +43,13 @@ class MainActivity : ComponentActivity() {
 @Composable
 private fun AppRoot(container: AppContainer) {
     val installed by container.modelManager.installed.collectAsStateWithLifecycle()
+    var showSettings by remember { mutableStateOf(false) }
     var showModelScreen by remember { mutableStateOf(false) }
     var showMemoryScreen by remember { mutableStateOf(false) }
     var showProfileScreen by remember { mutableStateOf(false) }
     var showWebSearchScreen by remember { mutableStateOf(false) }
     var profileAsked by remember { mutableStateOf(container.settings.profileAsked) }
+    var webSearchAsked by remember { mutableStateOf(container.settings.webSearchAsked || container.webSearch.enabled) }
 
     // First launch: a few details about the user before anything else. Skippable.
     if (!profileAsked) {
@@ -55,8 +58,23 @@ private fun AppRoot(container: AppContainer) {
         return
     }
 
+    // Then web search, optional: a Tavily key, or skip. Asked once.
+    if (!webSearchAsked) {
+        val webViewModel: WebSearchViewModel = viewModel(key = "web-onboarding", factory = WebSearchViewModel.factory(container))
+        WebSearchScreen(
+            viewModel = webViewModel,
+            onboarding = true,
+            onBack = {
+                container.settings.webSearchAsked = true
+                webSearchAsked = true
+            },
+        )
+        return
+    }
+
     // With no model there is nothing to chat with, so the model screen is the whole app.
     if (installed == null || showModelScreen) {
+        if (installed != null) BackHandler { showModelScreen = false }
         ModelScreen(
             modelManager = container.modelManager,
             llmService = container.llmService,
@@ -70,36 +88,40 @@ private fun AppRoot(container: AppContainer) {
         return
     }
 
-    // The first load measures the context window, which takes real time. Doing it here rather
-    // than behind the chat means nobody watches an idle composer wondering if it hung. Once the
-    // window is known, an ordinary load takes seconds: the chat is shown straight away and a
-    // message sent meanwhile simply waits for the engine.
-    val engineState by container.llmService.state.collectAsStateWithLifecycle()
-    val calibration by container.llmService.calibrationProgress.collectAsStateWithLifecycle()
-    val windowKnown = container.settings.calibratedContextTokens > 0 ||
-        container.settings.manualContextTokens > 0
-    val needsLoadingScreen = engineState is LlmService.State.Failed ||
-        calibration != null ||
-        (engineState !is LlmService.State.Ready && !windowKnown)
-    if (needsLoadingScreen) {
-        LoadingScreen(
-            llmService = container.llmService,
-            onOpenModelSettings = { showModelScreen = true },
-        )
-        return
-    }
-
+    // Sub-screens of Settings, each back to Settings.
     if (showProfileScreen) {
         BackHandler { showProfileScreen = false }
         val profileViewModel: ProfileViewModel = viewModel(key = "profile-edit", factory = ProfileViewModel.factory(container))
         ProfileScreen(viewModel = profileViewModel, onboarding = false, onDone = { showProfileScreen = false })
         return
     }
-
     if (showWebSearchScreen) {
         BackHandler { showWebSearchScreen = false }
         val webViewModel: WebSearchViewModel = viewModel(factory = WebSearchViewModel.factory(container))
         WebSearchScreen(viewModel = webViewModel, onBack = { showWebSearchScreen = false })
+        return
+    }
+    if (showSettings) {
+        BackHandler { showSettings = false }
+        val memoryViewModel: MemoryViewModel = viewModel(factory = MemoryViewModel.factory(container))
+        SettingsScreen(
+            llmService = container.llmService,
+            settings = container.settings,
+            webSearchOn = container.webSearch.enabled,
+            memory = memoryViewModel,
+            onBack = { showSettings = false },
+            onOpenProfile = { showProfileScreen = true },
+            onOpenModel = { showModelScreen = true },
+            onOpenWebSearch = { showWebSearchScreen = true },
+        )
+        return
+    }
+
+    // The model is loaded as the app starts, and the chat waits for it: a message typed while it
+    // loads would only sit there. Also shown while it restarts after a settings change.
+    val engineState by container.llmService.state.collectAsStateWithLifecycle()
+    if (engineState !is LlmService.State.Ready) {
+        LoadingScreen(llmService = container.llmService, onOpenSettings = { showSettings = true })
         return
     }
 
@@ -113,9 +135,7 @@ private fun AppRoot(container: AppContainer) {
     val viewModel: ChatViewModel = viewModel(factory = ChatViewModel.factory(container))
     ChatScreen(
         viewModel = viewModel,
-        onOpenModelSettings = { showModelScreen = true },
         onOpenMemory = { showMemoryScreen = true },
-        onOpenProfile = { showProfileScreen = true },
-        onOpenWebSearch = { showWebSearchScreen = true },
+        onOpenSettings = { showSettings = true },
     )
 }

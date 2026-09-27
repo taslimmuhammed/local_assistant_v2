@@ -192,9 +192,15 @@ interface AgendaDao {
     @Query("SELECT * FROM tasks WHERE status = 'OPEN' ORDER BY dueAt IS NULL, dueAt, id")
     fun observeOpenTasks(): Flow<List<TaskEntity>>
 
-    /** Events still to come, and every repeating one. */
-    @Query("SELECT * FROM events WHERE startsAt >= :from OR recurrence IS NOT NULL ORDER BY startsAt, id")
-    fun observeEvents(from: Long): Flow<List<EventEntity>>
+    /**
+     * Events not over yet at [now], and every repeating one. One without an end counts as over an
+     * hour after it starts, or at the end of its day if it is all-day.
+     */
+    @Query(
+        "SELECT * FROM events WHERE recurrence IS NOT NULL OR " +
+            "COALESCE(endsAt, startsAt + CASE WHEN allDay THEN 86400000 ELSE 3600000 END) > :now ORDER BY startsAt, id",
+    )
+    fun observeEvents(now: Long): Flow<List<EventEntity>>
 
     @Query("SELECT * FROM tasks ORDER BY id")
     suspend fun allTasks(): List<TaskEntity>

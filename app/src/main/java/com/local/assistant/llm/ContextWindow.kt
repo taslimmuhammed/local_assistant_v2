@@ -28,4 +28,13 @@ object ContextWindow {
             }
             null -> 0
         }
+
+    /**
+     * The ceiling the runtime states when a turn is too long: "Input token ids are too long.
+     * Exceeding the maximum number of tokens allowed: N". Null for any other error.
+     */
+    fun reportedMaxTokens(errorMessage: String?): Int? =
+        errorMessage?.let { REPORTED_MAX.find(it)?.groupValues?.get(1)?.toIntOrNull() }
+
+    private val REPORTED_MAX = Regex("""maximum number of tokens allowed:\s*(\d+)""")
 }

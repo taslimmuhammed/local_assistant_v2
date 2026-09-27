@@ -53,9 +53,8 @@ class MemoryControls(
 
     fun observeTasks(): Flow<List<TaskEntity>> = agenda.observeOpenTasks()
 
-    /** Events from the start of today on. */
-    fun observeEvents(): Flow<List<EventEntity>> =
-        agenda.observeEvents(Instant.ofEpochMilli(clock()).atZone(zone()).toLocalDate().atStartOfDay(zone()).toInstant().toEpochMilli())
+    /** Events that aren't over yet: a past one drops off once it has ended. */
+    fun observeEvents(): Flow<List<EventEntity>> = agenda.observeEvents(clock())
 
     fun observeSavedImages(): Flow<List<NoteEntity>> = database.noteDao().observe()
 
@@ -196,6 +195,26 @@ class MemoryControls(
         onChanged()
     }
 
+    /**
+     * Reminders whose time has come and gone: a one-off one is done — it rang, or its moment passed
+     * while the phone was off — and a repeating one moves on to its next time, so neither sits in
+     * the lists and the agenda for ever. Returns how many changed.
+     */
+    suspend fun finishPastReminders(): Int {
+        val now = clock()
+        var changed = 0
+        for (task in memory.openTasks()) {
+            val due = task.dueAt ?: continue
+            if (due > now - PAST_GRACE_MS) continue
+            val next = TaskOps.complete(task, Instant.ofEpochMilli(now).atZone(zone()))
+            memory.updateTask(next)
+            if (next.status == TaskStatus.OPEN && next.dueAt != null && next.dueAt > now) reminders.schedule(next.id, next.dueAt) else reminders.cancel(task.id)
+            changed++
+        }
+        if (changed > 0) onChanged()
+        return changed
+    }
+
     suspend fun deleteEvent(event: EventEntity) {
         memory.deleteEvent(event.id)
         reminders.cancelEvent(event.id)
@@ -287,6 +306,9 @@ class MemoryControls(
     private companion object {
         const val KEY_DISMISSED = "duplicates.dismissed"
         const val SHORT_VALUE = 12
+
+        /** A reminder can ring a few minutes late without exact alarms; after this it is past. */
+        const val PAST_GRACE_MS = 30 * 60 * 1000L
         const val DAY_MS = 24 * 60 * 60 * 1000L
     }
 }

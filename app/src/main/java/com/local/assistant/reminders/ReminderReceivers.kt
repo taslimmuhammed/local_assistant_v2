@@ -34,9 +34,17 @@ class ReminderReceiver : BroadcastReceiver() {
         val taskId = intent.getLongExtra(EXTRA_TASK_ID, -1L).takeIf { it > 0 } ?: return
         val dueAt = intent.getLongExtra(EXTRA_DUE_AT, -1L)
         async(context) {
-            val task = context.appContainer.memoryRepository.task(taskId) ?: return@async
+            val container = context.appContainer
+            val task = container.memoryRepository.task(taskId) ?: return@async
             // Done, cancelled or moved since this alarm was set: stay quiet.
-            if (task.status == TaskStatus.OPEN && task.dueAt == dueAt) ReminderNotifications.show(context, task)
+            if (task.status != TaskStatus.OPEN || task.dueAt != dueAt) return@async
+            ReminderNotifications.show(context, task)
+            // A one-off reminder is over once it has rung: off the lists and the agenda. Snooze
+            // brings it back; a repeating one waits for Done, which moves it to its next time.
+            if (task.repeatRule == null) {
+                container.memoryRepository.updateTask(TaskOps.complete(task, ZonedDateTime.now()))
+                container.conversations.prefixMayHaveChanged()
+            }
         }
     }
 

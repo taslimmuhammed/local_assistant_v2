@@ -436,14 +436,15 @@ class MemoryEvalTest {
             }
             val sizes = (InstrumentationRegistry.getArguments().getString("sizes") ?: "8192").split(',').map { it.trim().toInt() }
             val settings = container.settings
+            val original = settings.contextTokens
             try {
                 for (size in sizes) {
-                    settings.manualContextTokens = if (size == 8192) 0 else size
+                    settings.contextTokens = size
                     container.conversations.withModelFree { container.llmService.unload() }
                     sweep("engine $size", listOf(4, 6, 7, 8, 9, 12))
                 }
             } finally {
-                settings.manualContextTokens = 0
+                settings.contextTokens = original
                 container.conversations.withModelFree { container.llmService.unload() }
                 check(backend.ensureReady())
                 report("restored: ${container.llmService.state.value}")

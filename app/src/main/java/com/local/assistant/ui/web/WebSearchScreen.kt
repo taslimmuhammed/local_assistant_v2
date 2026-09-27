@@ -33,6 +33,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.text.input.KeyboardType
@@ -120,18 +121,22 @@ class WebSearchViewModel(
 /**
  * Web search: off until the user adds their own Tavily key. Everything else in the app stays on
  * the phone; this sends the search words the assistant writes, and nothing more.
+ *
+ * Also the second step of first launch ([onboarding]), right after the profile: optional, said
+ * plainly, with a link to make a key and a way past it. [onBack] then means "done or skipped".
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun WebSearchScreen(viewModel: WebSearchViewModel, onBack: () -> Unit) {
+fun WebSearchScreen(viewModel: WebSearchViewModel, onBack: () -> Unit, onboarding: Boolean = false) {
     val state by viewModel.state.collectAsStateWithLifecycle()
     val uriHandler = LocalUriHandler.current
     var reveal by remember { mutableStateOf(false) }
+    val openTavily = { runCatching { uriHandler.openUri(TAVILY_SIGN_UP) } }
 
     Scaffold(
         containerColor = AppColors.Background,
         topBar = {
-            TopAppBar(
+            if (!onboarding) TopAppBar(
                 title = { Text("Web search", style = MaterialTheme.typography.titleMedium) },
                 navigationIcon = {
                     IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Outlined.ArrowBack, contentDescription = "Back") }
@@ -153,6 +158,29 @@ fun WebSearchScreen(viewModel: WebSearchViewModel, onBack: () -> Unit) {
                 .padding(horizontal = 20.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
+            if (onboarding) {
+                Text(
+                    "Web search (optional)",
+                    style = MaterialTheme.typography.headlineSmall,
+                    color = AppColors.TextPrimary,
+                    modifier = Modifier.padding(top = 48.dp),
+                )
+                Text(
+                    "This is optional, and only for web search. With a free Tavily API key the assistant can look up " +
+                        "news, weather, prices and scores. Everything else works without it, fully offline. You can add " +
+                        "or remove a key any time in Settings.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = AppColors.TextSecondary,
+                )
+                OutlinedButton(onClick = { openTavily() }, shape = RoundedCornerShape(12.dp)) {
+                    Text("Create a free Tavily key")
+                }
+                Text(
+                    "Sign up at tavily.com, copy the key that starts with tvly-, and paste it below.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = AppColors.TextSecondary,
+                )
+            }
             Text(
                 "Lets the assistant look things up online: news, weather, prices, scores. It uses Tavily with your own " +
                     "API key; the free plan has 1,000 searches a month. Only the search words the assistant writes are " +
@@ -196,9 +224,28 @@ fun WebSearchScreen(viewModel: WebSearchViewModel, onBack: () -> Unit) {
             state.message?.let {
                 Text(it, style = MaterialTheme.typography.bodyMedium, color = if (state.failed) AppColors.Danger else AppColors.TextPrimary)
             }
-            TextButton(onClick = { runCatching { uriHandler.openUri("https://app.tavily.com") } }) {
-                Text("Get a free key at tavily.com")
+            if (onboarding) {
+                Row(
+                    Modifier.fillMaxWidth().padding(top = 8.dp, bottom = 32.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End),
+                ) {
+                    if (state.savedHint == null) {
+                        TextButton(onClick = onBack) { Text("Skip for now") }
+                    } else {
+                        Button(
+                            onClick = onBack,
+                            enabled = !state.checking,
+                            shape = RoundedCornerShape(12.dp),
+                            colors = ButtonDefaults.buttonColors(containerColor = AppColors.Accent, contentColor = AppColors.OnAccent),
+                        ) { Text("Continue") }
+                    }
+                }
+            } else {
+                TextButton(onClick = { openTavily() }) { Text("Get a free key at tavily.com") }
             }
         }
     }
 }
+
+/** Where a Tavily key is made: sign-up, then the key is on the dashboard. */
+private const val TAVILY_SIGN_UP = "https://app.tavily.com"

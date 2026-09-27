@@ -35,4 +35,12 @@ class ContextWindowTest {
             ContextWindow.attachmentTokens(message(AttachmentKind.AUDIO, durationMs = 3_200), 256),
         )
     }
+
+    @Test
+    fun `the reported maximum is parsed out of the runtime error`() {
+        val message = "INVALID_ARGUMENT: Input token ids are too long. Exceeding the maximum number of tokens allowed: 8192"
+        org.junit.Assert.assertEquals(8192, ContextWindow.reportedMaxTokens(message))
+        org.junit.Assert.assertNull(ContextWindow.reportedMaxTokens("Failed to create engine: RESOURCE_EXHAUSTED"))
+        org.junit.Assert.assertNull(ContextWindow.reportedMaxTokens(null))
+    }
 }

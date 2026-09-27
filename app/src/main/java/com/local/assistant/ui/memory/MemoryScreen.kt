@@ -188,7 +188,7 @@ private fun FactsTab(viewModel: MemoryViewModel) {
             item(key = "header-$category") { SectionHeader(if (category.name == "PROFILE") "About you" else FactLabels.section(category)) }
             factRows(facts, viewModel, onEdit = { editing = it })
         }
-        item { Controls(viewModel) }
+        item { Note("Pause memory, how long chats are kept, export and forget everything are in Settings.") }
         item { Spacer(Modifier.height(32.dp)) }
     }
 
@@ -315,100 +315,6 @@ private fun DuplicatesCard(suggestions: List<DuplicateSuggestion>, viewModel: Me
         }
     }
 }
-
-@Composable
-private fun Controls(viewModel: MemoryViewModel) {
-    val paused by viewModel.memoryPaused.collectAsStateWithLifecycle()
-    val retention by viewModel.retentionDays.collectAsStateWithLifecycle()
-    val context = LocalContext.current
-    var retentionMenu by remember { mutableStateOf(false) }
-    var pendingRetention by remember { mutableStateOf<Int?>(null) }
-    var forgetStep by remember { mutableIntStateOf(0) }
-    val exporter = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/json")) { uri ->
-        uri?.let { viewModel.export(it, context.contentResolver) }
-    }
-
-    Column(Modifier.fillMaxWidth().padding(top = 28.dp)) {
-        HorizontalDivider(color = AppColors.Border)
-        SectionHeader("Controls")
-        Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-            Column(Modifier.weight(1f)) {
-                Text("Pause memory", style = MaterialTheme.typography.bodyLarge, color = AppColors.TextPrimary)
-                Text(
-                    "Chats go on as usual, but nothing from them is remembered, archived or learned. Reminders still work.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = AppColors.TextSecondary,
-                )
-            }
-            Switch(checked = paused, onCheckedChange = viewModel::setPaused)
-        }
-        Box(Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) {
-            Row(Modifier.fillMaxWidth().clickable { retentionMenu = true }, verticalAlignment = Alignment.CenterVertically) {
-                Text("Keep chat history", style = MaterialTheme.typography.bodyLarge, color = AppColors.TextPrimary, modifier = Modifier.weight(1f))
-                Text(retentionLabel(retention), style = MaterialTheme.typography.bodyMedium, color = AppColors.TextSecondary)
-            }
-            DropdownMenu(expanded = retentionMenu, onDismissRequest = { retentionMenu = false }) {
-                for (days in RETENTION_CHOICES) {
-                    DropdownMenuItem(text = { Text(retentionLabel(days)) }, onClick = {
-                        retentionMenu = false
-                        // Shortening deletes messages, so it is confirmed; lengthening is not.
-                        if (days != 0 && (retention == 0 || days < retention)) pendingRetention = days else viewModel.setRetention(days)
-                    })
-                }
-            }
-        }
-        Row(Modifier.padding(horizontal = 16.dp, vertical = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            OutlinedButton(onClick = { exporter.launch("memory-${LocalDate.now()}.json") }) { Text("Export as JSON") }
-            OutlinedButton(onClick = { forgetStep = 1 }) { Text("Forget everything", color = AppColors.Danger) }
-        }
-    }
-
-    pendingRetention?.let { days ->
-        AlertDialog(
-            onDismissRequest = { pendingRetention = null },
-            title = { Text("Keep ${retentionLabel(days).lowercase()}?") },
-            text = { Text("Messages older than that are deleted now, and from then on every night. Chats left empty go too.") },
-            confirmButton = {
-                TextButton(onClick = {
-                    viewModel.setRetention(days)
-                    pendingRetention = null
-                }) { Text("Delete older messages", color = AppColors.Danger) }
-            },
-            dismissButton = { TextButton(onClick = { pendingRetention = null }) { Text("Cancel") } },
-        )
-    }
-    if (forgetStep == 1) {
-        AlertDialog(
-            onDismissRequest = { forgetStep = 0 },
-            title = { Text("Forget everything?") },
-            text = { Text("Every fact, reminder and event, every saved image, the search index of past conversations and all summaries are deleted. Your chats stay, but nothing is learned from them again.") },
-            confirmButton = { TextButton(onClick = { forgetStep = 2 }) { Text("Continue", color = AppColors.Danger) } },
-            dismissButton = { TextButton(onClick = { forgetStep = 0 }) { Text("Cancel") } },
-        )
-    }
-    if (forgetStep == 2) {
-        AlertDialog(
-            onDismissRequest = { forgetStep = 0 },
-            title = { Text("This can't be undone") },
-            text = { Text("Delete everything the assistant knows about you?") },
-            confirmButton = {
-                TextButton(onClick = {
-                    viewModel.forgetEverything()
-                    forgetStep = 0
-                }) { Text("Forget everything", color = AppColors.Danger) }
-            },
-            dismissButton = { TextButton(onClick = { forgetStep = 0 }) { Text("Keep") } },
-        )
-    }
-}
-
-private fun retentionLabel(days: Int): String = when (days) {
-    0 -> "Forever"
-    365 -> "1 year"
-    else -> "$days days"
-}
-
-private val RETENTION_CHOICES = listOf(0, 365, 90, 30)
 
 // ---- Reminders & events ----
 

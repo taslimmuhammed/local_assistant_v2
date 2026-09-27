@@ -141,6 +141,8 @@ class Consolidation(
     private val releaseModel: suspend () -> Unit,
     /** Removes saved-image files whose note was deleted; returns how many. */
     private val pruneSavedImages: suspend () -> Int = { 0 },
+    /** Marks reminders whose time has passed done, or moves repeating ones on; returns how many. */
+    private val finishPastReminders: suspend () -> Int = { 0 },
     private val clock: () -> Long = System::currentTimeMillis,
 ) {
 
@@ -157,6 +159,8 @@ class Consolidation(
             if (merged > 0) Log.i(TAG, "Merged $merged facts under their canonical names")
             val removed = applyRetention(retentionDays())
             if (removed > 0) Log.i(TAG, "Deleted $removed messages past the retention period")
+            val finished = finishPastReminders()
+            if (finished > 0) Log.i(TAG, "Finished $finished reminders whose time had passed")
             val pruned = pruneSavedImages()
             if (pruned > 0) Log.i(TAG, "Removed $pruned images of deleted saved images")
             optimize()
