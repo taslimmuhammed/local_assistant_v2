@@ -114,6 +114,15 @@ class ChatViewModel(
 
     val engineState: StateFlow<LlmService.State> = llm.state
 
+    init {
+        // The chat opens at once and the model loads behind it; a message sent before it is ready
+        // waits for it. Also covers a model installed just now, which the app's start didn't see.
+        llm.warmUp()
+    }
+
+    /** After the model failed to start: from the banner that says so. */
+    fun retryLoad() = llm.retryLoad()
+
     /** Real context consumption reported by the runtime, for the indicator above the composer. */
     val contextUsage: StateFlow<LlmService.ContextUsage?> = conversations.contextUsage
 

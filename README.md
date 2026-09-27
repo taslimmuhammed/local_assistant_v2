@@ -229,8 +229,23 @@ them right every time. A rebuilt conversation starts over and attaches it again.
 lists saved images too.
 
 On the real model (`MemoryEvalTest.aSavedImageIsLookedAtAgainWhenAskedAbout`): a card is saved in
-one chat, then a new chat asks for its PIN, its support number and its background colour — 9/9
-right over three runs, the colour coming from the image alone.
+one chat, then a new chat asks for its PIN, its support number and its background colour. That was
+9/9 right over three runs, the colour coming from the image alone, when the prompt was shorter.
+With today's 16 tools, the question sits past token 2,048 and the GPU digit bug (see *Numbers past
+token 2,048*) reaches the reply. Measured 27 Sep 2026: the image is recalled and attached, the saved
+details are exact, and the reply still says the PIN is `44417` (it is `4417`) and the support number
+`18000-2095555`. The test used to check `"4417" in answer`, which `44417` passes. It now wants the
+number on its own, and fails until replies are fixed.
+
+The Images tab (under *What I know about you*) has a **+** that does the same job without a chat:
+pick a photo, and the model names and describes it exactly as `remember_image` would
+(`memory/notes/ImageDescriber.kt`). The image is imported through the chat's `AttachmentStore`
+(upright, scaled down), then read in a conversation of its own, under `ModelScheduler.runUser` with
+the live chat closed. Then it is saved with no source chat, and the imported copy is deleted. That
+conversation is one image, a few lines of instructions and the reply, capped to stay under token
+2,048, so the details keep every digit. A row reads "Looking at the image…" while the model works;
+a snackbar then says "Saved …", with Undo. On the phone (`MemoryEvalTest.anImageAddedFromTheImagesTabIsDescribedAndFound`)
+it took 4.8 s and copied all six lines of the test card exactly.
 
 ### What I know about you
 
@@ -477,11 +492,12 @@ is why the app always sets it.
 
 ## Startup
 
-The model starts loading the moment the app does, and `ui/startup/LoadingScreen.kt` stays up until
-it reports `Ready` — typically a few seconds — naming the backend and counting the time. The chat is
-only composed after that, so nobody types into a composer whose message would just wait. The same
-screen covers a restart after the window is changed in Settings, and a failure, with *Try again*
-and a way into Settings.
+The model starts loading the moment the app does (`AssistantApplication`, and again from
+`ChatViewModel` for a model installed just now), and the chat opens straight away. It takes a few
+seconds when the model file is in the page cache (about 3 s on the test phone). While it loads, the
+banner at the top says "Getting ready…". A message sent before it is ready simply waits for it, and
+the typing dot says "Loading model…" beside it, so the wait doesn't look like a hang. If the model
+fails to start, the banner says so in red. Tapping it tries again.
 
 ## Context window
 

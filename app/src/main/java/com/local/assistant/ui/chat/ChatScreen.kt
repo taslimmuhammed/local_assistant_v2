@@ -1,6 +1,7 @@
 package com.local.assistant.ui.chat
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import android.Manifest
 import android.content.Intent
 import android.content.pm.PackageManager
@@ -233,7 +234,7 @@ fun ChatScreen(
                     .padding(padding)
                     .imePadding(),
             ) {
-                EngineBanner(engineState)
+                EngineBanner(engineState, onRetry = viewModel::retryLoad)
                 val tidying by viewModel.tidying.collectAsStateWithLifecycle()
                 val memoryPaused by viewModel.memoryPaused.collectAsStateWithLifecycle()
                 if (tidying) QuietBanner("Tidying up…")
@@ -269,7 +270,9 @@ fun ChatScreen(
                             streamingText?.let { partial ->
                                 item(key = STREAMING_ITEM_KEY) {
                                     if (partial.isEmpty()) {
-                                        ThinkingIndicator()
+                                        // A message sent while the model is still starting waits
+                                        // for it: say so, so the wait doesn't look like a hang.
+                                        ThinkingIndicator(label = "Loading model…".takeIf { engineState !is LlmService.State.Ready })
                                     } else {
                                         AssistantMessage(partial)
                                     }
@@ -380,10 +383,11 @@ private fun QuietBanner(text: String) {
 }
 
 @Composable
-private fun EngineBanner(state: LlmService.State) {
+private fun EngineBanner(state: LlmService.State, onRetry: () -> Unit) {
+    val failed = state is LlmService.State.Failed
     val message = when (state) {
         is LlmService.State.Loading, LlmService.State.Idle -> "Getting ready…"
-        is LlmService.State.Failed -> state.message
+        is LlmService.State.Failed -> "${state.message} Tap to try again."
         LlmService.State.NoModel -> "No model installed."
         else -> null
     } ?: return
@@ -391,9 +395,10 @@ private fun EngineBanner(state: LlmService.State) {
     Text(
         text = message,
         style = MaterialTheme.typography.bodyMedium,
-        color = if (state is LlmService.State.Failed) AppColors.Danger else AppColors.TextSecondary,
+        color = if (failed) AppColors.Danger else AppColors.TextSecondary,
         modifier = Modifier
             .fillMaxWidth()
+            .then(if (failed) Modifier.clickable(onClick = onRetry) else Modifier)
             .background(AppColors.SurfaceMuted)
             .padding(horizontal = 16.dp, vertical = 8.dp),
     )

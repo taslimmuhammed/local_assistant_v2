@@ -5,6 +5,7 @@ import android.app.Application
 import android.content.ComponentCallbacks2
 import android.content.Context
 import android.content.pm.ApplicationInfo
+import android.net.Uri
 import androidx.lifecycle.ProcessLifecycleOwner
 import com.local.assistant.data.db.AppDatabase
 import com.local.assistant.data.prefs.SettingsStore
@@ -20,9 +21,11 @@ import com.local.assistant.device.AndroidContacts
 import com.local.assistant.device.AndroidPhone
 import com.local.assistant.device.PermissionBroker
 import com.local.assistant.memory.MemoryControls
+import com.local.assistant.memory.notes.ImageDescriber
 import com.local.assistant.memory.notes.SavedImages
 import com.local.assistant.memory.db.ArchiveRepository
 import com.local.assistant.memory.db.MemoryRepository
+import com.local.assistant.memory.db.NoteEntity
 import com.local.assistant.memory.db.SessionTracker
 import com.local.assistant.memory.embed.EmbedderCatalog
 import com.local.assistant.memory.embed.InstalledEmbedder
@@ -291,6 +294,23 @@ class AppContainer(context: Context) {
         pruneSavedImages = savedImages::prune,
         finishPastReminders = { memoryControls.finishPastReminders() },
     )
+
+    private val imageDescriber = ImageDescriber(llmBackend, modelScheduler, conversations)
+
+    /**
+     * The Images tab's "+": the picked image goes through the model like "remember this" in a
+     * chat, and is kept with the title and details it wrote. Null when the model is unavailable.
+     */
+    suspend fun addSavedImage(uri: Uri): NoteEntity? {
+        val picked = attachmentStore.importImage(uri)
+        try {
+            val description = imageDescriber.describe(picked.absolutePath) ?: return null
+            return savedImages.saveUpload(description.title, description.details, picked.absolutePath)
+                .also { embeddingQueue.kick() }
+        } finally {
+            attachmentStore.delete(picked.absolutePath)
+        }
+    }
 
     /** "Forget everything", including the nightly pass's place in the history. */
     suspend fun forgetEverything() = memoryControls.forgetEverything(skipExtractionTo = extractor::skipToEnd)

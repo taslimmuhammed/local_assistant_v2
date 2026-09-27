@@ -18,10 +18,8 @@ import com.local.assistant.ui.profile.ProfileScreen
 import com.local.assistant.ui.profile.ProfileViewModel
 import androidx.activity.compose.BackHandler
 import com.local.assistant.ui.chat.ChatViewModel
-import com.local.assistant.llm.LlmService
 import com.local.assistant.ui.settings.SettingsScreen
 import com.local.assistant.ui.setup.ModelScreen
-import com.local.assistant.ui.startup.LoadingScreen
 import com.local.assistant.ui.web.WebSearchScreen
 import com.local.assistant.ui.web.WebSearchViewModel
 import com.local.assistant.ui.theme.LocalAssistantTheme
@@ -114,14 +112,6 @@ private fun AppRoot(container: AppContainer) {
             onOpenModel = { showModelScreen = true },
             onOpenWebSearch = { showWebSearchScreen = true },
         )
-        return
-    }
-
-    // The model is loaded as the app starts, and the chat waits for it: a message typed while it
-    // loads would only sit there. Also shown while it restarts after a settings change.
-    val engineState by container.llmService.state.collectAsStateWithLifecycle()
-    if (engineState !is LlmService.State.Ready) {
-        LoadingScreen(llmService = container.llmService, onOpenSettings = { showSettings = true })
         return
     }
 

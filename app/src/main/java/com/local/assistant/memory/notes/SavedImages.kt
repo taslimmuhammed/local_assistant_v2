@@ -44,10 +44,19 @@ class SavedImages(
             .lastOrNull { it.attachmentKind == AttachmentKind.IMAGE && it.attachmentPath?.let(::File)?.isFile == true }
             ?.let { FoundImage(it.chatId, it.id, it.attachmentPath!!) }
 
-    override suspend fun save(title: String, details: String, image: FoundImage): Long {
+    override suspend fun save(title: String, details: String, image: FoundImage): Long =
+        keep(title, details, image.path, chatId = image.chatId, messageId = image.messageId)
+
+    /** An image added from the Images tab: no chat it came from. Returns the saved note. */
+    suspend fun saveUpload(title: String, details: String, path: String): NoteEntity {
+        val id = keep(title, details, path, chatId = null, messageId = null)
+        return checkNotNull(notes.byId(id))
+    }
+
+    private suspend fun keep(title: String, details: String, path: String, chatId: Long?, messageId: Long?): Long {
         val copy = withContext(Dispatchers.IO) {
             dir.mkdirs()
-            val source = File(image.path)
+            val source = File(path)
             File(dir, UUID.randomUUID().toString() + "." + source.extension.ifEmpty { "jpg" }).also { source.copyTo(it) }
         }
         val now = clock()
@@ -56,8 +65,8 @@ class SavedImages(
                 title = title,
                 details = details,
                 imagePath = copy.absolutePath,
-                sourceMessageId = image.messageId,
-                chatId = image.chatId,
+                sourceMessageId = messageId,
+                chatId = chatId,
                 createdAt = now,
                 updatedAt = now,
             ),

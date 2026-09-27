@@ -115,8 +115,12 @@ fun AssistantMessage(
 }
 
 /** Shown between hitting send and the first token arriving — prefill can take a few seconds. */
+/**
+ * The blinking dot while the reply hasn't started. With a [label] — "Loading model…" when the
+ * model is still starting — it says why the wait is longer than usual.
+ */
 @Composable
-fun ThinkingIndicator(modifier: Modifier = Modifier) {
+fun ThinkingIndicator(modifier: Modifier = Modifier, label: String? = null) {
     val transition = rememberInfiniteTransition(label = "thinking")
     val alpha by transition.animateFloat(
         initialValue = 0.25f,
@@ -124,9 +128,9 @@ fun ThinkingIndicator(modifier: Modifier = Modifier) {
         animationSpec = infiniteRepeatable(tween(700), RepeatMode.Reverse),
         label = "alpha",
     )
-    Box(
+    Row(
         modifier = modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 10.dp),
-        contentAlignment = Alignment.CenterStart,
+        verticalAlignment = Alignment.CenterVertically,
     ) {
         Box(
             Modifier
@@ -135,5 +139,13 @@ fun ThinkingIndicator(modifier: Modifier = Modifier) {
                 .clip(CircleShape)
                 .background(AppColors.TextPrimary),
         )
+        label?.let {
+            Text(
+                text = it,
+                style = MaterialTheme.typography.bodyMedium,
+                color = AppColors.TextSecondary,
+                modifier = Modifier.padding(start = 10.dp),
+            )
+        }
     }
 }

@@ -2,6 +2,7 @@ package com.local.assistant.ui.memory
 
 import android.content.ContentResolver
 import android.net.Uri
+import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
@@ -22,6 +23,7 @@ import com.local.assistant.memory.db.NoteEntity
 import com.local.assistant.memory.db.TaskEntity
 import com.local.assistant.memory.prompt.MemoryBudget
 import com.local.assistant.memory.prompt.TokenEstimator
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -86,6 +88,8 @@ class MemoryViewModel(
     private val settings: SettingsStore,
     private val forgetAll: suspend () -> Unit,
     estimator: TokenEstimator,
+    /** The Images tab's "+": the model names and describes the image, then it is saved. */
+    private val addImage: suspend (Uri) -> NoteEntity? = { null },
     private val zone: () -> ZoneId = ZoneId::systemDefault,
 ) : ViewModel() {
 
@@ -114,6 +118,10 @@ class MemoryViewModel(
 
     val retentionDays: StateFlow<Int> = settings.observeHistoryRetentionDays()
         .stateIn(viewModelScope, SharingStarted.Eagerly, settings.historyRetentionDays)
+
+    /** An image from the "+" is with the model. */
+    private val _addingImage = MutableStateFlow(false)
+    val addingImage: StateFlow<Boolean> = _addingImage.asStateFlow()
 
     private val _notices = MutableSharedFlow<Notice>(extraBufferCapacity = 4)
     val notices: SharedFlow<Notice> = _notices.asSharedFlow()
@@ -175,6 +183,29 @@ class MemoryViewModel(
         _notices.emit(Notice("Deleted “${note.title}”") { controls.restoreSavedImage(note) })
     }
 
+    fun addSavedImage(uri: Uri) {
+        if (_addingImage.value) return
+        _addingImage.value = true
+        launch {
+            val message = try {
+                val note = addImage(uri)
+                if (note == null) {
+                    Notice("The model isn't available right now, so the image wasn't saved")
+                } else {
+                    Notice("Saved “${note.title}”") { controls.deleteSavedImage(note) }
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                Log.w(TAG, "Could not add the image", e)
+                Notice("Couldn't read that image. Try again, or send it in a chat.")
+            } finally {
+                _addingImage.value = false
+            }
+            _notices.emit(message)
+        }
+    }
+
     fun setPaused(paused: Boolean) {
         settings.memoryPaused = paused
     }
@@ -210,6 +241,7 @@ class MemoryViewModel(
     }
 
     companion object {
+        private const val TAG = "MemoryViewModel"
         private val DATE = DateTimeFormatter.ofPattern("d MMM yyyy, h:mm a", Locale.ENGLISH)
 
         /** "Dentist" for the user's own facts, "Mother · birthday" for someone else's. */
@@ -241,6 +273,7 @@ class MemoryViewModel(
                     settings = container.settings,
                     forgetAll = container::forgetEverything,
                     estimator = container.tokenEstimator,
+                    addImage = container::addSavedImage,
                 )
             }
         }

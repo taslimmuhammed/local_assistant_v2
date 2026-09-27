@@ -15,7 +15,9 @@ import com.local.assistant.memory.summary.Summarizer
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Assume.assumeTrue
 import org.junit.Test
@@ -177,6 +179,8 @@ class MemoryEvalTest {
         }
     }
 
+    private val EXACT_PIN = Regex("(?<!\\d)4417(?!\\d)")
+
     /** A card with more on it than a one-line description would keep. */
     private fun wifiCard(file: File) {
         val bitmap = android.graphics.Bitmap.createBitmap(1024, 640, android.graphics.Bitmap.Config.ARGB_8888)
@@ -254,7 +258,8 @@ class MemoryEvalTest {
                 report("A: ${answer.take(300)}")
             }
             val answers = chats.messagesFor(second).filter { it.role == Role.ASSISTANT }.map { it.text }
-            assertTrue("the PIN is read back", "4417" in answers[0])
+            // As a number of its own: "44417" is not the PIN.
+            assertTrue("the PIN is read back", EXACT_PIN in answers[0])
             assertTrue("the support number is read back", answers[1].filter { it.isDigit() }.contains("18002094455"))
             assertTrue("the image itself is looked at", answers[2].contains("white", ignoreCase = true))
         } finally {
@@ -262,6 +267,51 @@ class MemoryEvalTest {
             chats.deleteChat(first)
             if (second != 0L) chats.deleteChat(second)
             image.delete()
+        }
+        Unit
+    }
+
+    /**
+     * The Images tab's "+": the same card picked from the gallery rather than sent in a chat. The
+     * model names and describes it in a conversation of its own, and a later chat can find it.
+     */
+    @Test
+    fun anImageAddedFromTheImagesTabIsDescribedAndFound() = runBlocking {
+        enabled()
+        check(container.llmBackend.ensureReady())
+        val context = instrumentation.targetContext
+        val picked = File(context.cacheDir, "eval-picked-wifi-card.jpg").also(::wifiCard)
+        val attachments = File(context.filesDir, "attachments")
+        val before = attachments.list()?.toSet().orEmpty()
+        var noteId: Long? = null
+        var chatId = 0L
+        try {
+            var started = System.currentTimeMillis()
+            val note = container.addSavedImage(android.net.Uri.fromFile(picked))
+            report("added from the Images tab: ${System.currentTimeMillis() - started} ms")
+            report("saved: ${note?.let { "“${it.title}”: ${it.details}" } ?: "nothing"}")
+            assertNotNull("the image was described and saved", note)
+            noteId = note!!.id
+            assertNull("no chat it came from", note.chatId)
+            assertTrue("the PIN is in the details", "4417" in note.details)
+            assertTrue("the password is in the details", "kochi2026" in note.details)
+            assertEquals("the imported copy is not left behind", before, attachments.list()?.toSet().orEmpty())
+
+            container.embeddingQueue.drainNow()
+            chatId = container.chatRepository.createChat("Images tab eval")
+            Runtime.getRuntime().exec(arrayOf("logcat", "-c")).waitFor()
+            started = System.currentTimeMillis()
+            val (answer, _) = turn(chatId, "what's the admin PIN on the wifi card I saved?")
+            val attached = ownLog("ConversationManager").lastOrNull { "aved image" in it }
+            report("Q → ${System.currentTimeMillis() - started} ms, ${attached?.substringAfter(": ") ?: "no saved image recalled"}")
+            report("A: ${answer.take(300)} (PIN exact: ${EXACT_PIN in answer})")
+            // Whether the reply then copies 4417 exactly is the chat's own digit problem past
+            // token 2,048 (NumberGrounding), not this path's: reported, not asserted.
+            assertNotNull("a later chat finds the image", attached)
+        } finally {
+            noteId?.let { container.savedImages.delete(it) }
+            if (chatId != 0L) container.chatRepository.deleteChat(chatId)
+            picked.delete()
         }
         Unit
     }

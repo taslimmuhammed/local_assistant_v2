@@ -2,6 +2,7 @@ package com.local.assistant.ui.memory
 
 import android.graphics.BitmapFactory
 import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
@@ -9,6 +10,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -24,14 +26,17 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ArrowBack
+import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.PushPin
 import androidx.compose.material.icons.outlined.PushPin
 import androidx.compose.material.icons.outlined.Search
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Checkbox
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -99,6 +104,10 @@ fun MemoryScreen(viewModel: MemoryViewModel, onBack: () -> Unit) {
     val snackbar = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
     var tab by remember { mutableIntStateOf(0) }
+    val addingImage by viewModel.addingImage.collectAsStateWithLifecycle()
+    val pickImage = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
+        uri?.let(viewModel::addSavedImage)
+    }
 
     LaunchedEffect(viewModel) {
         viewModel.notices.collect { notice ->
@@ -114,6 +123,25 @@ fun MemoryScreen(viewModel: MemoryViewModel, onBack: () -> Unit) {
     Scaffold(
         containerColor = AppColors.Background,
         snackbarHost = { SnackbarHost(snackbar) },
+        floatingActionButton = {
+            // The same as sending a photo and saying "remember this": the model names and
+            // describes it, and it is kept with what it wrote.
+            if (tab == 2) {
+                FloatingActionButton(
+                    onClick = {
+                        if (!addingImage) pickImage.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
+                    },
+                    containerColor = AppColors.Accent,
+                    contentColor = AppColors.OnAccent,
+                ) {
+                    if (addingImage) {
+                        CircularProgressIndicator(Modifier.size(22.dp), strokeWidth = 2.dp, color = AppColors.OnAccent)
+                    } else {
+                        Icon(Icons.Filled.Add, contentDescription = "Add an image")
+                    }
+                }
+            }
+        },
         topBar = {
             TopAppBar(
                 title = { Text("What I know about you", style = MaterialTheme.typography.titleMedium) },
@@ -374,11 +402,14 @@ private fun EventRow(event: EventEntity) {
 @Composable
 private fun ImagesTab(viewModel: MemoryViewModel) {
     val notes by viewModel.savedImages.collectAsStateWithLifecycle()
+    val adding by viewModel.addingImage.collectAsStateWithLifecycle()
     var open by remember { mutableStateOf<NoteEntity?>(null) }
-    LazyColumn(Modifier.fillMaxSize()) {
+    // Room at the bottom so the "+" never covers the last row.
+    LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = 88.dp)) {
         item { SectionHeader("Saved images") }
-        if (notes.isEmpty()) {
-            item { Note("Nothing saved yet. Send a photo and say “remember this” — a receipt, a label, a whiteboard — and ask about it any time later.") }
+        if (adding) item { AddingImageRow() }
+        if (notes.isEmpty() && !adding) {
+            item { Note("Nothing saved yet. Tap + to add a photo, or send one in a chat and say “remember this” — a receipt, a label, a whiteboard — and ask about it any time later.") }
         }
         items(notes, key = { "note-${it.id}" }) { note ->
             Dismissible(onDismiss = { viewModel.deleteSavedImage(note) }) {
@@ -388,6 +419,20 @@ private fun ImagesTab(viewModel: MemoryViewModel) {
         if (notes.isNotEmpty()) item { Note("Ask about a saved image in any chat and the assistant looks at it again. Swipe to delete.") }
     }
     open?.let { note -> SavedImageDialog(note, onDone = { open = null }) }
+}
+
+/** Where the new image will appear, while the model reads it. */
+@Composable
+private fun AddingImageRow() {
+    Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+        Box(Modifier.size(56.dp).clip(RoundedCornerShape(10.dp)).background(AppColors.SurfaceMuted), contentAlignment = Alignment.Center) {
+            CircularProgressIndicator(Modifier.size(22.dp), strokeWidth = 2.dp, color = AppColors.Accent)
+        }
+        Column(Modifier.weight(1f).padding(start = 12.dp)) {
+            Text("Looking at the image…", style = MaterialTheme.typography.bodyLarge, color = AppColors.TextPrimary)
+            Text("Reading everything in it to save with it. This can take a little while.", style = MaterialTheme.typography.bodySmall, color = AppColors.TextSecondary)
+        }
+    }
 }
 
 @Composable
