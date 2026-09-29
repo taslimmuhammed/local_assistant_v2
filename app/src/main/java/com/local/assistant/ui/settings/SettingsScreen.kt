@@ -1,5 +1,8 @@
 package com.local.assistant.ui.settings
 
+import android.content.ActivityNotFoundException
+import android.content.Intent
+import android.provider.Settings
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.clickable
@@ -22,6 +25,7 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -39,6 +43,7 @@ import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -48,12 +53,18 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.repeatOnLifecycle
+import com.local.assistant.assist.AssistantRole
 import com.local.assistant.data.prefs.SettingsStore
 import com.local.assistant.llm.LlmService
 import com.local.assistant.model.ModelCatalog
 import com.local.assistant.ui.memory.MemoryViewModel
 import com.local.assistant.ui.theme.AppColors
+import com.local.assistant.voice.Speaker
+import com.local.assistant.voice.VoiceOption
 import java.time.LocalDate
 
 /**
@@ -66,6 +77,7 @@ import java.time.LocalDate
 fun SettingsScreen(
     llmService: LlmService,
     settings: SettingsStore,
+    speaker: Speaker,
     webSearchOn: Boolean,
     memory: MemoryViewModel,
     onBack: () -> Unit,
@@ -109,6 +121,10 @@ fun SettingsScreen(
                 onOpenModel,
             )
             ContextWindow(llmService, settings)
+
+            SectionDivider()
+            SectionHeader("Assistant")
+            AssistantSettings(settings, speaker)
 
             SectionDivider()
             SectionHeader("Web search")
@@ -190,6 +206,144 @@ private fun ContextWindow(llmService: LlmService, settings: SettingsStore) {
             },
             dismissButton = { TextButton(onClick = { pending = null }) { Text("Cancel") } },
         )
+    }
+}
+
+/**
+ * The power-button assistant and its voice. Being the phone's assistant is the system's to
+ * grant, so this only says whether it is and opens the page where it's chosen.
+ */
+@Composable
+private fun AssistantSettings(settings: SettingsStore, speaker: Speaker) {
+    val context = LocalContext.current
+    val lifecycle = LocalLifecycleOwner.current.lifecycle
+    var isAssistant by remember { mutableStateOf(AssistantRole.isDefault(context)) }
+    // Checked again on the way back from the system's page, where it is changed.
+    LaunchedEffect(lifecycle) {
+        lifecycle.repeatOnLifecycle(Lifecycle.State.RESUMED) { isAssistant = AssistantRole.isDefault(context) }
+    }
+    NavRow(
+        "Power button",
+        if (isAssistant) {
+            "On. Press and hold the power button to talk."
+        } else {
+            "Off. Tap, then choose Local Assistant as the digital assistant app."
+        },
+    ) { AssistantRole.openSettings(context) }
+    if (!isAssistant) {
+        Text(
+            "If holding the power button still opens the power menu, switch it to the voice assistant in your phone's power button settings. You can also long-press the app icon and pick Talk.",
+            style = MaterialTheme.typography.bodySmall,
+            color = AppColors.TextSecondary,
+            modifier = Modifier.padding(horizontal = 16.dp),
+        )
+    }
+
+    var speak by remember { mutableStateOf(settings.speakReplies) }
+    Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+        Column(Modifier.weight(1f)) {
+            Text("Answer out loud", style = MaterialTheme.typography.bodyLarge, color = AppColors.TextPrimary)
+            Text(
+                "When you ask by voice, the answer is read aloud as well as shown.",
+                style = MaterialTheme.typography.bodySmall,
+                color = AppColors.TextSecondary,
+            )
+        }
+        Switch(checked = speak, onCheckedChange = {
+            speak = it
+            settings.speakReplies = it
+        })
+    }
+
+    // The engine lists its voices once it has started, which takes a moment the first time.
+    var voices by remember { mutableStateOf<List<VoiceOption>?>(null) }
+    var current by remember { mutableStateOf<String?>(null) }
+    var picking by remember { mutableStateOf(false) }
+    LaunchedEffect(speaker) {
+        voices = speaker.voiceOptions()
+        current = speaker.currentVoice()
+    }
+    val options = voices
+    when {
+        options == null -> NavRow("Voice", "Loading the phone's voices…") {}
+        options.isEmpty() -> NavRow(
+            "Voice",
+            "No voices on this phone that work offline. Tap to add one in the text-to-speech settings.",
+        ) { openTextToSpeechSettings(context) }
+        else -> NavRow("Voice", options.firstOrNull { it.name == current }?.label ?: options.first().label) { picking = true }
+    }
+
+    var rate by remember { mutableFloatStateOf(settings.speechRate) }
+    Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)) {
+        Text("Pace", style = MaterialTheme.typography.bodyLarge, color = AppColors.TextPrimary)
+        Row(Modifier.padding(top = 6.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            for ((value, label) in SettingsStore.SPEECH_RATES) {
+                FilterChip(
+                    selected = value == rate,
+                    onClick = {
+                        rate = value
+                        settings.speechRate = value
+                        speaker.preview()
+                    },
+                    label = { Text(label) },
+                )
+            }
+        }
+    }
+
+    if (picking && !options.isNullOrEmpty()) {
+        AlertDialog(
+            onDismissRequest = {
+                picking = false
+                speaker.stop()
+            },
+            title = { Text("Voice") },
+            text = {
+                Column(Modifier.verticalScroll(rememberScrollState())) {
+                    Text(
+                        "Tap one to hear it. Only voices that run on the phone are listed.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = AppColors.TextSecondary,
+                        modifier = Modifier.padding(bottom = 8.dp),
+                    )
+                    for (option in options) {
+                        Row(
+                            Modifier
+                                .fillMaxWidth()
+                                .selectable(selected = option.name == current, role = Role.RadioButton) {
+                                    current = option.name
+                                    settings.assistantVoice = option.name
+                                    speaker.preview()
+                                }
+                                .padding(vertical = 6.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            RadioButton(selected = option.name == current, onClick = null)
+                            Text(option.label, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.padding(start = 8.dp))
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    picking = false
+                    speaker.stop()
+                }) { Text("Done") }
+            },
+        )
+    }
+}
+
+/** The system's text-to-speech page, where engines and voice data are installed. */
+private fun openTextToSpeechSettings(context: android.content.Context) {
+    val screens = listOf(Intent("com.android.settings.TTS_SETTINGS"), Intent(Settings.ACTION_SETTINGS))
+    for (screen in screens) {
+        try {
+            context.startActivity(screen.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+            return
+        } catch (e: ActivityNotFoundException) {
+            continue
+        }
     }
 }
 

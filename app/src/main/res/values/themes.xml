@@ -5,4 +5,16 @@
         <item name="android:navigationBarColor">@android:color/white</item>
         <item name="android:windowBackground">@android:color/white</item>
     </style>
+
+    <!-- The assistant overlay: see-through, so the app underneath stays in view behind its own
+         scrim, and with no window animation, since the panel animates itself. -->
+    <style name="Theme.LocalAssistant.Assist">
+        <item name="android:windowIsTranslucent">true</item>
+        <item name="android:windowBackground">@android:color/transparent</item>
+        <item name="android:backgroundDimEnabled">false</item>
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
+        <item name="android:windowAnimationStyle">@null</item>
+        <item name="android:windowContentOverlay">@null</item>
+    </style>
 </resources>

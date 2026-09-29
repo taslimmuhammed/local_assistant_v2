@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- For phones where the power button can't be given to the assistant: the same overlay, from a
+     long press on the app icon (or pinned to the home screen). -->
+<shortcuts xmlns:android="http://schemas.android.com/apk/res/android">
+    <shortcut
+        android:shortcutId="talk"
+        android:enabled="true"
+        android:icon="@drawable/ic_shortcut_talk"
+        android:shortcutShortLabel="@string/shortcut_talk_short"
+        android:shortcutLongLabel="@string/shortcut_talk_long">
+        <intent
+            android:action="android.intent.action.ASSIST"
+            android:targetPackage="com.local.assistant"
+            android:targetClass="com.local.assistant.assist.AssistActivity" />
+    </shortcut>
+</shortcuts>

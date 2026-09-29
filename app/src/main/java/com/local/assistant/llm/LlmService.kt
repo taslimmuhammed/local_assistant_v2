@@ -61,7 +61,12 @@ class LlmService(
      * by the runtime, not an estimate, so it is the way to tell whether a chat is actually
      * running out of room rather than misbehaving for some other reason.
      */
-    data class ContextUsage(val used: Int, val max: Int) {
+    data class ContextUsage(
+        val used: Int,
+        val max: Int,
+        /** The chat whose conversation this is; the overlay's chat can be live behind the chat on screen. */
+        val chatId: Long? = null,
+    ) {
         val fraction: Float get() = if (max > 0) (used.toFloat() / max).coerceIn(0f, 1f) else 0f
         val isNearlyFull: Boolean get() = fraction >= NEARLY_FULL_FRACTION
     }

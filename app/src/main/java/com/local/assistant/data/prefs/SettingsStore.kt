@@ -134,6 +134,21 @@ class SettingsStore(context: Context) {
         get() = prefs.getString(KEY_SYSTEM_PROMPT, DEFAULT_SYSTEM_PROMPT) ?: DEFAULT_SYSTEM_PROMPT
         set(value) = prefs.edit { putString(KEY_SYSTEM_PROMPT, value) }
 
+    /** The assistant overlay reads its answer aloud when it was asked by voice. */
+    var speakReplies: Boolean
+        get() = prefs.getBoolean(KEY_SPEAK_REPLIES, true)
+        set(value) = prefs.edit { putBoolean(KEY_SPEAK_REPLIES, value) }
+
+    /** The text-to-speech voice picked in settings, by name; null for the automatic choice. */
+    var assistantVoice: String?
+        get() = prefs.getString(KEY_ASSISTANT_VOICE, null)
+        set(value) = prefs.edit { if (value == null) remove(KEY_ASSISTANT_VOICE) else putString(KEY_ASSISTANT_VOICE, value) }
+
+    /** How fast the voice speaks; 1.0 is the engine's normal pace. */
+    var speechRate: Float
+        get() = prefs.getFloat(KEY_SPEECH_RATE, DEFAULT_SPEECH_RATE)
+        set(value) = prefs.edit { putFloat(KEY_SPEECH_RATE, value) }
+
     fun observeModelPath(): Flow<String?> = observeKey(KEY_MODEL_PATH) { modelPath }
 
     fun observeMemoryPaused(): Flow<Boolean> = observeKey(KEY_MEMORY_PAUSED) { memoryPaused }
@@ -176,6 +191,14 @@ class SettingsStore(context: Context) {
         private const val KEY_TOKEN_RATE_MODEL = "latin_chars_per_token_model"
         private const val KEY_REPETITION_PENALTY = "repetition_penalty"
         private const val KEY_REPETITION_WINDOW = "repetition_window"
+        private const val KEY_SPEAK_REPLIES = "speak_replies"
+        private const val KEY_ASSISTANT_VOICE = "assistant_voice"
+        private const val KEY_SPEECH_RATE = "speech_rate"
+
+        const val DEFAULT_SPEECH_RATE = 1.0f
+
+        /** What settings offers for [speechRate]. */
+        val SPEECH_RATES = listOf(0.85f to "Relaxed", 1.0f to "Normal", 1.2f to "Brisk")
 
         const val DEFAULT_MAX_OUTPUT = 2048
         /** 8K: what the prompt budget is designed around, and what every supported phone holds. */

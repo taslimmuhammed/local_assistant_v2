@@ -7,6 +7,7 @@ import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
 import android.net.Uri
 import com.local.assistant.AppContainer
+import com.local.assistant.chat.ChatSender
 import com.local.assistant.data.db.AttachmentKind
 import com.local.assistant.data.db.ChatEntity
 import com.local.assistant.data.db.MessageEntity
@@ -15,37 +16,33 @@ import com.local.assistant.data.prefs.SettingsStore
 import com.local.assistant.data.repo.ChatRepository
 import com.local.assistant.device.PermissionBroker
 import com.local.assistant.llm.LlmService
-import com.local.assistant.llm.PromptAttachment
 import com.local.assistant.media.AttachmentStore
 import com.local.assistant.media.AudioRecorder
 import com.local.assistant.media.RecordingState
 import com.local.assistant.memory.prompt.ConversationManager
-import com.local.assistant.memory.prompt.TurnEvent
 import com.local.assistant.memory.prompt.TurnRunner
 import com.local.assistant.memory.tools.ChatToolLog
 import com.local.assistant.memory.tools.MemoryChip
 import com.local.assistant.memory.tools.SystemAlarms
 import com.local.assistant.memory.tools.ToolExecutor
-import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.Job
-import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
 
 class ChatViewModel(
     private val repository: ChatRepository,
     private val llm: LlmService,
     private val conversations: ConversationManager,
     private val turns: TurnRunner,
+    private val sender: ChatSender,
     private val tools: ToolExecutor,
     private val clockAlarms: SystemAlarms,
     private val settings: SettingsStore,
@@ -86,10 +83,7 @@ class ChatViewModel(
         .map { messages -> messages.filter { it.role != Role.TOOL } }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
-    /**
-     * Chips by the message they sit under: the reply that followed the tool calls, or — while that
-     * reply is still streaming, or if there never was one — the user message that asked.
-     */
+    /** Chips by the message they sit under (see [chipsByMessage]). */
     val chips: StateFlow<Map<Long, List<ChipItem>>> = storedMessages
         .map(::chipsByMessage)
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyMap())
@@ -102,12 +96,32 @@ class ChatViewModel(
     private val _offerExactAlarms = MutableStateFlow(false)
     val offerExactAlarms: StateFlow<Boolean> = _offerExactAlarms.asStateFlow()
 
-    /** The reply being streamed right now, or null when nothing is generating. */
-    private val _streamingText = MutableStateFlow<String?>(null)
-    val streamingText: StateFlow<String?> = _streamingText.asStateFlow()
+    /**
+     * The reply being streamed into the chat on screen, or null when it has none in flight. The
+     * reply may be one the assistant overlay asked for, opened here while it streams.
+     */
+    val streamingText: StateFlow<String?> = combine(sender.live, _activeChatId) { live, chatId ->
+        live?.takeIf { isHere(it, chatId) }?.text
+    }.stateIn(viewModelScope, SharingStarted.Eagerly, null)
 
-    private val _isGenerating = MutableStateFlow(false)
-    val isGenerating: StateFlow<Boolean> = _isGenerating.asStateFlow()
+    /** The chat on screen is generating a reply. */
+    val isGenerating: StateFlow<Boolean> = streamingText
+        .map { it != null }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, false)
+
+    /**
+     * Another chat's reply is in flight — the overlay's, asked from the power button — and there is
+     * only one model, so a send here waits until it is done.
+     */
+    val busyElsewhere: StateFlow<Boolean> = combine(sender.live, _activeChatId) { live, chatId ->
+        live != null && !isHere(live, chatId)
+    }.stateIn(viewModelScope, SharingStarted.Eagerly, false)
+
+    /** A new chat's stream has no chat yet: it is this screen's only if this screen sent it. */
+    private fun isHere(live: ChatSender.Live, chatId: Long?): Boolean =
+        live.chatId == chatId && (chatId != null || live.owner === this)
+
+    private fun generatingHere(): Boolean = sender.live.value?.let { isHere(it, _activeChatId.value) } == true
 
     private val _error = MutableStateFlow<String?>(null)
     val error: StateFlow<String?> = _error.asStateFlow()
@@ -124,7 +138,9 @@ class ChatViewModel(
     fun retryLoad() = llm.retryLoad()
 
     /** Real context consumption reported by the runtime, for the indicator above the composer. */
-    val contextUsage: StateFlow<LlmService.ContextUsage?> = conversations.contextUsage
+    val contextUsage: StateFlow<LlmService.ContextUsage?> = combine(conversations.contextUsage, _activeChatId) { usage, chatId ->
+        usage?.takeIf { it.chatId == null || it.chatId == chatId }
+    }.stateIn(viewModelScope, SharingStarted.Eagerly, null)
 
     /** A send is waiting while older turns are summarised to make room. */
     val tidying: StateFlow<Boolean> = conversations.tidying
@@ -149,17 +165,24 @@ class ChatViewModel(
 
     val recordingState: StateFlow<RecordingState?> = recorder.state
 
-    private var generationJob: Job? = null
-    private var stopRequested = false
-
     fun startNewChat() {
-        if (_isGenerating.value) return
+        if (generatingHere()) return
         _activeChatId.value = null
         conversations.onChatSelected(null)
     }
 
     fun selectChat(chatId: Long) {
-        if (_isGenerating.value || _activeChatId.value == chatId) return
+        if (generatingHere() || _activeChatId.value == chatId) return
+        _activeChatId.value = chatId
+        conversations.onChatSelected(chatId)
+    }
+
+    /**
+     * From the assistant overlay's "Open in app": show that chat, even over one generating here.
+     * Its reply, if still streaming, shows as it would have had it been sent from this screen.
+     */
+    fun openChat(chatId: Long) {
+        if (_activeChatId.value == chatId) return
         _activeChatId.value = chatId
         conversations.onChatSelected(chatId)
     }
@@ -199,7 +222,7 @@ class ChatViewModel(
 
     /** Caller must already hold RECORD_AUDIO permission. */
     fun startRecording() {
-        if (_isGenerating.value || recorder.isRecording) return
+        if (generatingHere() || recorder.isRecording) return
         discardPendingAttachment()
         val destination = attachments.newAudioFile()
         recorder.start(destination) { recording ->
@@ -214,80 +237,25 @@ class ChatViewModel(
     fun cancelRecording() = recorder.cancel()
 
     fun send(text: String) {
-        val prompt = text.trim()
         val attachment = _pendingAttachment.value
-        if ((prompt.isEmpty() && attachment == null) || _isGenerating.value) return
-        _pendingAttachment.value = null
-
-        stopRequested = false
-        _isGenerating.value = true
-        _streamingText.value = ""
-
-        generationJob = viewModelScope.launch {
-            val chatId = _activeChatId.value
-                ?: repository.createChat().also { _activeChatId.value = it }
-
-            // Stored first, so nothing the user wrote is lost whatever happens next.
-            val userMessageId = repository.addMessage(
-                chatId = chatId,
-                role = Role.USER,
-                text = prompt,
-                attachmentPath = attachment?.path,
-                attachmentKind = attachment?.kind,
-                attachmentDurationMs = attachment?.durationMs,
-            )
-            repository.titleFromFirstMessage(
-                chatId = chatId,
-                firstMessage = prompt,
-                fallback = when (attachment?.kind) {
-                    AttachmentKind.IMAGE -> "Image"
-                    AttachmentKind.AUDIO -> "Voice message"
-                    null -> ChatRepository.DEFAULT_TITLE
-                },
-            )
-
-            val reply = StringBuilder()
-            var failure: String? = null
-            var completed = false
-            try {
-                val promptAttachment = attachment?.let { PromptAttachment(it.path, it.kind) }
-                turns.run(chatId, userMessageId, prompt, promptAttachment).collect { event ->
-                    when (event) {
-                        is TurnEvent.Text -> {
-                            reply.append(event.delta)
-                            _streamingText.value = reply.toString()
-                        }
-                        is TurnEvent.Memory -> noticeReminder(event.chip)
-                        is TurnEvent.Done -> completed = true
-                    }
+        val started = sender.send(
+            chatId = _activeChatId.value,
+            text = text,
+            attachment = attachment?.let { ChatSender.Attachment(it.path, it.kind, it.durationMs) },
+            owner = this,
+            listener = object : ChatSender.Listener {
+                override fun onChatCreated(chatId: Long) {
+                    _activeChatId.value = chatId
                 }
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: Exception) {
-                failure = e.message ?: "Generation failed"
-            } finally {
-                // Runs even when stop() cancelled us, so a partial reply is never lost.
-                withContext(NonCancellable) {
-                    val incomplete = stopRequested || failure != null
-                    var assistantMessageId: Long? = null
-                    if (reply.isNotEmpty()) {
-                        val stats = llm.lastGenerationStats.value
-                        assistantMessageId = repository.addMessage(
-                            chatId = chatId,
-                            role = Role.ASSISTANT,
-                            text = reply.toString(),
-                            incomplete = incomplete,
-                            tokensPerSecond = stats?.tokensPerSecond,
-                            timeToFirstTokenMs = stats?.timeToFirstTokenMs,
-                        )
-                    }
-                    turns.finish(chatId, userMessageId, assistantMessageId, completed = completed && !incomplete)
+
+                override fun onMemory(chip: MemoryChip) = noticeReminder(chip)
+
+                override fun onFinished(reply: String, failure: String?) {
                     _error.value = failure
-                    _streamingText.value = null
-                    _isGenerating.value = false
                 }
-            }
-        }
+            },
+        )
+        if (started) _pendingAttachment.value = null
     }
 
     /** Puts back whatever the chip's tool call changed. */
@@ -330,37 +298,13 @@ class ChatViewModel(
         if (chip.note != null && !settings.offeredExactAlarms) _offerExactAlarms.value = true
     }
 
-    private fun chipsByMessage(messages: List<MessageEntity>): Map<Long, List<ChipItem>> {
-        val byMessage = mutableMapOf<Long, List<ChipItem>>()
-        var asker: Long? = null
-        var waiting = mutableListOf<ChipItem>()
-        for (message in messages) {
-            when (message.role) {
-                Role.USER -> {
-                    asker?.let { if (waiting.isNotEmpty()) byMessage[it] = waiting }
-                    asker = message.id
-                    waiting = mutableListOf()
-                }
-                Role.TOOL -> ChatToolLog.parse(message.text)?.let { record ->
-                    record.chip?.let { waiting += ChipItem(message.id, it, record.undone, record.undo != null) }
-                }
-                Role.ASSISTANT -> {
-                    if (waiting.isNotEmpty()) byMessage[message.id] = waiting
-                    asker = null
-                    waiting = mutableListOf()
-                }
-            }
-        }
-        asker?.let { if (waiting.isNotEmpty()) byMessage[it] = waiting }
-        return byMessage
+    fun stop() {
+        if (generatingHere()) sender.stop()
     }
 
-    fun stop() {
-        if (!_isGenerating.value) return
-        stopRequested = true
-        // Ask the runtime to stop decoding, then unwind the collector.
-        llm.stop()
-        generationJob?.cancel()
+    override fun onCleared() {
+        // As when this screen ran its own turns: gone for good, it takes its reply with it.
+        if (sender.live.value?.owner === this) sender.stop()
     }
 
     companion object {
@@ -371,6 +315,7 @@ class ChatViewModel(
                     llm = container.llmService,
                     conversations = container.conversations,
                     turns = container.turnRunner,
+                    sender = container.chatSender,
                     tools = container.toolExecutor,
                     clockAlarms = container.clockAlarms,
                     settings = container.settings,
@@ -381,4 +326,33 @@ class ChatViewModel(
             }
         }
     }
+}
+
+/**
+ * Chips by the message they sit under: the reply that followed the tool calls, or — while that
+ * reply is still streaming, or if there never was one — the user message that asked.
+ */
+internal fun chipsByMessage(messages: List<MessageEntity>): Map<Long, List<ChatViewModel.ChipItem>> {
+    val byMessage = mutableMapOf<Long, List<ChatViewModel.ChipItem>>()
+    var asker: Long? = null
+    var waiting = mutableListOf<ChatViewModel.ChipItem>()
+    for (message in messages) {
+        when (message.role) {
+            Role.USER -> {
+                asker?.let { if (waiting.isNotEmpty()) byMessage[it] = waiting }
+                asker = message.id
+                waiting = mutableListOf()
+            }
+            Role.TOOL -> ChatToolLog.parse(message.text)?.let { record ->
+                record.chip?.let { waiting += ChatViewModel.ChipItem(message.id, it, record.undone, record.undo != null) }
+            }
+            Role.ASSISTANT -> {
+                if (waiting.isNotEmpty()) byMessage[message.id] = waiting
+                asker = null
+                waiting = mutableListOf()
+            }
+        }
+    }
+    asker?.let { if (waiting.isNotEmpty()) byMessage[it] = waiting }
+    return byMessage
 }

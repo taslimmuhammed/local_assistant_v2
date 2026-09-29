@@ -1,10 +1,12 @@
 package com.local.assistant
 
+import android.content.Intent
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -26,20 +28,36 @@ import com.local.assistant.ui.theme.LocalAssistantTheme
 
 class MainActivity : ComponentActivity() {
 
+    /** A chat to show, from the assistant overlay's "Open in app". */
+    private val chatToOpen = mutableStateOf<Long?>(null)
+
     override fun onCreate(savedInstanceState: Bundle?) {
         enableEdgeToEdge()
         super.onCreate(savedInstanceState)
+        if (savedInstanceState == null) chatToOpen.value = chatIdIn(intent)
         val container = appContainer
         setContent {
             LocalAssistantTheme {
-                AppRoot(container)
+                AppRoot(container, chatToOpen.value, onChatOpened = { chatToOpen.value = null })
             }
         }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        chatIdIn(intent)?.let { chatToOpen.value = it }
+    }
+
+    private fun chatIdIn(intent: Intent?): Long? =
+        intent?.getLongExtra(EXTRA_CHAT_ID, -1L)?.takeIf { it > 0 }
+
+    companion object {
+        const val EXTRA_CHAT_ID = "com.local.assistant.extra.CHAT_ID"
     }
 }
 
 @Composable
-private fun AppRoot(container: AppContainer) {
+private fun AppRoot(container: AppContainer, chatToOpen: Long?, onChatOpened: () -> Unit) {
     val installed by container.modelManager.installed.collectAsStateWithLifecycle()
     var showSettings by remember { mutableStateOf(false) }
     var showModelScreen by remember { mutableStateOf(false) }
@@ -48,6 +66,16 @@ private fun AppRoot(container: AppContainer) {
     var showWebSearchScreen by remember { mutableStateOf(false) }
     var profileAsked by remember { mutableStateOf(container.settings.profileAsked) }
     var webSearchAsked by remember { mutableStateOf(container.settings.webSearchAsked || container.webSearch.enabled) }
+
+    // The overlay's "Open in app": to the chat, from whichever screen the app was left on.
+    LaunchedEffect(chatToOpen) {
+        if (chatToOpen == null) return@LaunchedEffect
+        showSettings = false
+        showModelScreen = false
+        showMemoryScreen = false
+        showProfileScreen = false
+        showWebSearchScreen = false
+    }
 
     // First launch: a few details about the user before anything else. Skippable.
     if (!profileAsked) {
@@ -105,6 +133,7 @@ private fun AppRoot(container: AppContainer) {
         SettingsScreen(
             llmService = container.llmService,
             settings = container.settings,
+            speaker = container.speaker,
             webSearchOn = container.webSearch.enabled,
             memory = memoryViewModel,
             onBack = { showSettings = false },
@@ -123,6 +152,12 @@ private fun AppRoot(container: AppContainer) {
     }
 
     val viewModel: ChatViewModel = viewModel(factory = ChatViewModel.factory(container))
+    LaunchedEffect(chatToOpen) {
+        chatToOpen?.let {
+            viewModel.openChat(it)
+            onChatOpened()
+        }
+    }
     ChatScreen(
         viewModel = viewModel,
         onOpenMemory = { showMemoryScreen = true },

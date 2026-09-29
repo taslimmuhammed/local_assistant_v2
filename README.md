@@ -13,6 +13,8 @@ This is intentionally a **base** to build on: one model, one screen, persistent 
 - Gets the model either by **downloading** it (resumable) or **importing** one already on the device
 - Falls back GPU + MTP → GPU → CPU if a backend fails to start
 - Stop button that interrupts generation and keeps the partial reply
+- Opens from the power button as the phone's assistant, listens, and answers out loud (see
+  [Power-button assistant](#power-button-assistant))
 
 ## Requirements
 
@@ -504,6 +506,51 @@ field there fails silently at decode time).
 (`valid_audio_length <= max_audio_seq_length`), but that value lives in the model file rather than
 the library, so it cannot be read ahead of time. 30 s is the conservative side of it. The recorder
 stops hard at the cap rather than letting the runtime reject the clip.
+
+## Power-button assistant
+
+Holding the power button opens the assistant over whatever is on screen, the way it opens Gemini:
+a panel rises from the bottom (a light sweeps round its edge, brighter while it listens, thinks or
+speaks), starts listening at once, and sends by itself when you pause. The answer streams into the
+panel and, when you asked by voice, is read aloud sentence by sentence as it arrives. The keyboard
+button switches to typing; "Open in app" continues in the full chat.
+
+**Setting it up.** Settings → Assistant → Power button opens the system page where the phone's
+*digital assistant app* is chosen; pick Local Assistant. Android doesn't let an app ask for this
+role itself. If holding the power button still brings up the power menu, switch it to the voice
+assistant in the phone's power button settings (on OnePlus phones, look under Additional
+settings). Without either, a long press on the app icon offers **Talk**, which opens the same
+overlay.
+
+How it fits together:
+
+- `assist/AssistActivity` handles `ACTION_ASSIST`, which is what makes the app selectable as the
+  assistant. It is a translucent activity in its own task, kept out of Recents, and closes as
+  soon as it is out of view. On the lock screen it asks for the unlock before it listens: the
+  assistant can read memory, make calls and send messages. (It is an activity rather than a
+  `VoiceInteractionService`, which would also make the app the phone's speech recogniser for
+  every other app — and there is no recogniser here: the model hears the audio itself.)
+- Each opening starts a new chat, created with the first question, so overlay conversations show
+  up in the history like any other.
+- `chat/ChatSender` sends messages and streams replies for the chat screen and the overlay alike,
+  one turn at a time. A reply outlives the screen that asked for it: closing the overlay, or a
+  tool opening the dialer, doesn't cut it off — it finishes in its chat, and the app shows it
+  streaming if opened meanwhile.
+- End of speech (`voice/EndOfSpeech`) is judged from the recorder's levels against a noise floor
+  learned from the quiet readings: 1.3 s of quiet after at least 250 ms of speech sends; 7 s of
+  nothing gives up.
+- An overlay turn is exactly a chat turn: the same instructions, profile, memory and tools, and
+  nothing added. An earlier version appended "answer briefly, it will be read aloud" to voice
+  questions, and the model then said "I've set an alarm" without setting one:
+  `RoutingEvalTest` on recorded requests (`-e voice`) had 22/32 actions calling their tool with
+  that line and 32/32 without. `OverlayToolsEvalTest` sends a voice clip through the overlay's
+  own path and checks the tool call is made.
+
+**The voice** is the phone's own text-to-speech engine (`voice/Speaker`), restricted to voices
+that are installed and run offline, in the phone's language or English (`voice/VoiceChoice`). By
+default it is the engine's default voice; Settings → Assistant lists the others (tap one to hear
+it) and has three paces. Replies are cleaned for speech first (`voice/SpeechText`): no markdown
+marks, links, code blocks or emoji read out. Music pauses while the assistant listens and speaks.
 
 ## Per-reply speed
 

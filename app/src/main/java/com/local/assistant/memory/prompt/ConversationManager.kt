@@ -535,7 +535,7 @@ class ConversationManager(
 
     private fun publishUsage(current: Live) {
         val window = backend.capabilities?.maxContextTokens ?: current.budget.contextTokens
-        _contextUsage.value = current.session.tokenCount()?.let { LlmService.ContextUsage(it, window) }
+        _contextUsage.value = current.session.tokenCount()?.let { LlmService.ContextUsage(it, window, current.chatId) }
     }
 
     private fun close(current: Live) {

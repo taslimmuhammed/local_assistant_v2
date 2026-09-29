@@ -15,8 +15,11 @@ import com.local.assistant.llm.LiteRtLmBackend
 import com.local.assistant.llm.LlmBackend
 import com.local.assistant.llm.LlmService
 import com.local.assistant.llm.ToolCallRepair
+import com.local.assistant.chat.ChatSender
 import com.local.assistant.media.AttachmentStore
 import com.local.assistant.media.AudioRecorder
+import com.local.assistant.voice.AudioFocus
+import com.local.assistant.voice.Speaker
 import com.local.assistant.data.prefs.SecretStore
 import com.local.assistant.device.AndroidContacts
 import com.local.assistant.device.AndroidPhone
@@ -386,6 +389,14 @@ class AppContainer(context: Context) {
 
     val audioRecorder = AudioRecorder(appScope)
 
+    /** Sends messages and streams replies for the chat and the assistant overlay alike. */
+    val chatSender = ChatSender(chatRepository, llmService, turnRunner, appScope)
+
+    /** The assistant's voice: the phone's text-to-speech, bound the first time it speaks. */
+    val speaker = Speaker(context, settings)
+
+    val audioFocus = AudioFocus(context)
+
     fun memorySearchControls() = MemorySearchControls(
         manager = embedderManager,
         remaining = embeddingQueue.remaining,
@@ -446,6 +457,7 @@ class AssistantApplication : Application() {
         super.onTrimMemory(level)
         val background = level >= ComponentCallbacks2.TRIM_MEMORY_BACKGROUND
         if (background && !container.appForeground.isForeground && !container.llmService.isGenerating) {
+            container.speaker.release()
             container.appScope.launch {
                 container.llmService.unload()
                 container.embedder.unload()

@@ -6,7 +6,9 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import com.google.ai.edge.litertlm.Backend
 import com.google.ai.edge.litertlm.Channel
+import com.google.ai.edge.litertlm.Content
 import com.google.ai.edge.litertlm.Contents
+import com.google.ai.edge.litertlm.Message
 import com.google.ai.edge.litertlm.ConversationConfig
 import com.google.ai.edge.litertlm.Engine
 import com.google.ai.edge.litertlm.EngineConfig
@@ -134,7 +136,14 @@ class RoutingEvalTest {
         ExperimentalFlags.enableConversationConstrainedDecoding = constrained
         report("constrainedDecoding", constrained)
         Engine(
-            EngineConfig(modelPath = modelPath, backend = Backend.GPU(), maxNumTokens = 8_192, cacheDir = context.cacheDir.absolutePath),
+            EngineConfig(
+                modelPath = modelPath,
+                backend = Backend.GPU(),
+                maxNumTokens = 8_192,
+                cacheDir = context.cacheDir.absolutePath,
+                // As the app declares it, for "-e voice": the requests spoken rather than typed.
+                audioBackend = Backend.CPU().takeIf { voiceDir() != null },
+            ),
         ).apply { initialize() }.use { engine ->
             measureDeclarations(engine)
             // "-e temps 1.0" and "-e only <words>" narrow a run to check one fix quickly.
@@ -175,7 +184,17 @@ class RoutingEvalTest {
         // "-e samples 3" asks each three times, each with its own seed: the runtime's sampler is
         // seeded (0 by default), so the same prompt with the same seed always gives the same reply.
         val samples = InstrumentationRegistry.getArguments().getString("samples")?.toIntOrNull() ?: 1
-        val selected = (if (only == null) cases else cases.filter { only in it.prompt }).flatMap { case -> List(samples) { seed -> case to seed } }
+        // "-e voice <dir>": each request as a recording, <dir>/<case index>.wav under the app's
+        // external files, sent the way the app sends a voice message — the clip, then the
+        // bracketed lines, no typed words. Only cases with a clip run. (This is how the overlay's
+        // "answer briefly, it will be read aloud" line was caught: 22/32 actions called their
+        // tool with it, 32/32 without; the rest were "I've set an alarm" with no alarm set.)
+        val voice = voiceDir()
+        report("t$temperature.voice", voice?.name ?: "off")
+        fun clip(case: Case): File? = voice?.let { File(it, "${cases.indexOf(case)}.wav") }?.takeIf { it.isFile }
+        val selected = (if (only == null) cases else cases.filter { only in it.prompt })
+            .filter { voice == null || clip(it) != null }
+            .flatMap { case -> List(samples) { seed -> case to seed } }
         for ((case, seed) in selected) {
             val conversation = engine.createConversation(
                 ConversationConfig(
@@ -198,7 +217,15 @@ class RoutingEvalTest {
                 runBlocking {
                     var firstCall: com.google.ai.edge.litertlm.ToolCall? = null
                     val said = StringBuilder()
-                    conversation.sendMessageAsync("$now\n${case.prompt}")
+                    val recording = clip(case)
+                    val text = listOfNotNull(now, case.prompt.takeIf { recording == null })
+                        .joinToString("\n")
+                    val message = if (recording != null) {
+                        Message.user(Contents.of(Content.AudioFile(recording.absolutePath), Content.Text(text)))
+                    } else {
+                        Message.user(Contents.of(text))
+                    }
+                    conversation.sendMessageAsync(message)
                         .onEach { if (firstAt == 0L) firstAt = SystemClock.elapsedRealtime() }
                         .collect { message ->
                             message.channels["call"]?.let(rawCalls::append)
@@ -239,6 +266,9 @@ class RoutingEvalTest {
         report("t$temperature.firstEventMs.median", latencies.sorted()[latencies.size / 2])
         report("t$temperature.firstEventMs.p90", latencies.sorted()[(latencies.size * 9) / 10])
     }
+
+    private fun voiceDir(): File? = InstrumentationRegistry.getArguments().getString("voice")
+        ?.let { File(context.getExternalFilesDir(null), it) }
 
     private fun declarations() = ToolCatalog.declarations(web = true).map { json ->
         tool(object : OpenApiTool {

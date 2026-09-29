@@ -75,7 +75,10 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.repeatOnLifecycle
 import com.local.assistant.data.db.AttachmentKind
 import com.local.assistant.data.db.Role
 import com.local.assistant.data.repo.ChatRepository
@@ -107,6 +110,8 @@ fun ChatScreen(
     val chips by viewModel.chips.collectAsStateWithLifecycle()
     val askForNotifications by viewModel.askForNotifications.collectAsStateWithLifecycle()
     val offerExactAlarms by viewModel.offerExactAlarms.collectAsStateWithLifecycle()
+    val busyElsewhere by viewModel.busyElsewhere.collectAsStateWithLifecycle()
+    val lifecycle = LocalLifecycleOwner.current.lifecycle
 
     val drawerState = rememberDrawerState(DrawerValue.Closed)
     val scope = rememberCoroutineScope()
@@ -159,10 +164,13 @@ fun ChatScreen(
         permissionRequest?.answer?.complete(granted)
         permissionRequest = null
     }
-    LaunchedEffect(viewModel) {
-        viewModel.permissionRequests.collect { request ->
-            permissionRequest = request
-            toolPermission.launch(request.permission)
+    // Only while on screen: the assistant overlay answers these when it is the one in front.
+    LaunchedEffect(viewModel, lifecycle) {
+        lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
+            viewModel.permissionRequests.collect { request ->
+                permissionRequest = request
+                toolPermission.launch(request.permission)
+            }
         }
     }
 
@@ -239,6 +247,7 @@ fun ChatScreen(
                 val memoryPaused by viewModel.memoryPaused.collectAsStateWithLifecycle()
                 if (tidying) QuietBanner("Tidying up…")
                 if (memoryPaused) QuietBanner("Memory is paused: nothing new is remembered")
+                if (busyElsewhere) QuietBanner("Finishing an answer from the assistant…")
 
                 Box(Modifier.weight(1f).fillMaxWidth()) {
                     if (messages.isEmpty() && streamingText == null) {
@@ -295,9 +304,12 @@ fun ChatScreen(
 
                 Composer(
                     // While the model loads, a message can still be sent: it waits for the engine.
-                    enabled = engineState is LlmService.State.Ready ||
-                        engineState is LlmService.State.Loading ||
-                        engineState is LlmService.State.Idle,
+                    // Not while the overlay's reply is running, though: one turn at a time.
+                    enabled = !busyElsewhere && (
+                        engineState is LlmService.State.Ready ||
+                            engineState is LlmService.State.Loading ||
+                            engineState is LlmService.State.Idle
+                        ),
                     isGenerating = isGenerating,
                     supportsImages = supportsImages,
                     supportsAudio = supportsAudio,

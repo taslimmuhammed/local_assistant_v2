@@ -1,3 +1,5 @@
 <resources>
     <string name="app_name">Local Assistant</string>
+    <string name="shortcut_talk_short">Talk</string>
+    <string name="shortcut_talk_long">Talk to assistant</string>
 </resources>
