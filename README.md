@@ -6,6 +6,31 @@ network at inference time.
 
 This is intentionally a **base** to build on: one model, one screen, persistent chats, nothing else.
 
+A one-minute tour: [promo/LocalAssistant_Promo_720p.mp4](promo/LocalAssistant_Promo_720p.mp4).
+
+## Try it
+
+1. On an Android phone, download
+   [**apk/LocalAssistant.apk**](https://github.com/taslimmuhammed/local_assistant_v2/raw/main/apk/LocalAssistant.apk)
+   (26 MB) and open it. Allow your browser or files app to install apps when asked. It isn't from
+   Google Play and is signed with a development key, so Play Protect may warn you first.
+2. On first launch, fill in a few details about yourself and, if you like, a
+   [Tavily](https://tavily.com) key for web search (both optional). Then get the model: **Download**
+   pulls Gemma 4 E4B (3.66 GB, from Hugging Face, use Wi-Fi), or **Load from device storage**
+   imports a `.litertlm` you already have.
+3. To open the assistant by holding the power button: Settings → Assistant → Power button, and
+   pick Local Assistant as the digital assistant app.
+4. Optional: memory search across past chats (Settings → Model and memory search → download
+   Granite, 0.33 GB).
+
+Needs Android 8.0 or newer on a 64-bit ARM phone, about 4.5 GB free, and 8 GB of RAM or more.
+Everything runs on the phone; the network is only used to download the models and for web search.
+
+This APK is version 0.1.0 (SHA-256 `8e232be0c1c1c7c42f98825e55730692e64559abf727963e0508dc01ed03ac7f`).
+It is rebuilt with `./gradlew :app:demoApk -Pdemo`, which builds for phones only (arm64), compresses
+the native code and signs with the local debug key; see `app/build.gradle.kts`. Keep it the only APK
+in git: every new copy stays in the repository's history.
+
 ## What it does
 
 - Streams replies token-by-token from a local `.litertlm` model

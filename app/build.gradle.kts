@@ -5,6 +5,14 @@ plugins {
     alias(libs.plugins.ksp)
 }
 
+/**
+ * `-Pdemo`: the build checked into the repository for people to try (apk/README.md). Phones
+ * only, native code compressed to keep the file small, and signed with this machine's debug key
+ * so it installs without a keystore. Without it the release build is unsigned, as Play wants.
+ * Build and copy it with `./gradlew :app:demoApk -Pdemo`.
+ */
+val demo = providers.gradleProperty("demo").isPresent
+
 android {
     namespace = "com.local.assistant"
     compileSdk = 36
@@ -18,8 +26,9 @@ android {
         versionCode = 1
         versionName = "0.1.0"
 
-        // LiteRT-LM ships native code for these two ABIs only.
-        ndk { abiFilters += listOf("arm64-v8a", "x86_64") }
+        // LiteRT-LM ships native code for these two ABIs only; x86_64 is for emulators, which the
+        // demo build leaves out (26 MB).
+        ndk { abiFilters += if (demo) listOf("arm64-v8a") else listOf("arm64-v8a", "x86_64") }
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
@@ -37,6 +46,9 @@ android {
 
     buildTypes {
         release {
+            if (demo) signingConfig = signingConfigs.getByName("debug")
+            // Not minified: tool results are read with Gson by reflection, and a shrunk build
+            // would need keep rules checked on a device before anyone downloads it.
             isMinifyEnabled = false
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
         }
@@ -65,6 +77,9 @@ android {
     }
 
     packaging {
+        // Compressed in the demo APK (22 MB of LiteRT-LM smaller in the repository); extracted
+        // at install. Otherwise stored as usual, uncompressed and loaded in place.
+        jniLibs.useLegacyPackaging = demo
         resources.excludes += setOf(
             "/META-INF/{AL2.0,LGPL2.1}",
             "/META-INF/DEPENDENCIES",
@@ -75,6 +90,16 @@ android {
 
 ksp {
     arg("room.schemaLocation", "$projectDir/schemas")
+}
+
+// The demo build, where the README links to it: apk/LocalAssistant.apk.
+tasks.register<Copy>("demoApk") {
+    val isDemo = demo // a plain value: the configuration cache can't keep the script itself
+    dependsOn("assembleRelease")
+    doFirst { check(isDemo) { "Build it with -Pdemo: ./gradlew :app:demoApk -Pdemo" } }
+    from(layout.buildDirectory.file("outputs/apk/release/app-release.apk"))
+    into(rootProject.layout.projectDirectory.dir("apk"))
+    rename { "LocalAssistant.apk" }
 }
 
 dependencies {
