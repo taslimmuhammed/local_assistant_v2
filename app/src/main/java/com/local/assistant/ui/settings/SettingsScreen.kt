@@ -27,6 +27,7 @@ import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
+import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -36,7 +37,6 @@ import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
-import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
@@ -67,6 +67,7 @@ import com.local.assistant.llm.LlmService
 import com.local.assistant.model.ModelCatalog
 import com.local.assistant.ui.memory.MemoryViewModel
 import com.local.assistant.ui.theme.AppColors
+import com.local.assistant.ui.theme.AppSwitch
 import com.local.assistant.voice.Speaker
 import com.local.assistant.voice.VoiceOption
 import java.time.LocalDate
@@ -249,7 +250,7 @@ private fun AssistantSettings(settings: SettingsStore, speaker: Speaker, llmServ
 
     var keepReady by remember { mutableStateOf(settings.keepAssistantReady) }
     Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-        Column(Modifier.weight(1f)) {
+        Column(Modifier.weight(1f).padding(end = 16.dp)) {
             Text("Keep the assistant ready", style = MaterialTheme.typography.bodyLarge, color = AppColors.TextPrimary)
             Text(
                 "Keeps the model loaded so the power button answers in about a second, instead of about 15 seconds after the phone has put the app away. " +
@@ -258,7 +259,7 @@ private fun AssistantSettings(settings: SettingsStore, speaker: Speaker, llmServ
                 color = AppColors.TextSecondary,
             )
         }
-        Switch(checked = keepReady, onCheckedChange = {
+        AppSwitch(checked = keepReady, onCheckedChange = {
             keepReady = it
             settings.keepAssistantReady = it
             if (it) {
@@ -275,7 +276,7 @@ private fun AssistantSettings(settings: SettingsStore, speaker: Speaker, llmServ
     var onLockScreen by remember { mutableStateOf(settings.assistantOnLockScreen) }
     var confirmingLockScreen by remember { mutableStateOf(false) }
     Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-        Column(Modifier.weight(1f)) {
+        Column(Modifier.weight(1f).padding(end = 16.dp)) {
             Text("Use on the lock screen", style = MaterialTheme.typography.bodyLarge, color = AppColors.TextPrimary)
             Text(
                 if (onLockScreen) {
@@ -287,7 +288,7 @@ private fun AssistantSettings(settings: SettingsStore, speaker: Speaker, llmServ
                 color = if (onLockScreen) AppColors.Danger else AppColors.TextSecondary,
             )
         }
-        Switch(checked = onLockScreen, onCheckedChange = { on ->
+        AppSwitch(checked = onLockScreen, onCheckedChange = { on ->
             if (on) {
                 confirmingLockScreen = true
             } else {
@@ -320,7 +321,7 @@ private fun AssistantSettings(settings: SettingsStore, speaker: Speaker, llmServ
 
     var speak by remember { mutableStateOf(settings.speakReplies) }
     Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-        Column(Modifier.weight(1f)) {
+        Column(Modifier.weight(1f).padding(end = 16.dp)) {
             Text("Answer out loud", style = MaterialTheme.typography.bodyLarge, color = AppColors.TextPrimary)
             Text(
                 "When you ask by voice, the answer is read aloud as well as shown.",
@@ -328,7 +329,7 @@ private fun AssistantSettings(settings: SettingsStore, speaker: Speaker, llmServ
                 color = AppColors.TextSecondary,
             )
         }
-        Switch(checked = speak, onCheckedChange = {
+        AppSwitch(checked = speak, onCheckedChange = {
             speak = it
             settings.speakReplies = it
         })
@@ -357,6 +358,7 @@ private fun AssistantSettings(settings: SettingsStore, speaker: Speaker, llmServ
         Text("Pace", style = MaterialTheme.typography.bodyLarge, color = AppColors.TextPrimary)
         Row(Modifier.padding(top = 6.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             for ((value, label) in SettingsStore.SPEECH_RATES) {
+                // In the switches' colours: the choice in black, the others plainly outlined.
                 FilterChip(
                     selected = value == rate,
                     onClick = {
@@ -365,6 +367,18 @@ private fun AssistantSettings(settings: SettingsStore, speaker: Speaker, llmServ
                         speaker.preview()
                     },
                     label = { Text(label) },
+                    colors = FilterChipDefaults.filterChipColors(
+                        containerColor = AppColors.Background,
+                        labelColor = AppColors.TextPrimary,
+                        selectedContainerColor = AppColors.Accent,
+                        selectedLabelColor = AppColors.OnAccent,
+                    ),
+                    border = FilterChipDefaults.filterChipBorder(
+                        enabled = true,
+                        selected = value == rate,
+                        borderColor = AppColors.TextSecondary,
+                        selectedBorderColor = AppColors.Accent,
+                    ),
                 )
             }
         }
@@ -427,7 +441,7 @@ private fun ModelLicences() {
     val uri = LocalUriHandler.current
     @Composable
     fun Entry(title: String, body: String, links: List<Pair<String, String>>) {
-        Column(Modifier.padding(vertical = 8.dp)) {
+        Column(Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) {
             Text(title, style = MaterialTheme.typography.bodyLarge, color = AppColors.TextPrimary)
             Text(body, style = MaterialTheme.typography.bodySmall, color = AppColors.TextSecondary)
             for ((label, link) in links) {
@@ -522,7 +536,7 @@ private fun MemorySettings(viewModel: MemoryViewModel) {
 
     Column(Modifier.fillMaxWidth()) {
         Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-            Column(Modifier.weight(1f)) {
+            Column(Modifier.weight(1f).padding(end = 16.dp)) {
                 Text("Pause memory", style = MaterialTheme.typography.bodyLarge, color = AppColors.TextPrimary)
                 Text(
                     "Chats go on as usual, but nothing from them is remembered, archived or learned. Reminders still work.",
@@ -530,7 +544,7 @@ private fun MemorySettings(viewModel: MemoryViewModel) {
                     color = AppColors.TextSecondary,
                 )
             }
-            Switch(checked = paused, onCheckedChange = viewModel::setPaused)
+            AppSwitch(checked = paused, onCheckedChange = viewModel::setPaused)
         }
         Box(Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) {
             Row(Modifier.fillMaxWidth().clickable { retentionMenu = true }, verticalAlignment = Alignment.CenterVertically) {
@@ -548,7 +562,7 @@ private fun MemorySettings(viewModel: MemoryViewModel) {
             }
         }
         Row(Modifier.padding(horizontal = 16.dp, vertical = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            OutlinedButton(onClick = { exporter.launch("memory-${LocalDate.now()}.json") }) { Text("Export as JSON") }
+            OutlinedButton(onClick = { exporter.launch("memory-${LocalDate.now()}.json") }) { Text("Export as JSON", color = AppColors.TextPrimary) }
             OutlinedButton(onClick = { forgetStep = 1 }) { Text("Forget everything", color = AppColors.Danger) }
         }
     }

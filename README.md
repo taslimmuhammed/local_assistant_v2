@@ -8,7 +8,7 @@ It runs Google's Gemma 4 entirely on the device. It chats, listens, remembers yo
 and alarms, and answers when you hold the power button. No account, no server: nothing leaves the
 phone for it to think.
 
-<a href="https://github.com/taslimmuhammed/local_assistant_v2/raw/main/apk/LocalAssistant.apk"><img alt="Download the APK" src="https://img.shields.io/badge/Download_APK-v0.1.0_%C2%B7_26_MB-18181B?style=for-the-badge&logo=android&logoColor=white" height="44"></a>
+<a href="https://github.com/taslimmuhammed/local_assistant_v2/raw/main/apk/LocalAssistant.apk"><img alt="Download the APK" src="https://img.shields.io/badge/Download_APK-v0.1.1_%C2%B7_26_MB-18181B?style=for-the-badge&logo=android&logoColor=white" height="44"></a>
 
 Android 8 or newer · 64-bit phone · 8 GB of RAM or more · about 4.5 GB free
 
@@ -100,8 +100,8 @@ sqlite-vec):
 [docs/TECHNICAL.md](docs/TECHNICAL.md) explains how it all fits together: the memory system,
 tools, the power-button assistant, and the measurements behind each choice.
 
-**The download above** is `apk/LocalAssistant.apk`, version 0.1.0, SHA-256
-`8e232be0c1c1c7c42f98825e55730692e64559abf727963e0508dc01ed03ac7f`. Rebuild it with:
+**The download above** is `apk/LocalAssistant.apk`, version 0.1.1, SHA-256
+`cfa650df8989ed7b2c7b2ae944d03d6ffd6e55b6a08bf3c22a3653f6ad5d834f`. Rebuild it with:
 
 ```bash
 ./gradlew :app:demoApk -Pdemo

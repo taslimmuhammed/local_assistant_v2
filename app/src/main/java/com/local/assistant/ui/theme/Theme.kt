@@ -23,6 +23,12 @@ object AppColors {
     val Surface = Color(0xFFFFFFFF)
     val SurfaceMuted = Color(0xFFF4F4F5)
     val Border = Color(0xFFE4E4E7)
+
+    /**
+     * The edge of something to press: outlined buttons, text fields. [Border] is for dividers; on
+     * a button it was so faint the button looked switched off.
+     */
+    val Outline = Color(0xFFA1A1AA)
     val TextPrimary = Color(0xFF18181B)
     val TextSecondary = Color(0xFF71717A)
     val Accent = Color(0xFF18181B)
@@ -39,7 +45,7 @@ private val LightColors = lightColorScheme(
     onSurface = AppColors.TextPrimary,
     surfaceVariant = AppColors.SurfaceMuted,
     onSurfaceVariant = AppColors.TextSecondary,
-    outline = AppColors.Border,
+    outline = AppColors.Outline,
     outlineVariant = AppColors.Border,
     error = AppColors.Danger,
 )

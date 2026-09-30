@@ -23,8 +23,8 @@ android {
         applicationId = "com.local.assistant"
         minSdk = 26
         targetSdk = 36
-        versionCode = 1
-        versionName = "0.1.0"
+        versionCode = 2
+        versionName = "0.1.1"
 
         // LiteRT-LM ships native code for these two ABIs only; x86_64 is for emulators, which the
         // demo build leaves out (26 MB).
