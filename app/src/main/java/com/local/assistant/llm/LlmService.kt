@@ -159,6 +159,12 @@ class LlmService(
             _state.value = State.NoModel
             return@withLock null
         }
+        // Handed anything else, the runtime can take the app down with it, at every launch.
+        if (!ModelFormat.isLiteRtLm(File(modelPath))) {
+            Log.w(TAG, "Not loading $modelPath: not a LiteRT-LM bundle")
+            _state.value = State.Failed("The model file isn't a LiteRT-LM model. Replace it under Settings \u2192 Model.")
+            return@withLock null
+        }
 
         _state.value = State.Loading
         val loadStarted = SystemClock.elapsedRealtime()

@@ -1,5 +1,6 @@
 package com.local.assistant.model
 
+import com.local.assistant.llm.ModelFormat
 import android.content.Context
 import android.net.Uri
 import android.provider.OpenableColumns
@@ -15,6 +16,7 @@ import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import java.io.File
+import java.io.BufferedInputStream
 import java.io.IOException
 import java.io.InputStream
 import java.io.RandomAccessFile
@@ -208,11 +210,27 @@ class ModelManager(
         val total = sizeOf(uri) ?: model.sizeBytes
         ensureSpace(total + FREE_SPACE_HEADROOM)
 
-        val part = partFile()
-        part.delete()
         val input: InputStream = context.contentResolver.openInputStream(uri)
+            ?.let(::BufferedInputStream)
             ?: throw IOException("Could not open the selected file")
 
+        // Only a LiteRT-LM bundle: anything else would crash the app when loaded (ModelFormat).
+        input.mark(ModelFormat.PREFIX_BYTES)
+        val start = ByteArray(ModelFormat.PREFIX_BYTES)
+        var read = 0
+        while (read < start.size) {
+            val n = input.read(start, read, start.size - read)
+            if (n < 0) break
+            read += n
+        }
+        input.reset()
+        if (!ModelFormat.startsLikeLiteRtLm(start.copyOf(read), sizeOf(uri))) {
+            input.close()
+            throw IOException(ModelFormat.NOT_A_MODEL)
+        }
+
+        val part = partFile()
+        part.delete()
         input.use { source ->
             part.outputStream().use { out ->
                 source.copyTo(

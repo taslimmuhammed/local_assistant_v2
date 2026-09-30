@@ -1,5 +1,6 @@
 package com.local.assistant.memory.embed
 
+import com.local.assistant.llm.ModelFormat
 import android.util.Log
 import com.google.ai.edge.litertlm.Backend
 import com.google.ai.edge.litertlm.EmbeddingEngine
@@ -91,6 +92,11 @@ class LiteRtEmbedder(
         engine?.let { if (loadedFrom == target) return it }
         close()
         if (!target.file.isFile) return null
+        // Handed anything else, the runtime can take the app down with it (ModelFormat).
+        if (!ModelFormat.isLiteRtLm(target.file)) {
+            Log.w(TAG, "Not loading ${target.file.name}: not a LiteRT-LM bundle")
+            return null
+        }
         return try {
             // Created without cancellation, so an interrupted load cannot leak a native engine.
             withContext(NonCancellable + Dispatchers.Default) {
