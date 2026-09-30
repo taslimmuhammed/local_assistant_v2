@@ -143,6 +143,14 @@ class SettingsStore(context: Context) {
         get() = prefs.getBoolean(KEY_KEEP_READY, true)
         set(value) = prefs.edit { putBoolean(KEY_KEEP_READY, value) }
 
+    /**
+     * The assistant works on the lock screen without unlocking, with all its memory and tools.
+     * Off by default (the user's decision): whoever holds the phone would get both.
+     */
+    var assistantOnLockScreen: Boolean
+        get() = prefs.getBoolean(KEY_ON_LOCK_SCREEN, false)
+        set(value) = prefs.edit { putBoolean(KEY_ON_LOCK_SCREEN, value) }
+
     /** The assistant overlay reads its answer aloud when it was asked by voice. */
     var speakReplies: Boolean
         get() = prefs.getBoolean(KEY_SPEAK_REPLIES, true)
@@ -202,6 +210,7 @@ class SettingsStore(context: Context) {
         private const val KEY_REPETITION_WINDOW = "repetition_window"
         private const val KEY_SPEAK_REPLIES = "speak_replies"
         private const val KEY_KEEP_READY = "keep_assistant_ready"
+        private const val KEY_ON_LOCK_SCREEN = "assistant_on_lock_screen"
         private const val KEY_ASSISTANT_VOICE = "assistant_voice"
         private const val KEY_SPEECH_RATE = "speech_rate"
 

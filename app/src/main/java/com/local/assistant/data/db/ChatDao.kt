@@ -9,8 +9,12 @@ import kotlinx.coroutines.flow.Flow
 @Dao
 interface ChatDao {
 
-    @Query("SELECT * FROM chats ORDER BY updatedAt DESC")
+    /** The chat list: every chat but the assistant overlay's. */
+    @Query("SELECT * FROM chats WHERE hidden = 0 ORDER BY updatedAt DESC")
     fun observeChats(): Flow<List<ChatEntity>>
+
+    @Query("UPDATE chats SET hidden = 0 WHERE id = :chatId")
+    suspend fun showChat(chatId: Long)
 
     @Query("SELECT * FROM messages WHERE chatId = :chatId ORDER BY id ASC")
     fun observeMessages(chatId: Long): Flow<List<MessageEntity>>

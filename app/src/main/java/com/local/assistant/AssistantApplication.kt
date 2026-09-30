@@ -33,6 +33,7 @@ import com.local.assistant.memory.db.MemoryRepository
 import com.local.assistant.memory.db.NoteEntity
 import com.local.assistant.memory.db.SessionTracker
 import com.local.assistant.memory.embed.EmbedderCatalog
+import com.local.assistant.memory.embed.BundledEmbedder
 import com.local.assistant.memory.embed.InstalledEmbedder
 import com.local.assistant.memory.embed.LiteRtEmbedder
 import com.local.assistant.memory.prompt.Snippet
@@ -155,11 +156,14 @@ class AppContainer(context: Context) {
         },
     )
 
+    /** EmbeddingGemma from the Play asset pack; the embedder when the user hasn't picked one. */
+    val bundledEmbedder = BundledEmbedder(context, onReady = { embeddingQueue.kick() })
+
     val embedder = LiteRtEmbedder(
         installed = {
             settings.embedderPath?.let { path ->
                 InstalledEmbedder(File(path), EmbedderCatalog.byKey(settings.embedderKey) ?: EmbedderCatalog.DEFAULT)
-            }
+            } ?: bundledEmbedder.file?.let { InstalledEmbedder(it, EmbedderCatalog.EMBEDDING_GEMMA) }
         },
         cacheDir = context.cacheDir,
     )
@@ -422,6 +426,8 @@ class AppContainer(context: Context) {
         manager = embedderManager,
         remaining = embeddingQueue.remaining,
         installedName = { EmbedderCatalog.byKey(settings.embedderKey)?.displayName },
+        bundled = bundledEmbedder.state,
+        bundledName = EmbedderCatalog.EMBEDDING_GEMMA.displayName,
         downloadName = "Granite",
         downloadBytes = EmbedderCatalog.DEFAULT.sizeBytes,
         delete = {
@@ -432,6 +438,7 @@ class AppContainer(context: Context) {
     )
 
     init {
+        bundledEmbedder.ensure()
         backgroundJobs.scheduleNightly()
         // Exchanges from before the archive existed, or missed by a crash, then their vectors.
         appScope.launch {

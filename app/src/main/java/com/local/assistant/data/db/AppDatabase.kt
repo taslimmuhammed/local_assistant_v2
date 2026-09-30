@@ -51,7 +51,7 @@ import kotlinx.coroutines.Dispatchers
         NoteEntity::class,
         NoteFts::class,
     ],
-    version = 6,
+    version = 7,
     exportSchema = true,
 )
 @TypeConverters(Converters::class)
@@ -124,7 +124,14 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
-        val MIGRATIONS: Array<Migration> = arrayOf(MIGRATION_1_2, MIGRATION_2_3, Migration3To4, MIGRATION_4_5, MIGRATION_5_6)
+        /** The assistant overlay's chats: stored and learned from, but not listed. */
+        private val MIGRATION_6_7 = object : Migration(6, 7) {
+            override fun migrate(connection: SQLiteConnection) {
+                connection.execSQL("ALTER TABLE chats ADD COLUMN hidden INTEGER NOT NULL DEFAULT 0")
+            }
+        }
+
+        val MIGRATIONS: Array<Migration> = arrayOf(MIGRATION_1_2, MIGRATION_2_3, Migration3To4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7)
 
         /**
          * [withVectors]: sqlite-vec loaded on this device (see [SqliteVec.probe]). Its table is

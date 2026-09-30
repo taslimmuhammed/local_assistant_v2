@@ -57,6 +57,9 @@ android {
         compose = true
     }
 
+    // EmbeddingGemma, fetched by Play right after install (see embedder_pack/README.md).
+    assetPacks += listOf(":embedder_pack")
+
     testOptions {
         unitTests.isReturnDefaultValues = true
     }
@@ -102,6 +105,9 @@ dependencies {
     // Session-end summaries and the nightly consolidation run as scheduled background work.
     implementation(libs.androidx.work.runtime.ktx)
 
+    // Where Play put the embedder pack, and asking for it when it hasn't arrived.
+    implementation(libs.play.asset.delivery.ktx)
+
     // On-device LLM runtime.
     implementation(libs.litertlm.android)
     // Already a transitive dependency of LiteRT-LM; declared because tool arguments and results
@@ -120,4 +126,32 @@ dependencies {
         // schema reader (used by MigrationTestHelper) is built against 1.8 and fails on 1.7.
         implementation(libs.kotlinx.serialization.core)
     }
+}
+
+// Installs the debug app bundle the way Play would, embedder pack included, on the connected
+// phone: bundletool's local testing mode copies fast-follow packs to the device, and the Play
+// Asset Delivery library hands them over as if Play had. An APK from assembleDebug has no packs.
+//     ./gradlew :app:installBundleDebug
+val bundletool: Configuration by configurations.creating
+dependencies { bundletool(libs.bundletool) }
+
+val adb = android.sdkDirectory.resolve("platform-tools/adb").path
+val debugBundle = layout.buildDirectory.file("outputs/bundle/debug/app-debug.aab")
+val debugApks = layout.buildDirectory.file("outputs/bundle/debug/app-debug.apks")
+
+val buildApksDebug by tasks.registering(JavaExec::class) {
+    dependsOn("bundleDebug")
+    classpath = bundletool
+    mainClass.set("com.android.tools.build.bundletool.BundleToolMain")
+    args(
+        "build-apks", "--local-testing", "--connected-device", "--overwrite", "--adb=$adb",
+        "--bundle=${debugBundle.get().asFile}", "--output=${debugApks.get().asFile}",
+    )
+}
+
+tasks.register<JavaExec>("installBundleDebug") {
+    dependsOn(buildApksDebug)
+    classpath = bundletool
+    mainClass.set("com.android.tools.build.bundletool.BundleToolMain")
+    args("install-apks", "--adb=$adb", "--apks=${debugApks.get().asFile}")
 }

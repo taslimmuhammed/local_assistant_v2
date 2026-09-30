@@ -39,10 +39,14 @@ class ChatRepository(
 
     suspend fun message(messageId: Long): MessageEntity? = dao.message(messageId)
 
-    suspend fun createChat(title: String = DEFAULT_TITLE): Long {
+    /** [hidden]: the assistant overlay's, kept out of the chat list (see [ChatEntity.hidden]). */
+    suspend fun createChat(title: String = DEFAULT_TITLE, hidden: Boolean = false): Long {
         val now = System.currentTimeMillis()
-        return dao.insertChat(ChatEntity(title = title, createdAt = now, updatedAt = now))
+        return dao.insertChat(ChatEntity(title = title, createdAt = now, updatedAt = now, hidden = hidden))
     }
+
+    /** An overlay chat the user went on with in the app: into the chat list with the rest. */
+    suspend fun showChat(chatId: Long) = dao.showChat(chatId)
 
     suspend fun addMessage(
         chatId: Long,

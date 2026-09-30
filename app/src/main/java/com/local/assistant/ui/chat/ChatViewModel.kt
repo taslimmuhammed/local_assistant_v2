@@ -180,8 +180,10 @@ class ChatViewModel(
     /**
      * From the assistant overlay's "Open in app": show that chat, even over one generating here.
      * Its reply, if still streaming, shows as it would have had it been sent from this screen.
+     * Continued in the app, the overlay's chat joins the chat list.
      */
     fun openChat(chatId: Long) {
+        viewModelScope.launch { repository.showChat(chatId) }
         if (_activeChatId.value == chatId) return
         _activeChatId.value = chatId
         conversations.onChatSelected(chatId)

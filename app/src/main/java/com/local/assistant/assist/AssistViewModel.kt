@@ -345,7 +345,8 @@ class AssistViewModel(
                 // last time the overlay was open) goes first.
                 sender.live.first { it == null }
                 chunker = if (speak) SpeechChunker() else null
-                started = sender.send(_chatId.value, text, attachment, owner = this@AssistViewModel, listener = listener)
+                // Not in the chat list; stored, and learned from, like any other chat.
+                started = sender.send(_chatId.value, text, attachment, owner = this@AssistViewModel, listener = listener, hidden = true)
             } finally {
                 if (!started) {
                     attachment?.let { attachments.delete(it.path) }

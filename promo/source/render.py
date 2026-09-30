@@ -15,7 +15,7 @@ from PIL import Image, ImageChops, ImageDraw, ImageFilter, ImageFont
 P = os.path.dirname(os.path.abspath(__file__))
 SCR = os.path.join(P, 'assets', 'screens')
 W, H, FPS = 1080, 1920, 30
-DUR = 60.0
+DUR = 64.0
 BEAT = 0.5
 SW_FULL, SH_FULL = 1272, 2772          # phone screenshot size
 
@@ -578,6 +578,183 @@ def check_icon(canvas, cx, cy, s, a, color=CYAN):
     comp(canvas, fade(lay, a), cx - size, cy - size)
 
 
+
+# ------------------------------------------------------------------ the power-button assistant
+PANEL = (42, 1424, 1229, 2673)       # the panel in the screenshot
+PANEL_R = 100
+BUBBLE = (505, 1675, 1195, 1808)     # "Voice message · 0:03"
+REPLY = [(92, 1834, 1136, 1904), (92, 1918, 272, 1988)]
+WAVE = (80, 2078, 1192, 2214)
+SPEAKER = (963, 1563)
+SHEEN = [(24, 24, 27), (82, 82, 91), (212, 212, 216), (255, 255, 255), (161, 161, 170), (39, 39, 42), (24, 24, 27)]
+
+
+@lru_cache(maxsize=1)
+def assist_parts():
+    base = screen('s_assist').convert('RGBA')
+    x0, y0, x1, y1 = PANEL
+    # behind the panel (only seen while it slides up): the wallpaper just above it, blurred and stretched
+    # a plain dark wallpaper gradient, starting from the colour just above the panel
+    hh = SH_FULL - y0
+    arr = np.asarray(base.convert('RGB'), np.float32)
+    sides = np.concatenate([arr[y0:, 4:36], arr[y0:, SW_FULL - 36:SW_FULL - 4]], 1).mean(1)   # the real wallpaper beside the panel
+    k = 501
+    col = np.stack([np.convolve(np.pad(sides[:, ch], k // 2, mode='edge'), np.ones(k) / k, 'valid') for ch in range(3)], 1)
+    grad = np.broadcast_to(col[:, None, :], (hh, SW_FULL, 3)).astype(np.uint8)
+    home = base.copy()
+    home.paste(Image.fromarray(np.ascontiguousarray(grad), 'RGB').convert('RGBA'), (0, y0))
+    clean = base.copy()
+    d = ImageDraw.Draw(clean)
+    for box in [BUBBLE, WAVE] + REPLY:
+        d.rectangle(box, fill=(255, 255, 255, 255))
+    mask = Image.new('L', (x1 - x0, y1 - y0), 0)
+    ImageDraw.Draw(mask).rounded_rectangle((0, 0, x1 - x0 - 1, y1 - y0 - 1), PANEL_R, fill=255)
+    panel = clean.crop(PANEL)
+    panel.putalpha(mask)
+    # edge-light geometry
+    pad = 46
+    w, h = x1 - x0 + 2 * pad, y1 - y0 + 2 * pad
+    ring = Image.new('L', (w, h), 0)
+    ImageDraw.Draw(ring).rounded_rectangle((pad, pad, w - pad, h - pad), PANEL_R, outline=255, width=9)
+    glow = ring.filter(ImageFilter.GaussianBlur(22))
+    ring_a = np.maximum(np.asarray(ring, np.float32) / 255, np.asarray(glow, np.float32) / 255 * 3.2).clip(0, 1)
+    yy, xx = np.mgrid[0:h, 0:w]
+    ang = (np.arctan2(yy - h / 2, xx - w / 2) + np.pi) / (2 * np.pi)
+    lut = grad_colors(512, SHEEN)
+    return base, home, clean, panel, ring_a, ang, lut, pad
+
+
+def edge_light(scr, t, energy, off):
+    base, home, clean, panel, ring_a, ang, lut, pad = assist_parts()
+    rot = (t * 0.42) % 1.0
+    idx = (((ang - rot) % 1.0) * 511).astype(np.int32)
+    rgb = lut[idx]
+    a = ring_a * energy
+    lum = rgb.mean(2) / 255
+    arr = np.dstack([rgb, (a * (0.1 + 0.9 * lum ** 1.5) * 255)]).astype(np.uint8)
+    comp(scr, Image.fromarray(arr, 'RGBA'), PANEL[0] - pad, PANEL[1] - pad + off)
+
+
+def voice_waves(scr, t, level, off):
+    x0, y0, x1, y1 = WAVE
+    w, h = x1 - x0, y1 - y0
+    ss = 2
+    lay = Image.new('RGBA', (w * ss, h * ss), (255, 255, 255, 0))
+    d = ImageDraw.Draw(lay)
+    mid = h * ss / 2
+    ph = t * 2 * math.pi * 0.9
+    for cyc, spd, offs, sc, al, wd in ((1.6, 1, 0.0, 1.0, 0.9, 8.8), (2.3, -2, 1.2, 0.7, 0.4, 6.3), (3.1, 3, 2.4, 0.45, 0.2, 4.2)):
+        pts = []
+        for i in range(121):
+            u = i / 120
+            env = math.sin(math.pi * u) ** 2
+            y = mid + math.sin(u * cyc * 2 * math.pi + ph * spd + offs) * env * level * (mid - 10) * sc
+            pts.append((u * w * ss, y))
+        d.line(pts, fill=(24, 24, 27, int(255 * al)), width=int(wd * ss), joint='curve')
+    lay = lay.resize((w, h), Image.LANCZOS)
+    comp(scr, lay, x0, y0 + off)
+
+
+def assist_screen(t, sw):
+    """The phone screen for the assistant scene at absolute time t."""
+    base, home, clean, panel, ring_a, ang, lut, pad = assist_parts()
+    T_OPEN, T_SENT, T_REPLY, T_DONE = 8.85, 10.45, 10.85, 11.95
+    u = prog(t, T_OPEN, 0.45)
+    off = int((1 - e_back(u, 1.2)) * (SH_FULL - PANEL[1] + 40)) if u < 1 else 0
+    if u >= 1:
+        scr = clean.copy()
+    else:
+        scr = home.copy()
+        comp(scr, panel, PANEL[0], PANEL[1] + off)
+    # what the assistant is doing
+    if t < T_SENT:
+        k = prog(t, 9.05, 0.3)
+        syll = abs(math.sin(t * 7.7)) * 0.6 + abs(math.sin(t * 13.1 + 1)) * 0.4
+        level = 0.12 + k * 0.85 * syll * (1 - prog(t, T_SENT - 0.25, 0.25))
+        energy = 0.35 + 0.65 * k
+    elif t < T_REPLY:
+        level, energy = 0.12 + 0.05 * math.sin(t * 12), 0.55 + 0.25 * math.sin(t * 10)
+    elif t < T_DONE + 0.6:
+        level = 0.2 + 0.45 * abs(math.sin(t * 6.3)) * abs(math.sin(t * 2.1 + 0.4))
+        energy = 0.8
+    else:
+        level, energy = 0.12, 0.45
+    edge_light(scr, t, energy * min(1, u * 2), off)
+    voice_waves(scr, t, level, off)
+    # the voice note lands once it's sent
+    ub = prog(t, T_SENT, 0.22)
+    if ub > 0:
+        bub = base.crop(BUBBLE)
+        comp(scr, fade(bub, ub), BUBBLE[0], BUBBLE[1] + off + (1 - e_out3(ub)) * 24)
+    # the reply streams in
+    ur = prog(t, T_REPLY, T_DONE - T_REPLY)
+    if ur > 0:
+        widths = [b[2] - b[0] for b in REPLY]
+        shown = ur * sum(widths)
+        for b, wd in zip(REPLY, widths):
+            if shown <= 0:
+                break
+            cut = int(min(wd, shown))
+            comp(scr, base.crop((b[0], b[1], b[0] + cut, b[3])), b[0], b[1] + off)
+            shown -= wd
+    # read aloud: rings from the speaker icon
+    if T_REPLY <= t < T_DONE + 0.8:
+        d = ImageDraw.Draw(scr)
+        for kk in range(3):
+            ph = ((t - T_REPLY) / 0.55 + kk / 3) % 1
+            r = 34 + 50 * ph
+            d.ellipse((SPEAKER[0] - r, SPEAKER[1] - r + off, SPEAKER[0] + r, SPEAKER[1] + r + off),
+                      outline=(24, 24, 27, int(150 * (1 - ph))), width=4)
+    b, sh, *_ = phone_dims(sw)
+    return scr.convert('RGB').resize((sw, sh), Image.BILINEAR)
+
+
+def s_assist(t):
+    c = aurora(t, 0.85 + 0.2 * beat_pulse(t), [BLUE, CYAN, VIOLET, PINK]).convert('RGBA')
+    y = header(c, t, 8.0, '01 · JUST HOLD POWER', CYAN, 'Hold power. | *Just talk.*',
+               'A voice assistant over any app, fully on-device.', 112)
+    sw = 600
+    top0 = y + 60
+    mv = e_inout3(prog(t, 12.0, 0.55))
+    s = lerp(1.0, 0.76, mv)
+    cx = lerp(W / 2, 300, mv)
+    top = top0 + phone_rise(t, 8.03, 1200)
+    org = draw_phone(c, None, cx, top, sw, s=s, glow=CYAN, dev=build_device(assist_screen(t, sw), sw))
+    # the power button, pressed and held
+    b_, sh_, DW, DH, R_ = phone_dims(sw)
+    bx = cx + DW / 2 * s
+    by = top + DH * s * 0.25
+    up = prog(t, 8.45, 1.2)
+    if 0 < up < 1:
+        d = ImageDraw.Draw(c)
+        glowa = int(255 * math.sin(math.pi * up))
+        d.rounded_rectangle((bx - 2, by - 55, bx + 9, by + 55), 5, fill=(230, 230, 240, glowa))
+        for kk in range(3):
+            ring_pulse(c, bx + 4, by, t, 8.5 + kk * 0.28, 16, 90, CYAN, 0.6, 4)
+        sp = pill_sprite('hold', CYAN, 30, True)
+        put_center(c, sp, bx + 30 + sp.width / 2, by, 1.0, math.sin(math.pi * up) ** 0.5)
+    # the second half: what it is, beside the phone
+    if t >= 12.1:
+        xr = 575
+        cw = 470
+        u = e_back(prog(t, 12.3, 0.45), 1.6)
+        if u > 0:
+            a = min(1, prog(t, 12.3, 0.2) * 1.5)
+            yy = 700 + (1 - u) * 80
+            glass(c, (xr, yy, xr + cw, yy + 230), 30, a)
+            v = lerp(4.0, 0.9, e_out3(prog(t, 12.4, 0.9)))
+            text_line(c, f'{v:.1f}s', xr + cw / 2, yy + 128, 104, 900, WHITE, a=a, grad=True)
+            text_line(c, 'to the first word', xr + cw / 2, yy + 190, 32, 600, (196, 196, 214), a=a, opsz=14)
+        feats = [('Your default assistant', CYAN), ('Works over any app', VIOLET),
+                 ('Sends when you pause', PINK), ('Reads replies aloud', AMBER)]
+        for i, (lab, col) in enumerate(feats):
+            uu = e_back(prog(t, 12.7 + i * 0.25, 0.4), 2)
+            if uu > 0:
+                sp = pill_sprite(lab, col, 32, False, cw)
+                put_center(c, sp, xr + cw / 2 + (1 - min(1, uu)) * 120, 1010 + i * 104, 1.0, min(1, uu * 2))
+    return c.convert('RGB'), {}
+
+
 # ------------------------------------------------------------------ scenes
 
 def header(c, t, t0, kick, kcol, head, sub=None, size=108, sub_size=40):
@@ -698,7 +875,7 @@ def s_gemma(t):
 
 def s_see(t):
     c = aurora(t, 0.85 + 0.2 * beat_pulse(t), [VIOLET, PINK, BLUE, CYAN]).convert('RGBA')
-    y = header(c, t, 12.0, '01 · IT SEES', PINK, 'Show it a *photo.*', 'It reads the picture and saves it to memory.', 112)
+    y = header(c, t, 12.0, '02 · IT SEES', PINK, 'Show it a *photo.*', 'It reads the picture and saves it to memory.', 112)
     top = y + 70 + phone_rise(t, 12.03, 1200) - 30 * prog(t, 13, 3)
     org = draw_phone(c, 's_remember', W / 2, top, 600, glow=PINK)
     x0, y0, k = org
@@ -719,7 +896,7 @@ def s_see(t):
 
 def s_recall_photo(t):
     c = aurora(t, 0.85 + 0.2 * beat_pulse(t), [PINK, VIOLET, CYAN, BLUE]).convert('RGBA')
-    y = header(c, t, 16.0, '02 · IT REMEMBERS', VIOLET, 'Ask about it. | *Days later.*', 'Saved photos come back the moment you ask.', 104)
+    y = header(c, t, 16.0, '03 · IT REMEMBERS', VIOLET, 'Ask about it. | *Days later.*', 'Saved photos come back the moment you ask.', 104)
     ptop = y + 70
     swap = 18.0
     if t < swap + 0.25:
@@ -864,7 +1041,7 @@ def s_layers(t):
     query_y = None
     if t >= 36.3:
         qu = prog(t, 36.6, 2.2)
-        query_y = lerp(430, y0 + 4 * step + 90, e_inout3(qu))
+        query_y = lerp(565, y0 + 4 * step + 90, e_inout3(qu))
     for i in range(5):
         t0 = 32.55 + i * 0.5
         u = e_expo(prog(t, t0, 0.5))
@@ -882,11 +1059,11 @@ def s_layers(t):
         a = prog(t, 36.3, 0.3)
         if t > 38.9:
             a *= 1 - prog(t, 38.9, 0.3)
-        sp = pill_sprite('“When is the wedding?”', CYAN, 38, True)
+        sp = pill_sprite('“What was my SSLC score?”', CYAN, 38, True)
         put_center(c, sp, W / 2, query_y, 1.0, a)
     ua = e_back(prog(t, 39.0, 0.4), 2)
     if ua > 0:
-        sp = pill_sprite('→ Sunday, 25 Oct · 12:05 PM', AMBER, 40, True)
+        sp = pill_sprite('→ A1 in every subject · GP 10', AMBER, 40, True)
         put_center(c, sp, W / 2, y0 + 5 * step + 80, max(0.01, ua), min(1, ua * 2))
     uf = prog(t, 34.8, 0.5) * (1 - prog(t, 38.8, 0.3))
     text_line(c, '+ nightly consolidation while you charge', W / 2, y0 + 5 * step + 70, 34, 600, (200, 200, 222), a=uf, opsz=14)
@@ -1050,17 +1227,18 @@ def s_outro(t):
 
 
 SCENES = [
-    (0.0, 4.0, s_hook), (4.0, 8.0, s_title), (8.0, 12.0, s_gemma), (12.0, 16.0, s_see),
-    (16.0, 20.0, s_recall_photo), (20.0, 24.0, s_voice), (24.0, 28.0, s_remind),
-    (28.0, 32.0, s_knows), (32.0, 40.0, s_layers), (40.0, 44.0, s_code), (44.0, 48.0, s_tools),
-    (48.0, 52.0, s_web), (52.0, 56.0, s_private), (56.0, 60.0, s_outro),
+    (0.0, 4.0, s_hook, 0.0), (4.0, 8.0, s_title, 4.0), (8.0, 16.0, s_assist, 8.0),
+    (16.0, 20.0, s_gemma, 8.0), (20.0, 24.0, s_see, 12.0), (24.0, 28.0, s_recall_photo, 16.0),
+    (28.0, 32.0, s_remind, 24.0), (32.0, 36.0, s_knows, 28.0), (36.0, 44.0, s_layers, 32.0),
+    (44.0, 48.0, s_code, 40.0), (48.0, 52.0, s_tools, 44.0), (52.0, 56.0, s_web, 48.0),
+    (56.0, 60.0, s_private, 52.0), (60.0, 64.0, s_outro, 56.0),
 ]
 
 
 def render(t):
-    for i, (a, b, fn) in enumerate(SCENES):
+    for i, (a, b, fn, o) in enumerate(SCENES):
         if a <= t < b or (i == len(SCENES) - 1 and t >= a):
-            img, fx = fn(t)
+            img, fx = fn(t - a + o)
             zoom = 1.0
             flash = fx.get('flash', 0.0)
             # cut transitions: punch out of the old scene, settle into the new one

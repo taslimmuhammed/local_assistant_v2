@@ -20,6 +20,13 @@ data class ChatEntity(
     val rollingSummary: String? = null,
     /** Last message [rollingSummary] covers. Everything after it is sent verbatim. */
     val rollingUptoMessageId: Long? = null,
+    /**
+     * Started from the assistant overlay: left out of the chat list, but stored like any other
+     * chat, so memory learns from it the same way (archive, summaries, nightly extraction), and
+     * "remember that…" works as it does anywhere. Shown once the user continues it in the app.
+     */
+    @ColumnInfo(defaultValue = "0")
+    val hidden: Boolean = false,
 )
 
 /**

@@ -9,6 +9,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -51,6 +52,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
@@ -59,6 +61,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.repeatOnLifecycle
 import com.local.assistant.assist.AssistantRole
 import com.local.assistant.assist.KeepReadyService
+import com.local.assistant.assist.LockScreenNotice
 import com.local.assistant.data.prefs.SettingsStore
 import com.local.assistant.llm.LlmService
 import com.local.assistant.model.ModelCatalog
@@ -134,6 +137,10 @@ fun SettingsScreen(
             SectionDivider()
             SectionHeader("Memory")
             MemorySettings(memory)
+
+            SectionDivider()
+            SectionHeader("Models and licences")
+            ModelLicences()
             Spacer(Modifier.height(32.dp))
         }
     }
@@ -264,6 +271,53 @@ private fun AssistantSettings(settings: SettingsStore, speaker: Speaker, llmServ
         })
     }
 
+    // Off by default: whoever holds the locked phone would get the assistant, memory and all.
+    var onLockScreen by remember { mutableStateOf(settings.assistantOnLockScreen) }
+    var confirmingLockScreen by remember { mutableStateOf(false) }
+    Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+        Column(Modifier.weight(1f)) {
+            Text("Use on the lock screen", style = MaterialTheme.typography.bodyLarge, color = AppColors.TextPrimary)
+            Text(
+                if (onLockScreen) {
+                    "On: the power button opens the assistant without unlocking. ${LockScreenNotice.RISK}"
+                } else {
+                    "Off: on the lock screen the assistant asks you to unlock first."
+                },
+                style = MaterialTheme.typography.bodySmall,
+                color = if (onLockScreen) AppColors.Danger else AppColors.TextSecondary,
+            )
+        }
+        Switch(checked = onLockScreen, onCheckedChange = { on ->
+            if (on) {
+                confirmingLockScreen = true
+            } else {
+                onLockScreen = false
+                settings.assistantOnLockScreen = false
+            }
+        })
+    }
+    if (confirmingLockScreen) {
+        AlertDialog(
+            onDismissRequest = { confirmingLockScreen = false },
+            title = { Text("Use the assistant without unlocking?") },
+            text = {
+                Text(
+                    "Holding the power button on the lock screen will open the assistant with everything it has in the app. " +
+                        "${LockScreenNotice.RISK} It can also set alarms, reminders and phone settings. " +
+                        "Calls, messages and apps it opens still show only after you unlock.",
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    onLockScreen = true
+                    settings.assistantOnLockScreen = true
+                    confirmingLockScreen = false
+                }) { Text("Turn on", color = AppColors.Danger) }
+            },
+            dismissButton = { TextButton(onClick = { confirmingLockScreen = false }) { Text("Keep it off") } },
+        )
+    }
+
     var speak by remember { mutableStateOf(settings.speakReplies) }
     Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
         Column(Modifier.weight(1f)) {
@@ -363,6 +417,46 @@ private fun AssistantSettings(settings: SettingsStore, speaker: Speaker, llmServ
 private const val KEEP_READY_MEMORY = "1.8 GB"
 
 /** The system's text-to-speech page, where engines and voice data are installed. */
+/**
+ * What the models are and the terms they come under. EmbeddingGemma is a Gemma model: shipping
+ * it means passing on the Gemma Terms of Use and its Prohibited Use Policy, and saying it was
+ * modified (converted). Gemma 4 E4B and Granite are Apache 2.0.
+ */
+@Composable
+private fun ModelLicences() {
+    val uri = LocalUriHandler.current
+    @Composable
+    fun Entry(title: String, body: String, links: List<Pair<String, String>>) {
+        Column(Modifier.padding(vertical = 8.dp)) {
+            Text(title, style = MaterialTheme.typography.bodyLarge, color = AppColors.TextPrimary)
+            Text(body, style = MaterialTheme.typography.bodySmall, color = AppColors.TextSecondary)
+            for ((label, link) in links) {
+                TextButton(onClick = { runCatching { uri.openUri(link) } }, contentPadding = PaddingValues(0.dp)) { Text(label) }
+            }
+        }
+    }
+    Entry(
+        "Gemma 4 E4B (the assistant)",
+        "By Google, in LiteRT-LM format. Apache License 2.0.",
+        listOf("Apache License 2.0" to "https://www.apache.org/licenses/LICENSE-2.0"),
+    )
+    Entry(
+        "EmbeddingGemma 300M (memory search)",
+        "Gemma is provided under and subject to the Gemma Terms of Use found at ai.google.dev/gemma/terms. " +
+            "This copy is modified: converted to LiteRT-LM format with 8-bit weights. " +
+            "Using it means agreeing not to use it for anything in the Gemma Prohibited Use Policy.",
+        listOf(
+            "Gemma Terms of Use" to "https://ai.google.dev/gemma/terms",
+            "Gemma Prohibited Use Policy" to "https://ai.google.dev/gemma/prohibited_use_policy",
+        ),
+    )
+    Entry(
+        "Granite Embedding 311M (optional download)",
+        "By IBM, in LiteRT-LM format. Apache License 2.0.",
+        listOf("Apache License 2.0" to "https://www.apache.org/licenses/LICENSE-2.0"),
+    )
+}
+
 private fun openTextToSpeechSettings(context: android.content.Context) {
     val screens = listOf(Intent("com.android.settings.TTS_SETTINGS"), Intent(Settings.ACTION_SETTINGS))
     for (screen in screens) {

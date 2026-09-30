@@ -9,6 +9,7 @@ import com.local.assistant.data.db.AttachmentKind
 import com.local.assistant.data.db.Role
 import com.local.assistant.memory.tools.ChatToolLog
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
 import org.junit.Assert.assertTrue
@@ -57,6 +58,8 @@ class OverlayToolsEvalTest {
                 text = "",
                 attachment = ChatSender.Attachment(clip.absolutePath, AttachmentKind.AUDIO, 2_000),
                 owner = this@OverlayToolsEvalTest,
+                // As the overlay sends: a chat kept out of the list.
+                hidden = true,
                 listener = object : ChatSender.Listener {
                     override fun onChatCreated(chatId: Long) {
                         created.complete(chatId)
@@ -74,9 +77,10 @@ class OverlayToolsEvalTest {
                 val tools = container.chatRepository.messagesFor(chatId)
                     .filter { it.role == Role.TOOL }
                     .mapNotNull { ChatToolLog.parse(it.text)?.tool }
-                val ok = expected in tools
-                report("${if (ok) "OK  " else "MISS"} clip $index: tools=$tools reply=${reply.take(160).replace('\n', ' ')}${failure?.let { " failure=$it" } ?: ""}")
-                if (!ok) misses += "clip $index expected $expected, got $tools"
+                val listed = container.chatRepository.observeChats().first().any { it.id == chatId }
+                val ok = expected in tools && !listed
+                report("${if (ok) "OK  " else "MISS"} clip $index: tools=$tools listed=$listed reply=${reply.take(160).replace('\n', ' ')}${failure?.let { " failure=$it" } ?: ""}")
+                if (!ok) misses += "clip $index expected $expected and no listing, got $tools, listed=$listed"
             } finally {
                 container.chatRepository.deleteChat(chatId)
                 container.conversations.forget(chatId)

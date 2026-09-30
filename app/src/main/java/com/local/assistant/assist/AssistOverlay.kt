@@ -67,6 +67,10 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.State
 import androidx.compose.runtime.getValue
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -132,9 +136,13 @@ import kotlin.math.sqrt
 @Composable
 fun AssistOverlay(
     viewModel: AssistViewModel,
-    unlocked: Boolean,
+    /** On the lock screen with talking there turned off: the panel only says how to turn it on. */
+    lockedOut: Boolean,
+    /** Goes up each time opening the app waited for an unlock that was cancelled. */
+    openCancelled: Int,
     onClosed: () -> Unit,
     onOpenApp: (chatId: Long?) -> Unit,
+    onOpenSettings: () -> Unit,
 ) {
     val context = LocalContext.current
     val lifecycle = LocalLifecycleOwner.current.lifecycle
@@ -163,9 +171,9 @@ fun AssistOverlay(
         val granted = ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
         if (granted) viewModel.startListening() else micPermission.launch(Manifest.permission.RECORD_AUDIO)
     }
-    // Straight into listening as the panel rises — once unlocked, if the phone was locked.
-    LaunchedEffect(unlocked) {
-        if (unlocked && viewModel.claimAutoStart()) listen()
+    // Straight into listening as the panel rises.
+    LaunchedEffect(lockedOut) {
+        if (!lockedOut && viewModel.claimAutoStart()) listen()
     }
 
     var permissionRequest by remember { mutableStateOf<PermissionBroker.Request?>(null) }
@@ -195,8 +203,33 @@ fun AssistOverlay(
     // ---- In and out ----
 
     val appear = remember { Animatable(0f) }
-    val drag = remember { Animatable(0f) }
     var leaving by remember { mutableStateOf(false) }
+
+    // The handle: pulled down it closes the panel; pulled up it stretches the panel towards the
+    // top, and let go far enough it fills the screen and becomes the app, at this chat.
+    val pull = remember { Animatable(0f) } // px: down is positive, up negative
+    var areaHeight by remember { mutableIntStateOf(0) } // where the panel may be
+    var naturalHeight by remember { mutableIntStateOf(0) } // the panel, unstretched
+    val room = (areaHeight - naturalHeight).coerceAtLeast(0)
+    val stretch = (-pull.value).coerceIn(0f, room.toFloat())
+    val appliedStretch by rememberUpdatedState(stretch)
+    val density = LocalDensity.current
+    val openAt = with(density) { minOf(room * OPEN_FRACTION, OPEN_DRAG.toPx()) }
+    val openFully: () -> Unit = {
+        if (!leaving) {
+            leaving = true
+            scope.launch {
+                pull.animateTo(-room.toFloat(), tween(durationMillis = 240, easing = FastOutSlowInEasing))
+                onOpenApp(chatId)
+            }
+        }
+    }
+    // Opening the app waited for an unlock, which was cancelled: back to how it was.
+    LaunchedEffect(openCancelled) {
+        if (openCancelled == 0) return@LaunchedEffect
+        leaving = false
+        pull.animateTo(0f, spring())
+    }
     LaunchedEffect(Unit) {
         appear.animateTo(1f, spring(dampingRatio = 0.72f, stiffness = 300f))
     }
@@ -225,7 +258,7 @@ fun AssistOverlay(
     val shownLevel = displayLevel(level)
     val energy = animateFloatAsState(
         targetValue = when {
-            !unlocked -> 0.15f
+            lockedOut -> 0.15f
             listening -> 0.55f + 0.45f * shownLevel
             speaking -> 0.85f
             busy -> 0.7f
@@ -246,117 +279,141 @@ fun AssistOverlay(
 
         Box(
             Modifier
-                .align(Alignment.BottomCenter)
-                .fillMaxWidth()
+                .fillMaxSize()
                 .statusBarsPadding()
                 .navigationBarsPadding()
                 .imePadding()
                 .padding(start = 10.dp, end = 10.dp, top = 48.dp, bottom = 10.dp)
-                .graphicsLayer {
-                    val progress = appear.value
-                    // A spring past 1 lifts the panel a touch before it settles: the "pop".
-                    translationY = (1f - progress) * (size.height + 64.dp.toPx()) + drag.value
-                    val scale = 0.92f + 0.08f * progress.coerceAtMost(1f)
-                    scaleX = scale
-                    scaleY = scale
-                    // No fade: a translucent layer would clip the glow to the panel's edge.
-                    transformOrigin = TransformOrigin(0.5f, 1f)
-                }
-                // A tap on the panel stays on the panel, rather than reaching the scrim and closing it.
-                .pointerInput(Unit) { detectTapGestures { } },
+                .onSizeChanged { areaHeight = it.height },
+            contentAlignment = Alignment.BottomCenter,
         ) {
-            GlowPanel(energy) {
-                // The handle and the header drag the panel down to close it.
-                val grab = Modifier.pointerInput(Unit) {
-                    detectVerticalDragGestures(
-                        onDragEnd = {
-                            scope.launch {
-                                if (drag.value > DISMISS_DRAG.toPx()) dismiss() else drag.animateTo(0f, spring())
-                            }
-                        },
-                        onDragCancel = { scope.launch { drag.animateTo(0f, spring()) } },
-                        onVerticalDrag = { change, amount ->
-                            change.consume()
-                            scope.launch { drag.snapTo((drag.value + amount).coerceAtLeast(0f)) }
-                        },
-                    )
-                }
-                Column(grab.fillMaxWidth()) {
-                    Box(
-                        Modifier
-                            .align(Alignment.CenterHorizontally)
-                            .padding(top = 10.dp)
-                            .size(width = 36.dp, height = 4.dp)
-                            .clip(CircleShape)
-                            .background(AppColors.Border),
-                    )
-                    Header(
-                        energy = energy,
-                        muted = muted,
-                        showMute = unlocked && !noModel,
-                        onToggleMute = viewModel::toggleMute,
-                        onOpenApp = { onOpenApp(chatId) },
-                    )
-                }
-
-                val hasTranscript = messages.isNotEmpty() || pending != null || streaming != null
-                when {
-                    !unlocked -> Headline("Unlock to continue", "The assistant opens once your phone is unlocked.")
-                    noModel -> NeedsApp("The assistant needs its model first. Open the app to download or import it.", onOpenApp = { onOpenApp(null) })
-                    failed != null && !hasTranscript -> NeedsApp("${failed.message} Open the app to try again.", onOpenApp = { onOpenApp(null) })
-                    hasTranscript -> Transcript(
-                        messages = messages,
-                        chips = chips,
-                        pending = pending,
-                        streaming = streaming,
-                        waiting = waiting,
-                        modelLoading = engine !is LlmService.State.Ready,
-                        viewModel = viewModel,
-                        modifier = Modifier.weight(1f, fill = false),
-                    )
-                    listening -> Headline("Listening…", "Ask anything. It sends when you pause.")
-                    input == AssistViewModel.Input.TEXT -> Headline("How can I help?", null)
-                    else -> Headline("How can I help?", "Tap the mic and ask.")
-                }
-
-                if (unlocked && !noModel) {
-                    if (listening || speaking) {
-                        VoiceWave(
-                            level = shownLevel,
-                            speaking = speaking && !listening,
-                            modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
-                        )
+            Box(
+                Modifier
+                    .fillMaxWidth()
+                    .onSizeChanged { naturalHeight = it.height - appliedStretch.toInt() }
+                    .graphicsLayer {
+                        val progress = appear.value
+                        // A spring past 1 lifts the panel a touch before it settles: the "pop".
+                        translationY = (1f - progress) * (size.height + 64.dp.toPx()) + pull.value.coerceAtLeast(0f)
+                        val scale = 0.92f + 0.08f * progress.coerceAtMost(1f)
+                        scaleX = scale
+                        scaleY = scale
+                        // No fade: a translucent layer would clip the glow to the panel's edge.
+                        transformOrigin = TransformOrigin(0.5f, 1f)
                     }
-                    if (!hasTranscript && engine !is LlmService.State.Ready && failed == null) {
-                        Caption("Waking up the model. It answers as soon as it's ready.")
-                    }
-                    notice?.let { Caption(it, onClick = viewModel::dismissNotice) }
-
-                    if (input == AssistViewModel.Input.VOICE) {
-                        VoiceControls(
-                            orb = orb,
-                            level = shownLevel,
-                            onOrb = {
-                                when (orb) {
-                                    OrbMode.LISTENING -> viewModel.finishListening()
-                                    OrbMode.BUSY -> viewModel.stop()
-                                    OrbMode.IDLE -> listen()
+                    // A tap on the panel stays on the panel, rather than reaching the scrim and closing it.
+                    .pointerInput(Unit) { detectTapGestures { } },
+            ) {
+                GlowPanel(energy) {
+                    // The handle and the header: down to close, up to open the app.
+                    val grab = Modifier.pointerInput(Unit) {
+                        detectVerticalDragGestures(
+                            onDragEnd = {
+                                when {
+                                    pull.value > DISMISS_DRAG.toPx() -> dismiss()
+                                    -pull.value >= openAt && room > 0 -> openFully()
+                                    else -> scope.launch { pull.animateTo(0f, spring()) }
                                 }
                             },
-                            onKeyboard = viewModel::switchToText,
-                            onClose = dismiss,
-                        )
-                    } else {
-                        TextControls(
-                            busy = busy,
-                            canTalk = engine !is LlmService.State.Ready || viewModel.hearsAudio(),
-                            onSend = viewModel::sendText,
-                            onStop = viewModel::stop,
-                            onTalk = listen,
+                            onDragCancel = { scope.launch { pull.animateTo(0f, spring()) } },
+                            onVerticalDrag = { change, amount ->
+                                change.consume()
+                                if (!leaving) scope.launch { pull.snapTo((pull.value + amount).coerceAtLeast(-room.toFloat())) }
+                            },
                         )
                     }
-                } else {
-                    Spacer(Modifier.height(20.dp))
+                    Column(grab.fillMaxWidth()) {
+                        Box(
+                            Modifier
+                                .align(Alignment.CenterHorizontally)
+                                .padding(top = 10.dp)
+                                .size(width = 36.dp, height = 4.dp)
+                                .clip(CircleShape)
+                                .background(if (stretch > 0f) AppColors.TextSecondary else AppColors.Border),
+                        )
+                        Header(
+                            energy = energy,
+                            muted = muted,
+                            showMute = !lockedOut && !noModel,
+                            onToggleMute = viewModel::toggleMute,
+                            onOpenApp = openFully,
+                        )
+                        // The room the pull makes, with what letting go will do.
+                        val stretchDp = with(density) { stretch.toDp() }
+                        Box(Modifier.fillMaxWidth().height(stretchDp), contentAlignment = Alignment.Center) {
+                            if (stretchDp > 40.dp) {
+                                Text(
+                                    when {
+                                        leaving -> "Opening the app…"
+                                        -pull.value >= openAt -> "Release to open the app"
+                                        else -> "Pull up to open the app"
+                                    },
+                                    style = MaterialTheme.typography.labelLarge,
+                                    color = AppColors.TextSecondary,
+                                )
+                            }
+                        }
+                    }
+
+                    val hasTranscript = messages.isNotEmpty() || pending != null || streaming != null
+                    when {
+                        lockedOut -> LockedOut(onOpenSettings)
+                        noModel -> NeedsApp("The assistant needs its model first. Open the app to download or import it.", onOpenApp = openFully)
+                        failed != null && !hasTranscript -> NeedsApp("${failed.message} Open the app to try again.", onOpenApp = openFully)
+                        hasTranscript -> Transcript(
+                            messages = messages,
+                            chips = chips,
+                            pending = pending,
+                            streaming = streaming,
+                            waiting = waiting,
+                            modelLoading = engine !is LlmService.State.Ready,
+                            viewModel = viewModel,
+                            modifier = Modifier.weight(1f, fill = false),
+                        )
+                        listening -> Headline("Listening…", "Ask anything. It sends when you pause.")
+                        input == AssistViewModel.Input.TEXT -> Headline("How can I help?", null)
+                        else -> Headline("How can I help?", "Tap the mic and ask.")
+                    }
+
+                    if (!lockedOut && !noModel) {
+                        if (listening || speaking) {
+                            VoiceWave(
+                                level = shownLevel,
+                                speaking = speaking && !listening,
+                                modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
+                            )
+                        }
+                        if (!hasTranscript && engine !is LlmService.State.Ready && failed == null) {
+                            Caption("Waking up the model. It answers as soon as it's ready.")
+                        }
+                        notice?.let { Caption(it, onClick = viewModel::dismissNotice) }
+
+                        if (input == AssistViewModel.Input.VOICE) {
+                            VoiceControls(
+                                orb = orb,
+                                level = shownLevel,
+                                onOrb = {
+                                    when (orb) {
+                                        OrbMode.LISTENING -> viewModel.finishListening()
+                                        OrbMode.BUSY -> viewModel.stop()
+                                        OrbMode.IDLE -> listen()
+                                    }
+                                },
+                                onKeyboard = viewModel::switchToText,
+                                onClose = dismiss,
+                            )
+                        } else {
+                            TextControls(
+                                busy = busy,
+                                canTalk = engine !is LlmService.State.Ready || viewModel.hearsAudio(),
+                                onSend = viewModel::sendText,
+                                onStop = viewModel::stop,
+                                onTalk = listen,
+                            )
+                        }
+                    } else {
+                        Spacer(Modifier.height(20.dp))
+                    }
                 }
             }
         }
@@ -471,6 +528,31 @@ private fun Headline(title: String, subtitle: String?) {
         subtitle?.let {
             Text(it, style = MaterialTheme.typography.bodyMedium, color = AppColors.TextSecondary, modifier = Modifier.padding(top = 4.dp))
         }
+    }
+}
+
+/**
+ * On the lock screen with talking there turned off. The same words are in the notification left
+ * for later (LockScreenNotice), since this panel goes as soon as the phone is put down.
+ */
+@Composable
+private fun LockedOut(onOpenSettings: () -> Unit) {
+    Column(Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, top = 14.dp, bottom = 4.dp)) {
+        Text("Unlock to talk", style = HeadlineStyle, color = AppColors.TextPrimary)
+        Text(
+            "Talking to the assistant on the lock screen is off. You can turn it on in Settings \u2192 Assistant; " +
+                "a notification about it is waiting for you.",
+            style = MaterialTheme.typography.bodyMedium,
+            color = AppColors.TextSecondary,
+            modifier = Modifier.padding(top = 4.dp),
+        )
+        Text(
+            LockScreenNotice.RISK,
+            style = MaterialTheme.typography.bodySmall,
+            color = AppColors.Danger,
+            modifier = Modifier.padding(top = 8.dp),
+        )
+        OutlinedButton(onClick = onOpenSettings, modifier = Modifier.padding(top = 12.dp)) { Text("Unlock and open Settings") }
     }
 }
 
@@ -867,4 +949,8 @@ private val InnerShape = RoundedCornerShape(28.dp)
 private val ORB_SIZE = 64.dp
 private val ORB_AREA = 104.dp
 private val DISMISS_DRAG = 110.dp
+
+/** Pulled up this far (or this share of the way to the top, if less), letting go opens the app. */
+private val OPEN_DRAG = 220.dp
+private const val OPEN_FRACTION = 0.4f
 private val HeadlineStyle = TextStyle(fontSize = 24.sp, lineHeight = 30.sp, fontWeight = FontWeight.SemiBold)

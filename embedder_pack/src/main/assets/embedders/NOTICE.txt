@@ -1,0 +1,6 @@
+Gemma is provided under and subject to the Gemma Terms of Use found at ai.google.dev/gemma/terms
+
+embeddinggemma-300m_wi8.litertlm is a modified version of Google's EmbeddingGemma 300M: it was
+converted to the LiteRT-LM .litertlm format with 8-bit (int8) weights, using tools/embedder in
+this app's source. Its use is subject to the Gemma Prohibited Use Policy:
+ai.google.dev/gemma/prohibited_use_policy

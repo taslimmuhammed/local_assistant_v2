@@ -99,8 +99,21 @@ class MigrationTest {
             db.execSQL("INSERT INTO chats (id, title, createdAt, updatedAt) VALUES (1, 'Old', 1, 2)")
             db.execSQL("INSERT INTO messages (chatId, role, text, createdAt, incomplete) VALUES (1, 'USER', 'hello', 1, 0)")
         }
-        helper.runMigrationsAndValidate(6, AppDatabase.MIGRATIONS.toList()).use { db ->
+        helper.runMigrationsAndValidate(7, AppDatabase.MIGRATIONS.toList()).use { db ->
             assertEquals(1L, db.long("SELECT COUNT(*) FROM messages WHERE sessionId IS NOT NULL AND tokenEst > 0 AND offRecord = 0"))
+        }
+    }
+
+    @Test
+    fun version6ChatsStayInTheChatList() {
+        helper.createDatabase(6).use { db ->
+            db.execSQL("INSERT INTO chats (id, title, createdAt, updatedAt) VALUES (1, 'Trip', 1, 2)")
+        }
+        helper.runMigrationsAndValidate(7, AppDatabase.MIGRATIONS.toList()).use { db ->
+            // Every chat from before was made in the app, so none is hidden.
+            assertEquals(0L, db.long("SELECT hidden FROM chats WHERE id = 1"))
+            db.execSQL("INSERT INTO chats (id, title, createdAt, updatedAt) VALUES (2, 'x', 3, 4)")
+            assertEquals(0L, db.long("SELECT hidden FROM chats WHERE id = 2"))
         }
     }
 

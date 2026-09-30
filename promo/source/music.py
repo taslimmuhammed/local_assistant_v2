@@ -16,7 +16,7 @@ SR = 44100
 BPM = 120
 BEAT = 60 / BPM
 BAR = 4 * BEAT
-DUR = 60.0
+DUR = 64.0
 N = int(SR * (DUR + 0.5))
 rng = np.random.default_rng(7)
 P = os.path.dirname(os.path.abspath(__file__))
@@ -245,7 +245,7 @@ def build():
     fx = np.zeros((N, 2))
     verb_send = np.zeros((N, 2))
 
-    groove = lambda t: (4.0 <= t < 36.0) or (40.0 <= t < 56.0)
+    groove = lambda t: (4.0 <= t < 40.0) or (44.0 <= t < 60.0)
     K, C, S = kick(), clap(), snare()
     HC, HO = hat(False), hat(True)
 
@@ -258,7 +258,7 @@ def build():
         add(fx, impact(1.2)[:int(0.9 * SR)], tt, 0.35)
         kicks.append(tt)
     # snare roll into the drop (2-4 s) and into the second drop (38-40 s)
-    for start in (2.0, 38.0):
+    for start in (2.0, 42.0):
         steps = [(start + i * BEAT / 2, 0.25 + 0.2 * i / 8) for i in range(4)]
         steps += [(start + 1.0 + i * BEAT / 4, 0.35 + 0.35 * i / 8) for i in range(8)]
         for tt, g in steps:
@@ -284,19 +284,19 @@ def build():
                 for s in range(4):
                     add(drums, S, tt + s * BEAT / 4, 0.3 + 0.12 * s)
         # breakdown: half-time claps keep pulse
-        if 36.0 <= tt < 38.0 and b % 4 == 2:
+        if 40.0 <= tt < 42.0 and b % 4 == 2:
             add(drums, C, tt, 0.5)
             add(verb_send, C, tt, 0.6)
 
     # drops and big moments
-    for tt, g in ((4.0, 1.0), (40.0, 1.0), (56.0, 1.1)):
+    for tt, g in ((4.0, 1.0), (44.0, 1.0), (60.0, 1.1)):
         add(fx, crash(), tt, 0.9 * g)
         add(fx, impact(), tt, 0.85 * g)
         add(verb_send, impact(), tt, 0.25)
     add(fx, riser(2.0), 2.0, 0.9)
-    add(fx, riser(4.0), 36.0, 1.0)
+    add(fx, riser(4.0), 40.0, 1.0)
     # a whoosh peaking at every scene cut
-    for cut in (8, 12, 16, 20, 24, 28, 32, 44, 48, 52):
+    for cut in (8, 16, 20, 24, 28, 32, 36, 48, 52, 56):
         add(fx, whoosh(0.55), cut - 0.36, 0.55)
 
     # chords per bar
@@ -311,11 +311,11 @@ def build():
             seg = supersaw_chord(ch, BAR + 0.05)
             seg = sweep_lp(seg, 300 + 500 * bar, 900 + 1800 * bar)
             add(chords, seg, t0, 0.55)
-        elif 36.0 <= t0 < 40.0:
+        elif 40.0 <= t0 < 44.0:
             seg = supersaw_chord(ch, BAR + 0.05)
-            seg = sweep_lp(seg, 2200 if t0 < 38 else 900, 900 if t0 < 38 else 4000)
+            seg = sweep_lp(seg, 2200 if t0 < 42 else 900, 900 if t0 < 42 else 4000)
             add(chords, seg, t0, 0.5)
-        elif t0 >= 56.0:
+        elif t0 >= 60.0:
             seg = supersaw_chord(CHORDS[0], 4.2)
             t = t_arr(4.2)[:len(seg)]
             seg = lp(seg, 5000) * np.exp(-t / 1.4)[:, None]
@@ -323,7 +323,7 @@ def build():
             add(verb_send, seg, t0, 0.5)
         else:
             # stabs on the off-beats plus a sustained bed
-            bed = lp(supersaw_chord(ch, BAR + 0.05), 2600 if t0 < 40 else 4200)
+            bed = lp(supersaw_chord(ch, BAR + 0.05), 2600 if t0 < 44 else 4200)
             add(chords, bed, t0, 0.42)
             for k in range(4):
                 st = supersaw_chord(ch, 0.22)
@@ -331,9 +331,9 @@ def build():
                 st = lp(st, 5200) * np.exp(-tt / 0.08)[:, None]
                 add(chords, st, t0 + k * BEAT + BEAT / 2, 0.55)
         # bass: off-beat 8ths in the groove
-        if groove(t0) or t0 >= 56.0:
+        if groove(t0) or t0 >= 60.0:
             f = midi(BASS[bar % 4])
-            if t0 >= 56.0:
+            if t0 >= 60.0:
                 add(music, bass_note(f, 2.5), t0, 0.8)
             else:
                 for k in range(4):
@@ -341,7 +341,7 @@ def build():
                     if k in (1, 3):
                         add(music, bass_note(f * 2, BEAT / 4), t0 + k * BEAT + 3 * BEAT / 4, 0.35)
         # arp from 12 s, and all through the second drop
-        if (12.0 <= t0 < 36.0) or (40.0 <= t0 < 56.0):
+        if (8.0 <= t0 < 40.0) or (44.0 <= t0 < 60.0):
             tones = [ch[1], ch[2], ch[3], ch[4], ch[3] + 12, ch[4], ch[3], ch[2]]
             for s in range(16):
                 n = tones[s % 8] + 12
@@ -361,7 +361,7 @@ def build():
     mix = hp(mix, 28)
     # outro fade 58.6 -> 60
     t = np.arange(N) / SR
-    fade = np.clip((60.0 - t) / 1.4, 0, 1) ** 1.5
+    fade = np.clip((64.0 - t) / 1.4, 0, 1) ** 1.5
     mix *= fade[:, None]
     # glue: gentle saturation, then peak normalise
     pk=np.abs(mix).max(); rms=np.sqrt((mix**2).mean()); print('pre-sat peak',pk,'rms',rms, 'p99.9', np.percentile(np.abs(mix),99.9))

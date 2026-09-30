@@ -63,6 +63,14 @@ adb push gemma-4-E4B-it.litertlm /sdcard/Download/
 
 Then pick it from the file picker.
 
+**The memory-search model comes with the app on Google Play.** EmbeddingGemma 300M ships in the
+fast-follow asset pack `:embedder_pack`. Play downloads it by itself right after install, with
+nothing to host. The app loads it from where Play unpacked it (`memory/embed/BundledEmbedder`),
+unless the user has downloaded or imported another embedder in Settings. An APK built with
+`assembleDebug` has no packs; `./gradlew :app:installBundleDebug` installs the bundle the way Play
+would. `embedder_pack/README.md` covers putting the model file in place and the Gemma licence
+checklist. Settings → Models and licences shows the notices in the app.
+
 ## Architecture
 
 ```
@@ -513,7 +521,21 @@ Holding the power button opens the assistant over whatever is on screen, the way
 a panel rises from the bottom (a light sweeps round its edge, brighter while it listens, thinks or
 speaks), starts listening at once, and sends by itself when you pause. The answer streams into the
 panel and, when you asked by voice, is read aloud sentence by sentence as it arrives. The keyboard
-button switches to typing; "Open in app" continues in the full chat.
+button switches to typing. The handle at the top works both ways: pulled down it closes the
+panel; pulled up it stretches the panel towards the top ("Release to open the app"), and let go
+past 40% of the way (or 220 dp) it fills the screen and opens the full app at this chat, as the
+"Open in app" button does.
+
+**On the lock screen** the assistant works without unlocking only if **Use on the lock screen**
+is on (Settings → Assistant; off by default, and turning it on first shows a warning). Then it
+opens over the lock screen with all its memory and tools, and keeps the screen awake while open.
+Whoever holds the phone gets the same: what it remembers (saved cards and PINs included) and its
+calls and messages. Calls, messages and apps it opens appear only after an unlock, since those
+apps don't show over the lock screen. With the setting off, the panel says so, and a notification
+(`assist/LockScreenNotice`, readable on the lock screen) explains how to turn it on and what that
+exposes. It opens Settings, which needs an unlock; there is deliberately no "Turn on" button on
+it. "Open in app" on the lock screen asks for the unlock first, from the tap: asked for as the
+panel was created, the unlock prompt never appeared on the test phone and the panel sat there.
 
 **Setting it up.** Settings → Assistant → Power button opens the system page where the phone's
 *digital assistant app* is chosen; pick Local Assistant. Android doesn't let an app ask for this
@@ -526,12 +548,15 @@ How it fits together:
 
 - `assist/AssistActivity` handles `ACTION_ASSIST`, which is what makes the app selectable as the
   assistant. It is a translucent activity in its own task, kept out of Recents, and closes as
-  soon as it is out of view. On the lock screen it asks for the unlock before it listens: the
-  assistant can read memory, make calls and send messages. (It is an activity rather than a
+  soon as it is out of view. (It is an activity rather than a
   `VoiceInteractionService`, which would also make the app the phone's speech recogniser for
   every other app — and there is no recogniser here: the model hears the audio itself.)
-- Each opening starts a new chat, created with the first question, so overlay conversations show
-  up in the history like any other.
+- Each opening starts a new chat, created with the first question and marked `hidden`
+  (`ChatEntity.hidden`, DB v7): it stays out of the chat list, but is stored and learned from like
+  any other chat, so "remember that…" is saved, and the archive, session summaries and nightly
+  extraction all see it. (Voice messages themselves are never transcribed or archived, as
+  anywhere in the app; what is learned from them is what the model saved through its tools.) An
+  overlay chat continued in the app ("Open in app" or the handle) joins the chat list.
 - `chat/ChatSender` sends messages and streams replies for the chat screen and the overlay alike,
   one turn at a time. A reply outlives the screen that asked for it: closing the overlay, or a
   tool opening the dialer, doesn't cut it off — it finishes in its chat, and the app shows it

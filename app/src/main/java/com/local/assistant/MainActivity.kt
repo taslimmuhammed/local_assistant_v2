@@ -31,14 +31,26 @@ class MainActivity : ComponentActivity() {
     /** A chat to show, from the assistant overlay's "Open in app". */
     private val chatToOpen = mutableStateOf<Long?>(null)
 
+    /** Settings asked for from outside: the lock-screen notice. */
+    private val settingsToOpen = mutableStateOf(false)
+
     override fun onCreate(savedInstanceState: Bundle?) {
         enableEdgeToEdge()
         super.onCreate(savedInstanceState)
-        if (savedInstanceState == null) chatToOpen.value = chatIdIn(intent)
+        if (savedInstanceState == null) {
+            chatToOpen.value = chatIdIn(intent)
+            settingsToOpen.value = settingsIn(intent)
+        }
         val container = appContainer
         setContent {
             LocalAssistantTheme {
-                AppRoot(container, chatToOpen.value, onChatOpened = { chatToOpen.value = null })
+                AppRoot(
+                    container,
+                    chatToOpen = chatToOpen.value,
+                    onChatOpened = { chatToOpen.value = null },
+                    settingsToOpen = settingsToOpen.value,
+                    onSettingsOpened = { settingsToOpen.value = false },
+                )
             }
         }
     }
@@ -46,18 +58,28 @@ class MainActivity : ComponentActivity() {
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         chatIdIn(intent)?.let { chatToOpen.value = it }
+        if (settingsIn(intent)) settingsToOpen.value = true
     }
+
+    private fun settingsIn(intent: Intent?): Boolean = intent?.getBooleanExtra(EXTRA_OPEN_SETTINGS, false) == true
 
     private fun chatIdIn(intent: Intent?): Long? =
         intent?.getLongExtra(EXTRA_CHAT_ID, -1L)?.takeIf { it > 0 }
 
     companion object {
         const val EXTRA_CHAT_ID = "com.local.assistant.extra.CHAT_ID"
+        const val EXTRA_OPEN_SETTINGS = "com.local.assistant.extra.OPEN_SETTINGS"
     }
 }
 
 @Composable
-private fun AppRoot(container: AppContainer, chatToOpen: Long?, onChatOpened: () -> Unit) {
+private fun AppRoot(
+    container: AppContainer,
+    chatToOpen: Long?,
+    onChatOpened: () -> Unit,
+    settingsToOpen: Boolean,
+    onSettingsOpened: () -> Unit,
+) {
     val installed by container.modelManager.installed.collectAsStateWithLifecycle()
     var showSettings by remember { mutableStateOf(false) }
     var showModelScreen by remember { mutableStateOf(false) }
@@ -75,6 +97,16 @@ private fun AppRoot(container: AppContainer, chatToOpen: Long?, onChatOpened: ()
         showMemoryScreen = false
         showProfileScreen = false
         showWebSearchScreen = false
+    }
+    // The lock-screen notice: straight to Settings, where talking on the lock screen is turned on.
+    LaunchedEffect(settingsToOpen) {
+        if (!settingsToOpen) return@LaunchedEffect
+        showModelScreen = false
+        showMemoryScreen = false
+        showProfileScreen = false
+        showWebSearchScreen = false
+        showSettings = true
+        onSettingsOpened()
     }
 
     // First launch: a few details about the user before anything else. Skippable.

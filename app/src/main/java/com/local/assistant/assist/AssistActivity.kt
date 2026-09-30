@@ -12,6 +12,7 @@ import androidx.activity.SystemBarStyle
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.viewModels
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import com.local.assistant.MainActivity
 import com.local.assistant.appContainer
@@ -24,13 +25,22 @@ import com.local.assistant.ui.theme.LocalAssistantTheme
  * A translucent window over whatever was on screen, with a panel that rises from the bottom and
  * starts listening. It lives only while it is in view: going home, switching apps, or a tool
  * opening the dialer closes it, and a reply still coming finishes in its chat.
+ *
+ * On the lock screen it works without unlocking only when the user has turned that on (Settings →
+ * Assistant, off by default, since whoever holds the phone then gets the assistant's memory and
+ * its calls and messages). Otherwise it says how to turn it on, and leaves a notification.
  */
 class AssistActivity : ComponentActivity() {
 
     private val viewModel: AssistViewModel by viewModels { AssistViewModel.factory(appContainer) }
 
-    /** False while the phone is locked and the unlock prompt is up. */
-    private val unlocked = mutableStateOf(true)
+    /** Opened on the lock screen with talking there turned off: it only says how to turn it on. */
+    private val lockedOut = mutableStateOf(false)
+
+    /** Counts unlocks asked for by "Open in app" and then cancelled, so the panel can settle back. */
+    private val openCancelled = mutableIntStateOf(0)
+
+    /** The unlock prompt is up: the overlay stays while it is. */
     private var awaitingUnlock = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -41,15 +51,27 @@ class AssistActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         // The panel animates itself in; the window shouldn't as well.
         skipTransition(opening = true)
-        unlockFirst()
+        // Asking and answering take a while; on the lock screen, the screen timing out would take
+        // the panel with it.
+        window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        if (isLocked()) {
+            // Over the lock screen either way: to talk, or to say how talking there is turned on.
+            showWhenLocked()
+            if (!appContainer.settings.assistantOnLockScreen) {
+                lockedOut.value = true
+                LockScreenNotice.post(this)
+            }
+        }
 
         setContent {
             LocalAssistantTheme {
                 AssistOverlay(
                     viewModel = viewModel,
-                    unlocked = unlocked.value,
+                    lockedOut = lockedOut.value,
+                    openCancelled = openCancelled.intValue,
                     onClosed = ::close,
                     onOpenApp = ::openApp,
+                    onOpenSettings = ::openSettings,
                 )
             }
         }
@@ -58,7 +80,7 @@ class AssistActivity : ComponentActivity() {
     /** Held again while open: listen again. */
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
-        if (unlocked.value && viewModel.input.value == AssistViewModel.Input.VOICE && micGranted()) viewModel.startListening()
+        if (!lockedOut.value && viewModel.input.value == AssistViewModel.Input.VOICE && micGranted()) viewModel.startListening()
     }
 
     override fun onStop() {
@@ -67,49 +89,14 @@ class AssistActivity : ComponentActivity() {
         if (!isChangingConfigurations && !awaitingUnlock && !isFinishing) close()
     }
 
-    /**
-     * On the lock screen, the unlock comes first: the assistant can read what it remembers about
-     * the user, make calls and send messages. The panel shows meanwhile, but doesn't listen.
-     */
-    private fun unlockFirst() {
-        val keyguard = getSystemService(KeyguardManager::class.java) ?: return
-        if (!keyguard.isKeyguardLocked) return
-        showWhenLocked(true)
-        unlocked.value = false
-        awaitingUnlock = true
-        keyguard.requestDismissKeyguard(
-            this,
-            object : KeyguardManager.KeyguardDismissCallback() {
-                override fun onDismissSucceeded() {
-                    awaitingUnlock = false
-                    // Unlocked now; if the phone locks again, the overlay goes behind it.
-                    showWhenLocked(false)
-                    unlocked.value = true
-                }
+    private fun isLocked(): Boolean = getSystemService(KeyguardManager::class.java)?.isKeyguardLocked == true
 
-                override fun onDismissCancelled() {
-                    awaitingUnlock = false
-                    close()
-                }
-
-                override fun onDismissError() {
-                    awaitingUnlock = false
-                    close()
-                }
-            },
-        )
-    }
-
-    private fun showWhenLocked(show: Boolean) {
+    private fun showWhenLocked() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
-            setShowWhenLocked(show)
+            setShowWhenLocked(true)
         } else {
             @Suppress("DEPRECATION")
-            if (show) {
-                window.addFlags(WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED)
-            } else {
-                window.clearFlags(WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED)
-            }
+            window.addFlags(WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED)
         }
     }
 
@@ -117,13 +104,57 @@ class AssistActivity : ComponentActivity() {
         checkSelfPermission(android.Manifest.permission.RECORD_AUDIO) == android.content.pm.PackageManager.PERMISSION_GRANTED
 
     /** The full app, at this overlay's chat if it has one. */
-    private fun openApp(chatId: Long?) {
+    private fun openApp(chatId: Long?) = afterUnlock {
         startActivity(
             Intent(this, MainActivity::class.java)
                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
                 .apply { chatId?.let { putExtra(MainActivity.EXTRA_CHAT_ID, it) } },
         )
         close()
+    }
+
+    /** The app's settings, where talking on the lock screen is turned on. */
+    private fun openSettings() = afterUnlock {
+        startActivity(
+            Intent(this, MainActivity::class.java)
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+                .putExtra(MainActivity.EXTRA_OPEN_SETTINGS, true),
+        )
+        close()
+    }
+
+    /**
+     * The app itself doesn't show over the lock screen, so it waits for the unlock. Asked for
+     * from a tap, with the panel in view: asked for while the panel was still being created, the
+     * prompt never came on the test phone and the panel sat there.
+     */
+    private fun afterUnlock(then: () -> Unit) {
+        val keyguard = getSystemService(KeyguardManager::class.java)
+        if (keyguard == null || !keyguard.isKeyguardLocked) {
+            then()
+            return
+        }
+        awaitingUnlock = true
+        keyguard.requestDismissKeyguard(
+            this,
+            object : KeyguardManager.KeyguardDismissCallback() {
+                override fun onDismissSucceeded() {
+                    awaitingUnlock = false
+                    then()
+                }
+
+                override fun onDismissCancelled() {
+                    awaitingUnlock = false
+                    openCancelled.intValue++
+                }
+
+                // No prompt to be had: open anyway, and the app waits behind the lock screen.
+                override fun onDismissError() {
+                    awaitingUnlock = false
+                    then()
+                }
+            },
+        )
     }
 
     private fun close() {

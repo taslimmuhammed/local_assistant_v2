@@ -71,8 +71,9 @@ class ChatSender(
     /**
      * Stores [text] and [attachment] in [chatId] — a new chat when null — and streams the reply.
      * Whichever screen sends it, the model gets the same turn: the same instructions, memory and
-     * tools. Returns false, storing nothing, when there is nothing to send or another turn is
-     * still in flight.
+     * tools. [hidden]: a new chat is left out of the chat list (the assistant overlay's), though
+     * stored and learned from like any other. Returns false, storing nothing, when there is
+     * nothing to send or another turn is still in flight.
      */
     fun send(
         chatId: Long?,
@@ -80,6 +81,7 @@ class ChatSender(
         attachment: Attachment?,
         owner: Any,
         listener: Listener,
+        hidden: Boolean = false,
     ): Boolean {
         val prompt = text.trim()
         if ((prompt.isEmpty() && attachment == null) || isBusy) return false
@@ -96,7 +98,7 @@ class ChatSender(
             var completed = false
             try {
                 if (chat == null) {
-                    chat = repository.createChat()
+                    chat = repository.createChat(hidden = hidden)
                     // Both in one go, with no suspension between, so a screen matching the stream
                     // to its chat never sees one without the other.
                     _live.update { it?.copy(chatId = chat) }
