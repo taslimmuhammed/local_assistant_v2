@@ -17,8 +17,30 @@ import java.nio.ByteOrder
  * The check is the start of the layout [ModelPrecision] reads: "LITERTLM", then at 24 where the
  * header ends, which has to lie inside the file. Every model the app uses has it: Gemma 4 E4B,
  * EmbeddingGemma and Granite.
+ *
+ * A LiteRT-LM file of the wrong kind is just as fatal: handed an embedding model as the chat
+ * model, the runtime logs "Section not found" and aborts ("bad_optional_access was thrown in
+ * -fno-exceptions mode"), in any build (emulator, 2026-09-30). The embedding model is offered on
+ * this app's GitHub release, so importing it as the chat model is an easy mistake. [problem]
+ * therefore also checks the file has the section its [Kind] runs on.
  */
 object ModelFormat {
+
+    /** What a file is to be used as, and the section (`model_type`) that has to be in it. */
+    enum class Kind(val section: String, val wrongKind: String) {
+        /** Gemma 4 E4B's text decoder; embedding models have none. */
+        CHAT("tf_lite_prefill_decode", "That's not a chat model: it can't write replies. Pick the Gemma model file."),
+
+        /** EmbeddingGemma's and Granite's text encoder; chat models have none. */
+        EMBEDDER("tf_lite_text_encoder", "That's not a memory-search (embedding) model."),
+    }
+
+    /** Why [file] can't be used as [kind], or null when it can. */
+    fun problem(file: File, kind: Kind): String? {
+        if (!isLiteRtLm(file)) return NOT_A_MODEL
+        val sections = ModelPrecision.sectionTypes(file) ?: return NOT_A_MODEL
+        return if (kind.section in sections) null else kind.wrongKind
+    }
 
     /** How much of the start of a file [startsLikeLiteRtLm] looks at. */
     const val PREFIX_BYTES = 32

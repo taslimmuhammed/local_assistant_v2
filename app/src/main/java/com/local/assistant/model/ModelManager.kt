@@ -59,6 +59,8 @@ data class ModelFile(
     /** Its own directory under the app's files: anything else found there is a leftover. */
     val directory: String,
     val requiredFreeBytes: Long,
+    /** What it is used as: a file that isn't one is refused (see [ModelFormat]). */
+    val kind: ModelFormat.Kind,
 )
 
 /**
@@ -242,6 +244,11 @@ class ModelManager(
             }
         }
 
+        // The right kind of LiteRT-LM file, too: the header says what it runs as.
+        ModelFormat.problem(part, model.kind)?.let {
+            part.delete()
+            throw IOException(it)
+        }
         destination.delete()
         if (!part.renameTo(destination)) {
             throw IOException("Could not move the imported model into place")

@@ -163,7 +163,8 @@ class AppContainer(context: Context) {
     val embedder = LiteRtEmbedder(
         installed = {
             settings.embedderPath?.let { path ->
-                InstalledEmbedder(File(path), EmbedderCatalog.byKey(settings.embedderKey) ?: EmbedderCatalog.DEFAULT)
+                // No key only from builds before keys were kept, when Granite was the download.
+                InstalledEmbedder(File(path), EmbedderCatalog.byKey(settings.embedderKey) ?: EmbedderCatalog.GRANITE)
             } ?: bundledEmbedder.file?.let { InstalledEmbedder(it, EmbedderCatalog.EMBEDDING_GEMMA) }
         },
         cacheDir = context.cacheDir,
@@ -440,13 +441,37 @@ class AppContainer(context: Context) {
 
     val audioFocus = AudioFocus(context)
 
+    /**
+     * Memory search comes with the first chat model: once one is installed (downloaded or
+     * imported) where there was none, EmbeddingGemma downloads right after it, from this app's
+     * GitHub release, so nobody has to go back for it. Not when an embedder is already here or
+     * on its way (Play's asset pack), and not for a chat model that was installed before.
+     */
+    private fun fetchEmbedderAfterFirstModel() {
+        appScope.launch {
+            var hadModel = modelManager.installed.value != null
+            modelManager.installed.collect { model ->
+                val arrived = model != null && !hadModel
+                hadModel = model != null
+                val bundled = bundledEmbedder.state.value
+                val noEmbedder = embedderManager.installed.value == null && embedderManager.transfer.value == null &&
+                    (bundled is BundledEmbedder.State.Unavailable)
+                if (arrived && noEmbedder) {
+                    Log.i("AppContainer", "Chat model installed; fetching ${EmbedderCatalog.DEFAULT.displayName}")
+                    embedderManager.download()
+                }
+            }
+        }
+    }
+
     fun memorySearchControls() = MemorySearchControls(
         manager = embedderManager,
         remaining = embeddingQueue.remaining,
         installedName = { EmbedderCatalog.byKey(settings.embedderKey)?.displayName },
         bundled = bundledEmbedder.state,
         bundledName = EmbedderCatalog.EMBEDDING_GEMMA.displayName,
-        downloadName = "Granite",
+        downloadName = "EmbeddingGemma",
+        downloadModelName = EmbedderCatalog.DEFAULT.displayName,
         downloadBytes = EmbedderCatalog.DEFAULT.sizeBytes,
         delete = {
             embedder.unload()
@@ -457,6 +482,7 @@ class AppContainer(context: Context) {
 
     init {
         bundledEmbedder.ensure()
+        fetchEmbedderAfterFirstModel()
         backgroundJobs.scheduleNightly()
         // Exchanges from before the archive existed, or missed by a crash, then their vectors.
         appScope.launch {

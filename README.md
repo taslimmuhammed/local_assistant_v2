@@ -8,7 +8,7 @@ It runs Google's Gemma 4 entirely on the device. It chats, listens, remembers yo
 and alarms, and answers when you hold the power button. No account, no server: nothing leaves the
 phone for it to think.
 
-<a href="https://github.com/taslimmuhammed/local_assistant_v2/raw/main/apk/LocalAssistant.apk"><img alt="Download the APK" src="https://img.shields.io/badge/Download_APK-v0.1.2_%C2%B7_26_MB-18181B?style=for-the-badge&logo=android&logoColor=white" height="44"></a>
+<a href="https://github.com/taslimmuhammed/local_assistant_v2/raw/main/apk/LocalAssistant.apk"><img alt="Download the APK" src="https://img.shields.io/badge/Download_APK-v0.2.0_%C2%B7_26_MB-18181B?style=for-the-badge&logo=android&logoColor=white" height="44"></a>
 
 Android 8 or newer · 64-bit phone · 8 GB of RAM or more · about 4.5 GB free
 
@@ -46,6 +46,9 @@ Android 8 or newer · 64-bit phone · 8 GB of RAM or more · about 4.5 GB free
      it stopped if interrupted.
    - **Load from device storage** uses a `.litertlm` model file you already have.
 
+   Right after it, the app also downloads EmbeddingGemma (0.33 GB) by itself, so it can find past
+   conversations by meaning. Nothing to do; no account needed.
+
 It then takes about 15 seconds to get ready (it loads the model and reads its instructions), and
 from then on answers right away.
 
@@ -66,9 +69,20 @@ In the same place:
 
 ### Optional extras
 
-- **Better memory search** across past chats: Settings → Model and memory search → download
-  Granite (0.33 GB). Without it, past chats are still found by keywords.
+- **Memory search** is set up with the model. If you delete it, or the download didn't finish,
+  get it again from Settings → Model and memory search. Without it, past chats are still found by
+  keywords.
 - **Web search**: Settings → Web search, and paste a free key from [tavily.com](https://tavily.com).
+
+### Models and licences
+
+- **Gemma 4 E4B**, the assistant: by Google, from Hugging Face, Apache License 2.0.
+- **EmbeddingGemma 300M**, memory search: by Google, converted to LiteRT-LM's format with 8-bit
+  weights (`tools/embedder`) and published on this repository's
+  [models-v1 release](https://github.com/taslimmuhammed/local_assistant_v2/releases/tag/models-v1).
+  Gemma is provided under and subject to the Gemma Terms of Use found at
+  [ai.google.dev/gemma/terms](https://ai.google.dev/gemma/terms); its use is subject to the
+  [Gemma Prohibited Use Policy](https://ai.google.dev/gemma/prohibited_use_policy).
 
 ## Privacy
 
@@ -101,8 +115,8 @@ sqlite-vec):
 [docs/TECHNICAL.md](docs/TECHNICAL.md) explains how it all fits together: the memory system,
 tools, the power-button assistant, and the measurements behind each choice.
 
-**The download above** is `apk/LocalAssistant.apk`, version 0.1.2, SHA-256
-`2840f9c1d662b507cf82e0701f3d11bade8f7d14e6c70fc5bd8ccbb5f34b054f`. Rebuild it with:
+**The download above** is `apk/LocalAssistant.apk`, version 0.2.0, SHA-256
+`37dd1c4ddf9fd9208477bd8418d7a3b056add18f41e0770bd70dbfdcd960f354`. Rebuild it with:
 
 ```bash
 ./gradlew :app:demoApk -Pdemo

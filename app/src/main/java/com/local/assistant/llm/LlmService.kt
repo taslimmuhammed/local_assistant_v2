@@ -160,9 +160,10 @@ class LlmService(
             return@withLock null
         }
         // Handed anything else, the runtime can take the app down with it, at every launch.
-        if (!ModelFormat.isLiteRtLm(File(modelPath))) {
-            Log.w(TAG, "Not loading $modelPath: not a LiteRT-LM bundle")
-            _state.value = State.Failed("The model file isn't a LiteRT-LM model. Replace it under Settings \u2192 Model.")
+        ModelFormat.problem(File(modelPath), ModelFormat.Kind.CHAT)?.let { problem ->
+            Log.w(TAG, "Not loading $modelPath: $problem")
+            val what = if (problem == ModelFormat.NOT_A_MODEL) "isn't a LiteRT-LM model" else "isn't a chat model"
+            _state.value = State.Failed("The installed model $what. Replace it under Settings \u2192 Model.")
             return@withLock null
         }
 

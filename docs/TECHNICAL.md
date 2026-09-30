@@ -158,10 +158,13 @@ The embedder is optional and installed under Settings → Model and memory searc
 is **EmbeddingGemma 300M**: on public per-language benchmarks it retrieves clearly better than the
 alternatives in English, Hindi, romanized Hindi, Malayalam, Tamil and Telugu. Google does not
 publish it in a form LiteRT-LM's `EmbeddingEngine` loads, so it is built from the original weights
-with `tools/embedder` (see its README; about 15 minutes on a Mac) and loaded from storage. As a
-no-account alternative the screen downloads
+with `tools/embedder` (see its README; about 15 minutes on a Mac) and published on this
+repository's GitHub release `models-v1` (333,151,761 bytes; the app checks its SHA-256). It
+downloads by itself right after the first chat model is installed
+(`AppContainer.fetchEmbedderAfterFirstModel`), and from the screen above; no account needed.
 [Granite Embedding 311M multilingual](https://huggingface.co/litert-community/granite-embedding-311m-multilingual-r2)
-(332 MB, Apache-2.0). Without either, recall still works on keywords and rare words.
+(332 MB, Apache-2.0), the download before that, still works when imported. Without either, recall
+still works on keywords and rare words.
 
 EmbeddingGemma's similarities run lower than the usual 0.6 rule of thumb: calibrated on 60
 labelled pairs (`tools/embedder/calibrate_threshold.py`), its inject threshold is 0.42 — 73% of

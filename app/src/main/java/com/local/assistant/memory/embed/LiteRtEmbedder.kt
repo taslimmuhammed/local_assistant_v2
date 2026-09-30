@@ -93,8 +93,8 @@ class LiteRtEmbedder(
         close()
         if (!target.file.isFile) return null
         // Handed anything else, the runtime can take the app down with it (ModelFormat).
-        if (!ModelFormat.isLiteRtLm(target.file)) {
-            Log.w(TAG, "Not loading ${target.file.name}: not a LiteRT-LM bundle")
+        ModelFormat.problem(target.file, ModelFormat.Kind.EMBEDDER)?.let { problem ->
+            Log.w(TAG, "Not loading ${target.file.name}: $problem")
             return null
         }
         return try {

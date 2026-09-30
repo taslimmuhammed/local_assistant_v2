@@ -22,6 +22,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.local.assistant.memory.embed.BundledEmbedder
@@ -44,9 +45,36 @@ class MemorySearchControls(
     val bundledName: String = "",
     val downloadName: String,
     val downloadBytes: Long,
+    /** The full name of what the download installs, as [installedName] then reports it. */
+    val downloadModelName: String = "",
     /** Unloads and deletes the embedder. */
     val delete: suspend () -> Unit,
 )
+
+/**
+ * What the Gemma Terms of Use ask of anyone passing on a Gemma model: the notice, and the terms
+ * and the use policy to hand. Links, not copies: the app is installed from GitHub, not a store.
+ */
+@Composable
+private fun GemmaNotice() {
+    val uriHandler = LocalUriHandler.current
+    Column(Modifier.padding(top = 12.dp)) {
+        Text(
+            text = "EmbeddingGemma: Gemma is provided under and subject to the Gemma Terms of Use found at " +
+                "ai.google.dev/gemma/terms. This copy was converted to LiteRT-LM's format with 8-bit weights. " +
+                "Its use is subject to the Gemma Prohibited Use Policy.",
+            style = MaterialTheme.typography.bodySmall,
+            color = AppColors.TextSecondary,
+        )
+        Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+            TextButton(onClick = { runCatching { uriHandler.openUri(GEMMA_TERMS) } }) { Text("Terms of Use") }
+            TextButton(onClick = { runCatching { uriHandler.openUri(GEMMA_POLICY) } }) { Text("Prohibited Use Policy") }
+        }
+    }
+}
+
+private const val GEMMA_TERMS = "https://ai.google.dev/gemma/terms"
+private const val GEMMA_POLICY = "https://ai.google.dev/gemma/prohibited_use_policy"
 
 /**
  * The embedding model, optional: without it recall still works on exact words (names, numbers,
@@ -177,15 +205,18 @@ fun MemorySearchSection(controls: MemorySearchControls) {
                     )
                 }
                 Text(
-                    text = "EmbeddingGemma finds more, especially in Indian languages, but has to be " +
-                        "built on a computer (tools/embedder) and loaded from storage. The download " +
-                        "needs no account. Changing model re-indexes past conversations.",
+                    text = "It downloads by itself after the chat model, from this app's GitHub release, " +
+                        "with no account. Changing model re-indexes past conversations.",
                     style = MaterialTheme.typography.bodyMedium,
                     color = AppColors.TextSecondary,
                     modifier = Modifier.padding(top = 8.dp),
                 )
             }
         }
+
+        // Offered, on its way or installed, EmbeddingGemma comes with its licence's notice.
+        val gemma = transfer != null || current == null || controls.installedName() == controls.downloadModelName
+        if (gemma && bundled !is BundledEmbedder.State.Ready) GemmaNotice()
 
         error?.let {
             Text(

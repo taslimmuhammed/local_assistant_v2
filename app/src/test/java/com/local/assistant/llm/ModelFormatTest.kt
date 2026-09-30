@@ -1,6 +1,8 @@
 package com.local.assistant.llm
 
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
@@ -43,6 +45,30 @@ class ModelFormatTest {
         val start = realHeader().copyOf(ModelFormat.PREFIX_BYTES)
         assertFalse(ModelFormat.startsLikeLiteRtLm(start, size = 100))
         assertFalse(ModelFormat.isLiteRtLm(folder.newFile().apply { writeBytes(start) }))
+    }
+
+    /** The real EmbeddingGemma header, all 608 bytes of it (no weights). */
+    private fun embedderHeader() = javaClass.getResource("/litertlm/embeddinggemma-300m-header.bin")!!.readBytes()
+
+    @Test
+    fun `the chat model is accepted as the chat model, and refused as the search model`() {
+        val gemma = folder.newFile().apply { writeBytes(realHeader()) }
+        assertNull(ModelFormat.problem(gemma, ModelFormat.Kind.CHAT))
+        assertEquals(ModelFormat.Kind.EMBEDDER.wrongKind, ModelFormat.problem(gemma, ModelFormat.Kind.EMBEDDER))
+    }
+
+    @Test
+    fun `the embedding model is accepted for search, and refused as the chat model, which aborted the runtime`() {
+        val embedder = folder.newFile().apply { writeBytes(embedderHeader()) }
+        assertNull(ModelFormat.problem(embedder, ModelFormat.Kind.EMBEDDER))
+        assertEquals(ModelFormat.Kind.CHAT.wrongKind, ModelFormat.problem(embedder, ModelFormat.Kind.CHAT))
+    }
+
+    @Test
+    fun `a file that isn't LiteRT-LM at all gets the plain message whichever kind was wanted`() {
+        val junk = folder.newFile().apply { writeBytes(Random(7).nextBytes(4096)) }
+        assertEquals(ModelFormat.NOT_A_MODEL, ModelFormat.problem(junk, ModelFormat.Kind.CHAT))
+        assertEquals(ModelFormat.NOT_A_MODEL, ModelFormat.problem(junk, ModelFormat.Kind.EMBEDDER))
     }
 
     @Test

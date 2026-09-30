@@ -27,8 +27,19 @@ class EmbedderCatalogTest {
     }
 
     @Test
-    fun graniteIsTheDownloadAndUsesBareText() {
-        assertSame(EmbedderCatalog.GRANITE, EmbedderCatalog.DEFAULT)
+    fun embeddingGemmaIsTheDownloadFromTheReleaseWithItsChecksum() {
+        assertSame(EmbedderCatalog.EMBEDDING_GEMMA, EmbedderCatalog.DEFAULT)
+        assertEquals(
+            "https://github.com/taslimmuhammed/local_assistant_v2/releases/download/models-v1/embeddinggemma-300m_wi8.litertlm",
+            EmbedderCatalog.DEFAULT.downloadUrl,
+        )
+        assertEquals(333_151_761L, EmbedderCatalog.FILE.sizeBytes)
+        assertEquals(64, EmbedderCatalog.FILE.sha256?.length)
+    }
+
+    @Test
+    fun graniteIsStillRecognisedAndUsesBareText() {
+        assertSame(EmbedderCatalog.GRANITE, EmbedderCatalog.byKey(EmbedderCatalog.GRANITE.key))
         assertSame(EmbedderCatalog.GRANITE, EmbedderCatalog.forImport("granite-embedding-311m-r2_wi8fc.litertlm"))
         assertEquals("", EmbedderCatalog.GRANITE.queryPrefix)
         assertTrue(EmbedderCatalog.GRANITE.modelId.endsWith("@256"))

@@ -465,7 +465,7 @@ private fun ModelLicences() {
         ),
     )
     Entry(
-        "Granite Embedding 311M (optional download)",
+        "Granite Embedding 311M (if imported)",
         "By IBM, in LiteRT-LM format. Apache License 2.0.",
         listOf("Apache License 2.0" to "https://www.apache.org/licenses/LICENSE-2.0"),
     )

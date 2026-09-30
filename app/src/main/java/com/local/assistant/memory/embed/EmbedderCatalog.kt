@@ -1,5 +1,6 @@
 package com.local.assistant.memory.embed
 
+import com.local.assistant.llm.ModelFormat
 import com.local.assistant.model.ModelFile
 import java.util.Locale
 
@@ -32,8 +33,9 @@ object EmbedderCatalog {
     /**
      * IBM's Granite Embedding 311M multilingual R2, as published by litert-community for
      * `EmbeddingEngine` (int8, 64–512 token signatures, 768-d with Matryoshka truncation).
-     * Apache-2.0 and not gated, so it downloads without an account. Bare text on both sides: its
-     * card measured that a prefix hurts retrieval.
+     * Apache-2.0. It was the download until EmbeddingGemma was published; still recognised for
+     * the installs made then, and when imported. Bare text on both sides: its card measured that
+     * a prefix hurts retrieval.
      */
     val GRANITE = EmbedderSpec(
         key = "granite-311m-r2-wi8fc",
@@ -46,8 +48,10 @@ object EmbedderCatalog {
     /**
      * Google's EmbeddingGemma 300M, the better of the two for this app's languages (see
      * `tools/embedder/README.md` for the comparison). Google ships it for LiteRT only as a gated
-     * `.tflite` that `EmbeddingEngine` cannot load, so there is no download: the bundle is built
-     * from the original weights with `tools/embedder` and imported. Recognised by its file name.
+     * `.tflite` that `EmbeddingEngine` cannot load, so the bundle is built from the original
+     * weights with `tools/embedder` and published on this repository's GitHub release
+     * [MODELS_RELEASE], under the Gemma Terms of Use (`embedder_pack/.../NOTICE.txt`): a plain
+     * download, no account. Also recognised by its file name when imported.
      *
      * Its similarities sit lower than the brief's 0.6 assumed: on 60 labelled pairs through this
      * bundle, as the app scores them (`tools/embedder/calibrate_threshold.py`), related pairs had
@@ -57,22 +61,26 @@ object EmbedderCatalog {
     val EMBEDDING_GEMMA = EmbedderSpec(
         key = "embeddinggemma-300m-wi8",
         displayName = "EmbeddingGemma 300M",
-        downloadUrl = null,
-        sizeBytes = 0,
-        sha256 = null,
+        downloadUrl = "https://github.com/taslimmuhammed/local_assistant_v2/releases/download/$MODELS_RELEASE/$EMBEDDING_GEMMA_FILE",
+        sizeBytes = 333_151_761L,
+        sha256 = "fe1674877f9b47730b017c32863cda073bb2c125a9f86b9e2e06617a848c6234",
         queryPrefix = GEMMA_QUERY,
         documentPrefix = GEMMA_DOCUMENT,
         similarityThreshold = 0.42f,
     )
 
-    /** What is offered for download: the only one of the two that can be. */
-    val DEFAULT = GRANITE
+    /** What is downloaded: after the chat model by itself, or from Settings. */
+    val DEFAULT = EMBEDDING_GEMMA
+
+    /** The GitHub release the models are published on. */
+    const val MODELS_RELEASE = "models-v1"
 
     /**
      * The embedder on disk. Stored under one name whichever bundle it is (the settings remember
      * which), in a directory of its own so the chat model's leftover cleanup never touches it.
      */
     val FILE = ModelFile(
+        kind = ModelFormat.Kind.EMBEDDER,
         fileName = "embedder.litertlm",
         downloadUrl = DEFAULT.downloadUrl,
         sizeBytes = DEFAULT.sizeBytes,
@@ -113,8 +121,8 @@ object EmbedderCatalog {
     private const val IMPORTED = "import:"
     private const val GRANITE_FILE = "granite-embedding-311m-r2_wi8fc.litertlm"
 
-    /** What `tools/embedder/convert_embeddinggemma.py` names its bundle. */
-    private const val EMBEDDING_GEMMA_FILE = "embeddinggemma-300m_wi8.litertlm"
+    /** What `tools/embedder/convert_embeddinggemma.py` names its bundle, and the release asset. */
+    const val EMBEDDING_GEMMA_FILE = "embeddinggemma-300m_wi8.litertlm"
 }
 
 /** EmbeddingGemma's task prompts for retrieval, from its model card and sentence-transformers config. */

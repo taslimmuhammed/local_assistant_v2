@@ -1,5 +1,6 @@
 package com.local.assistant.model
 
+import com.local.assistant.llm.ModelFormat
 /**
  * The single model this app runs. Everything about it lives here so swapping or adding models
  * later means touching one file.
@@ -34,6 +35,7 @@ object ModelCatalog {
     const val FILE_EXTENSION = ".litertlm"
 
     val FILE = ModelFile(
+        kind = ModelFormat.Kind.CHAT,
         fileName = FILE_NAME,
         downloadUrl = DOWNLOAD_URL,
         sizeBytes = SIZE_BYTES,

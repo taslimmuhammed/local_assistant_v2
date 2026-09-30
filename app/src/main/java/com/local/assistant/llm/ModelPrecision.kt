@@ -54,10 +54,26 @@ object ModelPrecision {
     /** What [file]'s text decoder asks for ("fp16", "fp32"…), or null if it doesn't say. */
     fun textDecoderPrecision(file: File): String? = RandomAccessFile(file, "r").use { find(it)?.value }
 
+    /**
+     * The `model_type` of each of [file]'s sections: "tf_lite_prefill_decode" for a chat
+     * model's text decoder, "tf_lite_text_encoder" for an embedding model's encoder, and so on.
+     * Null when the header can't be read.
+     */
+    fun sectionTypes(file: File): Set<String>? = runCatching {
+        RandomAccessFile(file, "r").use { raf -> header(raf)?.let { Header(it).modelTypes() } }
+    }.getOrNull()
+
     private class Found(val value: String, val offset: Long)
 
     /** The text decoder's `prefer_activation_type` string and where its bytes are in the file. */
     private fun find(raf: RandomAccessFile): Found? {
+        val header = header(raf) ?: return null
+        return runCatching { Header(header).textDecoderPreference() }.getOrNull()
+            ?.let { (value, at) -> Found(value, HEADER_BEGIN + at.toLong()) }
+    }
+
+    /** The FlatBuffer header's bytes, or null when this isn't a LiteRT-LM file. */
+    private fun header(raf: RandomAccessFile): ByteArray? {
         if (raf.length() < HEADER_BEGIN) return null
         val start = ByteArray(HEADER_BEGIN)
         raf.seek(0)
@@ -65,10 +81,7 @@ object ModelPrecision {
         if (String(start, 0, MAGIC.length, Charsets.US_ASCII) != MAGIC) return null
         val end = ByteBuffer.wrap(start, HEADER_END_AT, 8).order(ByteOrder.LITTLE_ENDIAN).long
         if (end <= HEADER_BEGIN || end > minOf(raf.length(), MAX_HEADER.toLong())) return null
-        val header = ByteArray((end - HEADER_BEGIN).toInt())
-        raf.readFully(header)
-        return runCatching { Header(header).textDecoderPreference() }.getOrNull()
-            ?.let { (value, at) -> Found(value, HEADER_BEGIN + at.toLong()) }
+        return ByteArray((end - HEADER_BEGIN).toInt()).also(raf::readFully)
     }
 
     /** Just enough FlatBuffer reading for `LiteRTLMMetaData` (litertlm_header_schema.fbs). */
@@ -85,6 +98,14 @@ object ModelPrecision {
                 return items.firstOrNull { it.first == PREFER_ACTIVATION_TYPE }?.second?.let(::stringValue)
             }
             return null
+        }
+
+        /** Every section's `model_type` string. */
+        fun modelTypes(): Set<String> {
+            val sections = table(indirect(0), ROOT_SECTION_METADATA) ?: return emptySet()
+            return vector(sections, SECTIONS_OBJECTS).mapNotNull { section ->
+                vector(section, SECTION_ITEMS).firstOrNull { key(it) == MODEL_TYPE }?.let { stringValue(it)?.first }
+            }.toSet()
         }
 
         private fun u32(at: Int) = buf.getInt(at)
