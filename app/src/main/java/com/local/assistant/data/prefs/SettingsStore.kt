@@ -134,6 +134,15 @@ class SettingsStore(context: Context) {
         get() = prefs.getString(KEY_SYSTEM_PROMPT, DEFAULT_SYSTEM_PROMPT) ?: DEFAULT_SYSTEM_PROMPT
         set(value) = prefs.edit { putString(KEY_SYSTEM_PROMPT, value) }
 
+    /**
+     * Keep the model loaded, and the app alive, while in the background, so the power button
+     * answers in about a second rather than after a ~15 s cold start. Costs the memory the model
+     * holds, and a silent notification (the foreground service that keeps the app alive).
+     */
+    var keepAssistantReady: Boolean
+        get() = prefs.getBoolean(KEY_KEEP_READY, true)
+        set(value) = prefs.edit { putBoolean(KEY_KEEP_READY, value) }
+
     /** The assistant overlay reads its answer aloud when it was asked by voice. */
     var speakReplies: Boolean
         get() = prefs.getBoolean(KEY_SPEAK_REPLIES, true)
@@ -192,6 +201,7 @@ class SettingsStore(context: Context) {
         private const val KEY_REPETITION_PENALTY = "repetition_penalty"
         private const val KEY_REPETITION_WINDOW = "repetition_window"
         private const val KEY_SPEAK_REPLIES = "speak_replies"
+        private const val KEY_KEEP_READY = "keep_assistant_ready"
         private const val KEY_ASSISTANT_VOICE = "assistant_voice"
         private const val KEY_SPEECH_RATE = "speech_rate"
 

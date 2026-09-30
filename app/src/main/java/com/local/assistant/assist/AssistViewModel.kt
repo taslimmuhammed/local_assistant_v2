@@ -156,6 +156,10 @@ class AssistViewModel(
 
     init {
         llm.warmUp()
+        // The first message here always starts a new chat, whose conversation has to read the
+        // whole system prompt first (3.4 s on the phone, 6 s just after the model loads). Do it
+        // now, while the user is still talking; the first message then takes it over.
+        conversations.prepareFresh()
 
         // Speak each sentence as soon as it is complete.
         viewModelScope.launch {

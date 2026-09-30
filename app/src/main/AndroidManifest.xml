@@ -23,6 +23,11 @@
          button — so neither CALL_PHONE nor SEND_SMS is needed. -->
     <uses-permission android:name="android.permission.READ_CONTACTS" />
 
+    <!-- "Keep the assistant ready": a foreground service holds the app, and the loaded model,
+         in memory so the power button answers at once. Off in Settings, and it stops. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+
     <!-- "Turn on Do Not Disturb": the user still has to allow it in Settings. -->
     <uses-permission android:name="android.permission.ACCESS_NOTIFICATION_POLICY" />
 
@@ -103,6 +108,15 @@
                 <category android:name="android.intent.category.DEFAULT" />
             </intent-filter>
         </activity>
+
+        <service
+            android:name=".assist.KeepReadyService"
+            android:exported="false"
+            android:foregroundServiceType="specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="Keeps the on-device assistant model loaded so holding the power button gets an answer at once" />
+        </service>
 
         <receiver android:name=".reminders.ReminderReceiver" android:exported="false" />
         <receiver android:name=".reminders.ReminderActionReceiver" android:exported="false" />

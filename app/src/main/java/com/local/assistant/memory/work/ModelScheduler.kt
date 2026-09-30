@@ -26,9 +26,13 @@ class ModelScheduler(private val clock: () -> Long = System::currentTimeMillis) 
     enum class Priority {
         USER_GENERATION,
         QUERY_EMBEDDING,
+        /** A conversation made ready for the next new chat: the user is probably about to ask. */
+        WARM_UP,
         COMPACTION,
         EMBEDDING_BACKLOG,
         NIGHTLY,
+        /** Getting ready for a question that may come later: only once nothing else wants the model. */
+        IDLE_WARM_UP,
     }
 
     private class Waiter(val priority: Priority, val seq: Long) {

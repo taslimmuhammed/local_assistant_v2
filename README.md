@@ -546,6 +546,31 @@ How it fits together:
   that line and 32/32 without. `OverlayToolsEvalTest` sends a voice clip through the overlay's
   own path and checks the tool call is made.
 
+**Answering quickly.** Measured on the phone (`AssistLatencyEvalTest`, a voice question, time
+from sending to the first word):
+
+| Situation | First word |
+|---|---|
+| Model not loaded (the app was trimmed or killed) | 15.8 s: 8.6 s loading, 5.7 s reading the prompt |
+| Model loaded, new chat, prompt read after the question | 4.3 s: 3.4 s reading the 2,563-token prompt |
+| Model loaded, prompt read beforehand | 0.9 s |
+| Follow-up in the same chat | 0.8 s |
+
+So the model answers in under a second; the waiting was loading it and reading the prompt
+(instructions, tool declarations, profile, agenda) for every new chat. Two things remove it:
+
+- `ConversationManager.prepareFresh` opens and prefills a conversation for a chat not begun yet,
+  and a new chat's first message takes it over if its prompt still matches. The overlay asks for
+  it as it opens, so the prefill runs while the user talks; with the assistant kept ready, it is
+  also done a minute after the app goes to the background, and 30 s after background model work
+  (summaries, extraction) closed it. Only one conversation ever exists, so a chat left open in the
+  app is rebuilt when the user returns to it.
+- **Keep the assistant ready** (Settings → Assistant, on by default): the model isn't released
+  when the app goes to the background, and `assist/KeepReadyService`, a foreground service with a
+  silent notification, keeps the process alive and unfrozen (OxygenOS freezes cached apps). It
+  holds about 1.8 GB (PSS measured 1.7–1.9 GB). Off, the model goes as before, and a cold press
+  takes ~11 s after the question.
+
 **The voice** is the phone's own text-to-speech engine (`voice/Speaker`), restricted to voices
 that are installed and run offline, in the phone's language or English (`voice/VoiceChoice`). By
 default it is the engine's default voice; Settings → Assistant lists the others (tap one to hear

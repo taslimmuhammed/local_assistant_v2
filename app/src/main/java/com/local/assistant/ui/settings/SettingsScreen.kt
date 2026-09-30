@@ -58,6 +58,7 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.repeatOnLifecycle
 import com.local.assistant.assist.AssistantRole
+import com.local.assistant.assist.KeepReadyService
 import com.local.assistant.data.prefs.SettingsStore
 import com.local.assistant.llm.LlmService
 import com.local.assistant.model.ModelCatalog
@@ -124,7 +125,7 @@ fun SettingsScreen(
 
             SectionDivider()
             SectionHeader("Assistant")
-            AssistantSettings(settings, speaker)
+            AssistantSettings(settings, speaker, llmService)
 
             SectionDivider()
             SectionHeader("Web search")
@@ -214,7 +215,7 @@ private fun ContextWindow(llmService: LlmService, settings: SettingsStore) {
  * grant, so this only says whether it is and opens the page where it's chosen.
  */
 @Composable
-private fun AssistantSettings(settings: SettingsStore, speaker: Speaker) {
+private fun AssistantSettings(settings: SettingsStore, speaker: Speaker, llmService: LlmService) {
     val context = LocalContext.current
     val lifecycle = LocalLifecycleOwner.current.lifecycle
     var isAssistant by remember { mutableStateOf(AssistantRole.isDefault(context)) }
@@ -237,6 +238,30 @@ private fun AssistantSettings(settings: SettingsStore, speaker: Speaker) {
             color = AppColors.TextSecondary,
             modifier = Modifier.padding(horizontal = 16.dp),
         )
+    }
+
+    var keepReady by remember { mutableStateOf(settings.keepAssistantReady) }
+    Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+        Column(Modifier.weight(1f)) {
+            Text("Keep the assistant ready", style = MaterialTheme.typography.bodyLarge, color = AppColors.TextPrimary)
+            Text(
+                "Keeps the model loaded so the power button answers in about a second, instead of about 15 seconds after the phone has put the app away. " +
+                    "Holds about $KEEP_READY_MEMORY of memory and shows a silent notification.",
+                style = MaterialTheme.typography.bodySmall,
+                color = AppColors.TextSecondary,
+            )
+        }
+        Switch(checked = keepReady, onCheckedChange = {
+            keepReady = it
+            settings.keepAssistantReady = it
+            if (it) {
+                KeepReadyService.start(context)
+                llmService.warmUp()
+            } else {
+                // The model goes the next time Android asks for memory back, as before.
+                KeepReadyService.stop(context)
+            }
+        })
     }
 
     var speak by remember { mutableStateOf(settings.speakReplies) }
@@ -333,6 +358,9 @@ private fun AssistantSettings(settings: SettingsStore, speaker: Speaker) {
         )
     }
 }
+
+/** What keeping the model loaded costs: the app's PSS on the test phone (fp32 decoder, 8K), AssistLatencyEvalTest. */
+private const val KEEP_READY_MEMORY = "1.8 GB"
 
 /** The system's text-to-speech page, where engines and voice data are installed. */
 private fun openTextToSpeechSettings(context: android.content.Context) {

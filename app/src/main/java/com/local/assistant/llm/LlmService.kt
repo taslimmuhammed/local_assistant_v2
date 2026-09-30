@@ -1,6 +1,7 @@
 package com.local.assistant.llm
 
 import android.content.Context
+import android.os.SystemClock
 import android.util.Log
 import com.google.ai.edge.litertlm.Backend
 import com.google.ai.edge.litertlm.Capabilities
@@ -160,6 +161,7 @@ class LlmService(
         }
 
         _state.value = State.Loading
+        val loadStarted = SystemClock.elapsedRealtime()
         // Before the engine opens the file: fp32 for the text decoder, or digits garble past token 2,048.
         val precision = withContext(Dispatchers.IO) {
             runCatching {
@@ -214,6 +216,7 @@ class LlmService(
                     visionTokensPerImage = visionTokensPerImage,
                 )
                 _state.value = State.Ready(attempt.label, tokens)
+                Log.i(TAG, "Loaded ${attempt.label} at $tokens tokens in ${SystemClock.elapsedRealtime() - loadStarted} ms")
                 return@withLock loaded
             }
         }

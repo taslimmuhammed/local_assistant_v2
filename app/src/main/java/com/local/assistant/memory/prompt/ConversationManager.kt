@@ -1,5 +1,6 @@
 package com.local.assistant.memory.prompt
 
+import android.os.SystemClock
 import android.util.Log
 import com.local.assistant.data.db.MessageEntity
 import com.local.assistant.data.db.Role
@@ -73,6 +74,8 @@ class ConversationManager(
     private val summarizer: Summarizer? = null,
     private val zone: () -> ZoneId = ZoneId::systemDefault,
     private val clock: () -> Long = System::currentTimeMillis,
+    /** A one-shot job ([withModelFree]) closed the live conversation and is done with the model. */
+    private val onModelFreed: () -> Unit = {},
 ) : ModelAccess {
 
     /**
@@ -130,6 +133,13 @@ class ConversationManager(
     private var seed = 0
     private var maintenance: Job? = null
 
+    /** A pending or running [prepareFresh]. */
+    private var freshJob: Job? = null
+
+    /** Turns started so far, so a [prepareFresh] can tell that a message went ahead of it. */
+    @Volatile
+    private var turnsStarted = 0L
+
     private val _droppedFromContext = MutableStateFlow(0)
 
     /** How many stored messages of the current chat did not fit its conversation. */
@@ -157,6 +167,7 @@ class ConversationManager(
         // A rebuild still waiting for a quiet spell is moot now; one already running has finished
         // by the time we hold the lock.
         maintenance?.cancel()
+        turnsStarted++
         check(backend.ensureReady()) { "The model is not loaded." }
         val capabilities = checkNotNull(backend.capabilities) { "The model is not loaded." }
         val budget = MemoryBudget.forWindow(capabilities.maxContextTokens)
@@ -169,7 +180,7 @@ class ConversationManager(
                 it.lastMessageId == (history.lastOrNull()?.id ?: 0L) &&
                 it.budget == budget &&
                 it.session.isAlive
-        }
+        } ?: adoptFresh(chatId, history, budget, capabilities)
         var current: Live = reusable ?: run {
             _contextUsage.value = null
             rebuild(chatId, history, budget, capabilities)
@@ -319,6 +330,74 @@ class ConversationManager(
         live?.takeIf { it.chatId == chatId }?.let(::close)
     }
 
+    /**
+     * Opens a conversation for a chat not begun yet and prefills it, so that a new chat's first
+     * reply only has to read the message. The prefix — instructions, tool declarations, profile,
+     * agenda: ~2,500 tokens — takes 3.4 s to prefill on the phone (6 s right after the engine
+     * loads), while the reply after it starts in under a second (AssistLatencyEvalTest).
+     *
+     * Called as the assistant overlay opens, since its first message always starts a new chat,
+     * so the prefill runs while the user is still talking; and, with the assistant kept ready,
+     * once the app has been away a while, for the next time. It takes the place of the live
+     * conversation — there is only ever one — so a chat left open in the app is rebuilt when the
+     * user goes back to it. [delayMs] waits first, and [stillWanted] is asked after the wait;
+     * [priority] places it among the other background model work. Loads the engine if it isn't
+     * loaded. The job is returned for evals to wait on.
+     */
+    fun prepareFresh(
+        delayMs: Long = 0,
+        priority: ModelScheduler.Priority = ModelScheduler.Priority.WARM_UP,
+        stillWanted: () -> Boolean = { true },
+    ): Job {
+        freshJob?.cancel()
+        val askedAfter = turnsStarted
+        return scope.launch {
+            if (delayMs > 0) delay(delayMs)
+            if (!stillWanted() || !backend.ensureReady()) return@launch
+            scheduler.runBackground(priority) {
+                mutex.withLock {
+                    // A message went first — while the model loaded, say — and has its own
+                    // conversation now. Replacing it would only make the next message wait
+                    // (measured: a follow-up took 4.6 s instead of 0.8 s).
+                    if (turnsStarted != askedAfter) return@withLock
+                    val capabilities = backend.capabilities ?: return@withLock
+                    val budget = MemoryBudget.forWindow(capabilities.maxContextTokens)
+                    val current = live
+                    if (current != null && current.chatId == FRESH && current.budget == budget && current.session.isAlive &&
+                        prefixText(FRESH, budget, capabilities) == current.acknowledgedPrefix
+                    ) {
+                        return@withLock
+                    }
+                    // Like a rebuild after a reply: once the prefill starts it finishes.
+                    withContext(NonCancellable) { rebuild(FRESH, emptyList(), budget, capabilities) }
+                    Log.i(TAG, "A conversation is ready for the next new chat")
+                }
+            }
+        }.also { freshJob = it }
+    }
+
+    /**
+     * A new chat's first turn takes over the conversation [prepareFresh] made — if it is still
+     * what this chat would be built with (a fact saved since, or a new day's agenda, would have
+     * changed the prefix). Must hold [mutex].
+     */
+    private suspend fun adoptFresh(chatId: Long, history: List<MessageEntity>, budget: MemoryBudget, capabilities: BackendCapabilities): Live? {
+        val fresh = live?.takeIf { it.chatId == FRESH && history.isEmpty() && it.budget == budget && it.session.isAlive } ?: return null
+        if (prefixText(chatId, budget, capabilities) != fresh.acknowledgedPrefix) return null
+        Log.i(TAG, "Chat $chatId starts in the conversation made ready for it")
+        return Live(
+            chatId = chatId,
+            session = fresh.session,
+            budget = budget,
+            acknowledgedPrefix = fresh.acknowledgedPrefix,
+            lastMessageId = 0L,
+            windowStartId = fresh.windowStartId,
+        ).also { live = it }
+    }
+
+    private suspend fun prefixText(chatId: Long, budget: MemoryBudget, capabilities: BackendCapabilities): String =
+        assemblerFor(budget, capabilities).buildPrefix(prefixInputs(chatId, budget)).text
+
     /** Drops the conversation for [chatId], e.g. after its messages were deleted. */
     suspend fun forget(chatId: Long) = mutex.withLock {
         live?.takeIf { it.chatId == chatId }?.let(::close)
@@ -430,7 +509,11 @@ class ConversationManager(
     override suspend fun <T> withModelFree(block: suspend () -> T): T = mutex.withLock {
         live?.let(::close)
         _contextUsage.value = null
-        block()
+        try {
+            block()
+        } finally {
+            onModelFreed()
+        }
     }
 
     /**
@@ -466,7 +549,10 @@ class ConversationManager(
                 maxOutputTokens = minOf(settings.maxOutputTokens, budget.generationReserve),
                 prefillOnOpen = true,
             )
-            return plan to backend.openChat(spec)
+            val opening = SystemClock.elapsedRealtime()
+            return (plan to backend.openChat(spec)).also {
+                Log.i(TAG, "Opened chat $chatId: ${plan.totalTokens} tokens planned, prefilled in ${SystemClock.elapsedRealtime() - opening} ms")
+            }
         }
 
         val (plan, session) = try {
@@ -559,6 +645,9 @@ class ConversationManager(
 
     private companion object {
         const val TAG = "ConversationManager"
+
+        /** The chat id of a conversation made ready for a chat not begun yet ([prepareFresh]). */
+        const val FRESH = -1L
 
         /** How long a chat must be quiet after a reply before an idle rebuild may start. */
         const val IDLE_BEFORE_REBUILD_MS = 30_000L

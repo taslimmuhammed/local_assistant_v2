@@ -15,6 +15,7 @@ import com.local.assistant.llm.LiteRtLmBackend
 import com.local.assistant.llm.LlmBackend
 import com.local.assistant.llm.LlmService
 import com.local.assistant.llm.ToolCallRepair
+import com.local.assistant.assist.KeepReadyService
 import com.local.assistant.chat.ChatSender
 import com.local.assistant.media.AttachmentStore
 import com.local.assistant.media.AudioRecorder
@@ -89,15 +90,33 @@ class AppContainer(context: Context) {
 
     val settings = SettingsStore(context)
 
+    private val appContext: Context = context.applicationContext
+
     /** Coming to the foreground warms the engines, so they are usually ready by the first send. */
     val appForeground: AppForeground = AppForeground(
         onForeground = {
             backgroundJobs.onForeground()
             if (settings.modelPath != null) llmService.warmUp()
             embeddingQueue.kick()
+            // Started while visible, as Android requires; from then on it keeps the app alive.
+            if (settings.keepAssistantReady && settings.modelPath != null) KeepReadyService.start(appContext)
         },
-        onBackground = { backgroundJobs.onBackground() },
+        onBackground = {
+            backgroundJobs.onBackground()
+            // Away for a while: have the next new chat's conversation ready, so the power button
+            // is answered at once. Not straight away: a quick trip out and back finds its chat
+            // still open.
+            if (settings.keepAssistantReady) prepareForNextAsk(AWAY_BEFORE_PREPARING_MS)
+        },
     )
+
+    /** With the assistant kept ready and the app out of sight: a conversation for the next new chat. */
+    private fun prepareForNextAsk(delayMs: Long) {
+        // Behind any other background work: the nightly job's batches each close the conversation.
+        conversations.prepareFresh(delayMs, ModelScheduler.Priority.IDLE_WARM_UP) {
+            settings.keepAssistantReady && !appForeground.isForeground
+        }
+    }
 
     val backgroundJobs = BackgroundJobs(context)
 
@@ -195,6 +214,8 @@ class AppContainer(context: Context) {
         webSearch = { webSearch.enabled },
         retriever = retriever,
         summarizer = summarizer,
+        // A background summary or extraction closed it: make it ready again.
+        onModelFreed = { if (settings.keepAssistantReady && !appForeground.isForeground) prepareForNextAsk(AFTER_MODEL_WORK_MS) },
     )
 
     val embeddingQueue: EmbeddingQueue = EmbeddingQueue(
@@ -360,7 +381,7 @@ class AppContainer(context: Context) {
             }
         },
         releaseModel = {
-            if (!appForeground.isForeground) {
+            if (!appForeground.isForeground && !settings.keepAssistantReady) {
                 llmService.unload()
                 embedder.unload()
             }
@@ -425,6 +446,15 @@ class AppContainer(context: Context) {
     }
 
     private companion object {
+        /** How long the app is away before the next new chat's conversation is prepared. */
+        const val AWAY_BEFORE_PREPARING_MS = 60_000L
+
+        /**
+         * After background model work closed the conversation, before preparing it again: long
+         * enough for a chain of such jobs (the nightly extraction's batches) to finish first.
+         */
+        const val AFTER_MODEL_WORK_MS = 30_000L
+
         /** At or below this, the embedder's ~0.5 GB is given back whenever it is idle. */
         const val SMALL_DEVICE_BYTES = 8L * 1024 * 1024 * 1024
 
@@ -451,12 +481,17 @@ class AssistantApplication : Application() {
     /**
      * The engine holds gigabytes. While the app is in use it stays loaded; once the app is in
      * the background and the system asks for memory back, it goes — the next visit to the
-     * foreground loads it again, and anything sent meanwhile waits for it.
+     * foreground loads it again, and anything sent meanwhile waits for it. Unless the assistant
+     * is kept ready (Settings): then it stays, since reloading costs ~9 s and re-reading the
+     * prompt ~6 s more before the power button's first answer.
      */
     override fun onTrimMemory(level: Int) {
         super.onTrimMemory(level)
         val background = level >= ComponentCallbacks2.TRIM_MEMORY_BACKGROUND
-        if (background && !container.appForeground.isForeground && !container.llmService.isGenerating) {
+        // Kept ready, the model stays: that is the point of the setting (and its foreground
+        // service keeps the app out of the cached list this is mostly about).
+        val keep = container.settings.keepAssistantReady
+        if (background && !keep && !container.appForeground.isForeground && !container.llmService.isGenerating) {
             container.speaker.release()
             container.appScope.launch {
                 container.llmService.unload()
