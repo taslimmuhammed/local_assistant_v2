@@ -8,7 +8,7 @@ It runs Google's Gemma 4 entirely on the device. It chats, listens, remembers yo
 and alarms, and answers when you hold the power button. No account, no server: nothing leaves the
 phone for it to think.
 
-<a href="https://github.com/taslimmuhammed/local_assistant_v2/raw/main/apk/LocalAssistant.apk"><img alt="Download the APK" src="https://img.shields.io/badge/Download_APK-v0.1.1_%C2%B7_26_MB-18181B?style=for-the-badge&logo=android&logoColor=white" height="44"></a>
+<a href="https://github.com/taslimmuhammed/local_assistant_v2/raw/main/apk/LocalAssistant.apk"><img alt="Download the APK" src="https://img.shields.io/badge/Download_APK-v0.1.2_%C2%B7_26_MB-18181B?style=for-the-badge&logo=android&logoColor=white" height="44"></a>
 
 Android 8 or newer · 64-bit phone · 8 GB of RAM or more · about 4.5 GB free
 
@@ -46,7 +46,8 @@ Android 8 or newer · 64-bit phone · 8 GB of RAM or more · about 4.5 GB free
      it stopped if interrupted.
    - **Load from device storage** uses a `.litertlm` model file you already have.
 
-Then just ask. The first answer takes a few seconds while the model loads.
+It then takes about 15 seconds to get ready (it loads the model and reads its instructions), and
+from then on answers right away.
 
 ### Use it from the power button
 
@@ -100,8 +101,8 @@ sqlite-vec):
 [docs/TECHNICAL.md](docs/TECHNICAL.md) explains how it all fits together: the memory system,
 tools, the power-button assistant, and the measurements behind each choice.
 
-**The download above** is `apk/LocalAssistant.apk`, version 0.1.1, SHA-256
-`cfa650df8989ed7b2c7b2ae944d03d6ffd6e55b6a08bf3c22a3653f6ad5d834f`. Rebuild it with:
+**The download above** is `apk/LocalAssistant.apk`, version 0.1.2, SHA-256
+`2840f9c1d662b507cf82e0701f3d11bade8f7d14e6c70fc5bd8ccbb5f34b054f`. Rebuild it with:
 
 ```bash
 ./gradlew :app:demoApk -Pdemo

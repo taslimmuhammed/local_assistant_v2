@@ -10,6 +10,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -22,6 +23,7 @@ import androidx.activity.compose.BackHandler
 import com.local.assistant.ui.chat.ChatViewModel
 import com.local.assistant.ui.settings.SettingsScreen
 import com.local.assistant.ui.setup.ModelScreen
+import com.local.assistant.ui.setup.PreparingScreen
 import com.local.assistant.ui.web.WebSearchScreen
 import com.local.assistant.ui.web.WebSearchViewModel
 import com.local.assistant.ui.theme.LocalAssistantTheme
@@ -89,6 +91,23 @@ private fun AppRoot(
     var profileAsked by remember { mutableStateOf(container.settings.profileAsked) }
     var webSearchAsked by remember { mutableStateOf(container.settings.webSearchAsked || container.webSearch.enabled) }
 
+    // A model installed in this run (the first download, or an import) is loaded, and the first
+    // chat's prompt read, before the chat opens: otherwise the first message waits ~15 s. A model
+    // that was already there at launch loads in the background, as before.
+    var hadModel by rememberSaveable { mutableStateOf(installed != null) }
+    var preparing by rememberSaveable { mutableStateOf(false) }
+    LaunchedEffect(installed != null) {
+        if (installed != null && !hadModel) {
+            preparing = true
+            try {
+                container.prepareFirstChat()
+            } finally {
+                preparing = false
+            }
+        }
+        hadModel = installed != null
+    }
+
     // The overlay's "Open in app": to the chat, from whichever screen the app was left on.
     LaunchedEffect(chatToOpen) {
         if (chatToOpen == null) return@LaunchedEffect
@@ -127,6 +146,11 @@ private fun AppRoot(
                 webSearchAsked = true
             },
         )
+        return
+    }
+
+    if (preparing) {
+        PreparingScreen(container.llmService)
         return
     }
 

@@ -75,6 +75,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.flow.first
 import com.local.assistant.memory.work.PrecisionUpgrade
 import java.io.File
@@ -409,6 +410,23 @@ class AppContainer(context: Context) {
         }
     }
 
+    /**
+     * The chat model was just installed (the first download, or an import): load it and read the
+     * first chat's prompt now, while the setup screen says so, instead of on the first message,
+     * which would otherwise wait ~15 s (a 9 s load, then 6 s reading the prompt; AssistLatencyEvalTest).
+     * Later launches load in the background, as before. Gives up after [FIRST_CHAT_READY_MS]
+     * rather than keep the user on the setup screen; the chat then carries on loading.
+     */
+    suspend fun prepareFirstChat() {
+        // Kept ready from the first model on: the service only starts in the foreground, which
+        // the app was in, with no model yet, when this launch began.
+        if (settings.keepAssistantReady) KeepReadyService.start(appContext)
+        withTimeoutOrNull(FIRST_CHAT_READY_MS) {
+            // Loads the engine, or tries again if an earlier attempt failed; false if it can't.
+            if (llmBackend.ensureReady()) conversations.prepareFresh().join()
+        }
+    }
+
     /** "Forget everything", including the nightly pass's place in the history. */
     suspend fun forgetEverything() = memoryControls.forgetEverything(skipExtractionTo = extractor::skipToEnd)
 
@@ -453,6 +471,9 @@ class AppContainer(context: Context) {
     }
 
     private companion object {
+        /** The longest the setup screen waits for the first chat to be ready. */
+        const val FIRST_CHAT_READY_MS = 90_000L
+
         /** How long the app is away before the next new chat's conversation is prepared. */
         const val AWAY_BEFORE_PREPARING_MS = 60_000L
 

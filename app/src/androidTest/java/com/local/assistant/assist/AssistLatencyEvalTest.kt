@@ -45,7 +45,11 @@ class AssistLatencyEvalTest {
     @Test
     fun firstWord() = runBlocking<Unit> {
         assumeTrue("opt-in: -e eval latency", InstrumentationRegistry.getArguments().getString("eval") == "latency")
-        val clip = File(context.getExternalFilesDir(null), "routing-voice/28.wav")
+        // Pushed with adb to the app's external files, or, where Android won't let the app read
+        // what the shell put there, written with run-as into its own files.
+        val clip = listOfNotNull(context.getExternalFilesDir(null), context.filesDir)
+            .map { File(it, "routing-voice/28.wav") }
+            .firstOrNull { it.isFile } ?: File(context.filesDir, "routing-voice/28.wav")
         assumeTrue("missing clip ${clip.path}", clip.isFile)
         try {
             // Without any preparation, as the overlay first shipped.
@@ -73,6 +77,14 @@ class AssistLatencyEvalTest {
             val chat = turn("F cold engine, prepared as it opens, voice after ${TALKING_MS / 1000} s", chatId = null, clip = clip)
             // A follow-up while the overlay is open: the conversation is already there.
             turn("G same chat, follow-up voice", chatId = chat, clip = clip)
+
+            // Right after the model is downloaded or imported: the setup screen waits while it
+            // loads and the first chat's prompt is read (AppContainer.prepareFirstChat).
+            container.llmService.unload()
+            val setupStarted = SystemClock.elapsedRealtime()
+            container.prepareFirstChat()
+            report("H setup screen after a new model: ${SystemClock.elapsedRealtime() - setupStarted} ms")
+            turn("H first message after setup, typed", chatId = null, text = "what's the capital of Kerala?")
 
             val memory = Debug.MemoryInfo().also(Debug::getMemoryInfo)
             report("memory with the model loaded: PSS ${memory.totalPss / 1024} MB, graphics ${memory.getMemoryStat("summary.graphics").toInt() / 1024} MB")
