@@ -23,6 +23,12 @@
          button — so neither CALL_PHONE nor SEND_SMS is needed. -->
     <uses-permission android:name="android.permission.READ_CONTACTS" />
 
+    <!-- Photo search: asked when the Photos screen is first opened, and only read. Android 14
+         lets people share just some photos instead of all of them. -->
+    <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />
+    <uses-permission android:name="android.permission.READ_MEDIA_VISUAL_USER_SELECTED" />
+    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" android:maxSdkVersion="32" />
+
     <!-- "Keep the assistant ready": a foreground service holds the app, and the loaded model,
          in memory so the power button answers at once. Off in Settings, and it stops. -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />

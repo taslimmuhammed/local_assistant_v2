@@ -10,10 +10,10 @@ import com.local.assistant.memory.tools.ToolCatalog
  */
 object Instructions {
 
-    const val VERSION = 4
+    const val VERSION = 5
 
     /** [withTools] adds the routing rules for the declared tools. */
-    fun render(persona: String, withTools: Boolean = false, webSearch: Boolean = false): String = buildString {
+    fun render(persona: String, withTools: Boolean = false, webSearch: Boolean = false, photoSearch: Boolean = false): String = buildString {
         if (persona.isNotBlank()) {
             append(persona.trim())
             append("\n\n")
@@ -21,7 +21,7 @@ object Instructions {
         append(MEMORY_RULES)
         if (withTools) {
             append("\n\n")
-            append(ToolCatalog.rules(webSearch))
+            append(ToolCatalog.rules(webSearch, photoSearch))
         }
     }
 

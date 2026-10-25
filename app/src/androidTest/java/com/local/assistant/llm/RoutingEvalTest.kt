@@ -111,6 +111,12 @@ class RoutingEvalTest {
         Case("what's the price of gold today?", setOf("web_lookup")),
         Case("who won the last IPL final?", setOf("web_lookup")),
         Case("search the web for a dal tadka recipe", setOf("web_lookup")),
+        Case("show me all my sunset photos", setOf("find_photos")) { args -> args["query"].toString().contains("sunset", ignoreCase = true) },
+        Case("find pictures of food I've eaten", setOf("find_photos")) { args -> args["query"].toString().contains("food", ignoreCase = true) },
+        Case("do I have any photos of the beach?", setOf("find_photos")) { args -> args["query"].toString().contains("beach", ignoreCase = true) },
+        Case("show the pics from the wedding", setOf("find_photos")),
+        Case("what does a sunset look like from space?", setOf(null)),
+        Case("how do I take a good photo of the moon?", setOf(null)),
         Case("remind me to call amma at 6", setOf("add_task")),
         Case("I should call my mom more often", setOf(null)),
         Case("how do I set a timer on my phone?", setOf(null)),
@@ -155,7 +161,7 @@ class RoutingEvalTest {
 
     /** What the tool declarations really cost: the same prefix with and without them. */
     private fun measureDeclarations(engine: Engine) {
-        val system = Instructions.render(PERSONA, withTools = true, webSearch = true)
+        val system = Instructions.render(PERSONA, withTools = true, webSearch = true, photoSearch = true)
         fun count(withTools: Boolean): Int = engine.createConversation(
             ConversationConfig(
                 systemInstruction = Contents.of(system),
@@ -171,7 +177,7 @@ class RoutingEvalTest {
     }
 
     private fun evaluate(engine: Engine, temperature: Double) {
-        val system = Instructions.render(PERSONA, withTools = true, webSearch = true)
+        val system = Instructions.render(PERSONA, withTools = true, webSearch = true, photoSearch = true)
         val now = "[Now: ${DateTimeFormatter.ofPattern("EEE d MMM yyyy, HH:mm", Locale.ENGLISH).format(ZonedDateTime.now())}]"
         var right = 0
         var positivesRight = 0
@@ -180,7 +186,7 @@ class RoutingEvalTest {
 
         val only = InstrumentationRegistry.getArguments().getString("only")
         val raw = InstrumentationRegistry.getArguments().getString("raw") == "true"
-        val repair = ToolCallRepair(ToolCatalog.declarations(web = true))
+        val repair = ToolCallRepair(ToolCatalog.declarations(web = true, photos = true))
         // "-e samples 3" asks each three times, each with its own seed: the runtime's sampler is
         // seeded (0 by default), so the same prompt with the same seed always gives the same reply.
         val samples = InstrumentationRegistry.getArguments().getString("samples")?.toIntOrNull() ?: 1
@@ -270,7 +276,7 @@ class RoutingEvalTest {
     private fun voiceDir(): File? = InstrumentationRegistry.getArguments().getString("voice")
         ?.let { File(context.getExternalFilesDir(null), it) }
 
-    private fun declarations() = ToolCatalog.declarations(web = true).map { json ->
+    private fun declarations() = ToolCatalog.declarations(web = true, photos = true).map { json ->
         tool(object : OpenApiTool {
             override fun getToolDescriptionJsonString() = json
             override fun execute(paramsJsonString: String): String = error("manual")

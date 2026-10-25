@@ -26,20 +26,23 @@ import java.nio.ByteOrder
  */
 object ModelFormat {
 
-    /** What a file is to be used as, and the section (`model_type`) that has to be in it. */
-    enum class Kind(val section: String, val wrongKind: String) {
+    /** What a file is to be used as, and the sections (`model_type`) that have to be in it. */
+    enum class Kind(val wrongKind: String, vararg val sections: String) {
         /** Gemma 4 E4B's text decoder; embedding models have none. */
-        CHAT("tf_lite_prefill_decode", "That's not a chat model: it can't write replies. Pick the Gemma model file."),
+        CHAT("That's not a chat model: it can't write replies. Pick the Gemma model file.", "tf_lite_prefill_decode"),
 
         /** EmbeddingGemma's and Granite's text encoder; chat models have none. */
-        EMBEDDER("tf_lite_text_encoder", "That's not a memory-search (embedding) model."),
+        EMBEDDER("That's not a memory-search (embedding) model.", "tf_lite_text_encoder"),
+
+        /** EmbeddingGemma 2's text and image encoders, for photo search; text-only embedders lack the second. */
+        GALLERY("That's not a photo-search model: it needs EmbeddingGemma 2 with vision.", "tf_lite_text_encoder", "tf_lite_vision_encoder"),
     }
 
     /** Why [file] can't be used as [kind], or null when it can. */
     fun problem(file: File, kind: Kind): String? {
         if (!isLiteRtLm(file)) return NOT_A_MODEL
         val sections = ModelPrecision.sectionTypes(file) ?: return NOT_A_MODEL
-        return if (kind.section in sections) null else kind.wrongKind
+        return if (sections.containsAll(kind.sections.asList())) null else kind.wrongKind
     }
 
     /** How much of the start of a file [startsLikeLiteRtLm] looks at. */

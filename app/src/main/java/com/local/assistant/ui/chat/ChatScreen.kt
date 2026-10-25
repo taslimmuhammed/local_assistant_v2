@@ -92,6 +92,7 @@ import kotlinx.coroutines.launch
 fun ChatScreen(
     viewModel: ChatViewModel,
     onOpenMemory: () -> Unit,
+    onOpenPhotos: () -> Unit,
     onOpenSettings: () -> Unit,
 ) {
     val chats by viewModel.chats.collectAsStateWithLifecycle()
@@ -215,6 +216,10 @@ fun ChatScreen(
                     onOpenMemory = {
                         scope.launch { drawerState.close() }
                         onOpenMemory()
+                    },
+                    onOpenPhotos = {
+                        scope.launch { drawerState.close() }
+                        onOpenPhotos()
                     },
                     onOpenSettings = {
                         scope.launch { drawerState.close() }

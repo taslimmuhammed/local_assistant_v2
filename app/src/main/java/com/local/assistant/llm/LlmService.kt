@@ -4,7 +4,7 @@ import android.content.Context
 import android.os.SystemClock
 import android.util.Log
 import com.google.ai.edge.litertlm.Backend
-import com.google.ai.edge.litertlm.Capabilities
+import com.google.ai.edge.litertlm.ModelInfo
 import com.google.ai.edge.litertlm.Conversation
 import com.google.ai.edge.litertlm.ConversationConfig
 import com.google.ai.edge.litertlm.Engine
@@ -287,20 +287,21 @@ class LlmService(
 
     /** The model's own vision token budget, used when costing images against the window. */
     private fun probeVisionTokens(modelPath: String): Int = runCatching {
-        Capabilities(modelPath).use { it.maxVisionTokenBudget() }
+        ModelInfo.from(modelPath).use { it.maxVisionTokenBudget() }
     }.getOrNull()?.takeIf { it > 0 } ?: DEFAULT_VISION_TOKENS
 
     /** Reads the model file's own declaration of what it accepts. Cheap: it does not load it. */
     private fun probeModalities(modelPath: String): SupportedModalities? = runCatching {
-        Capabilities(modelPath).use { it.inputModalities() }
+        ModelInfo.from(modelPath).use { it.inputModalities() }
     }.onFailure { Log.w(TAG, "Could not read model capabilities", it) }.getOrNull()
 
     private data class ModelFeatures(val functionCalling: Boolean, val thinking: Boolean, val speculative: Boolean)
 
     /** What the model file says it can do. Unknown reads as "no", never as "yes". */
     private fun probeFeatures(modelPath: String): ModelFeatures = runCatching {
-        Capabilities(modelPath).use {
-            ModelFeatures(it.supportsFunctionCalling(), it.supportsThinking(), it.hasSpeculativeDecodingSupport())
+        ModelInfo.from(modelPath).use {
+            val llm = it as? ModelInfo.Llm ?: error("Not a chat model: ${it.modelType}")
+            ModelFeatures(llm.supportsFunctionCalling(), llm.supportsThinking(), llm.hasSpeculativeDecodingSupport())
         }
     }.onFailure { Log.w(TAG, "Could not read model features", it) }
         .getOrDefault(ModelFeatures(functionCalling = false, thinking = false, speculative = false))

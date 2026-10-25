@@ -28,9 +28,14 @@ data class MemoryChip(
     val editable: Boolean = false,
     /** A web page the chip can open: a web search's top source. */
     val link: String? = null,
+    /** find_photos: the photos it found, drawn as thumbnails or a card instead of a text row. */
+    val photos: PhotoSet? = null,
 ) {
-    enum class Kind { FACT, TASK, EVENT, FORGET, ALARM, IMAGE, CALL, MESSAGE, TIMER, APP, SETTING, WEB }
+    enum class Kind { FACT, TASK, EVENT, FORGET, ALARM, IMAGE, CALL, MESSAGE, TIMER, APP, SETTING, WEB, PHOTOS }
 }
+
+/** The phone's photos that answer [query], by MediaStore id, best match first. */
+data class PhotoSet(val query: String, val ids: List<Long>)
 
 /**
  * What undoing a tool call needs: the state before it. Kept in the TOOL row itself, so an undo

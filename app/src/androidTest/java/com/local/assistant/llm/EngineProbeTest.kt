@@ -6,7 +6,7 @@ import android.util.Log
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import com.google.ai.edge.litertlm.Backend
-import com.google.ai.edge.litertlm.Capabilities
+import com.google.ai.edge.litertlm.ModelInfo
 import com.google.ai.edge.litertlm.Contents
 import com.google.ai.edge.litertlm.Conversation
 import com.google.ai.edge.litertlm.ConversationConfig
@@ -64,7 +64,7 @@ class EngineProbeTest {
     @Test
     fun probe() {
         val modelPath = requireNotNull(SettingsStore(context).modelPath) { "No model installed" }
-        Capabilities(modelPath).use {
+        (ModelInfo.from(modelPath) as ModelInfo.Llm).use {
             report("model.supportsFunctionCalling", it.supportsFunctionCalling())
             report("model.supportsThinking", it.supportsThinking())
             report("model.hasSpeculativeDecodingSupport", it.hasSpeculativeDecodingSupport())

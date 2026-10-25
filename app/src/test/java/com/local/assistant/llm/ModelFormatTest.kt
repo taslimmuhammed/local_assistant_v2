@@ -64,6 +64,22 @@ class ModelFormatTest {
         assertEquals(ModelFormat.Kind.CHAT.wrongKind, ModelFormat.problem(embedder, ModelFormat.Kind.CHAT))
     }
 
+    /** The real EmbeddingGemma 2 text + vision header, 1,552 bytes (no weights). */
+    private fun galleryHeader() = javaClass.getResource("/litertlm/embeddinggemma-2-text-vision-header.bin")!!.readBytes()
+
+    @Test
+    fun `EmbeddingGemma 2 with vision is accepted for photo search, and refused as the chat model`() {
+        val gallery = folder.newFile().apply { writeBytes(galleryHeader()) }
+        assertNull(ModelFormat.problem(gallery, ModelFormat.Kind.GALLERY))
+        assertEquals(ModelFormat.Kind.CHAT.wrongKind, ModelFormat.problem(gallery, ModelFormat.Kind.CHAT))
+    }
+
+    @Test
+    fun `a text-only embedder is refused for photo search, since it has no image encoder`() {
+        val embedder = folder.newFile().apply { writeBytes(embedderHeader()) }
+        assertEquals(ModelFormat.Kind.GALLERY.wrongKind, ModelFormat.problem(embedder, ModelFormat.Kind.GALLERY))
+    }
+
     @Test
     fun `a file that isn't LiteRT-LM at all gets the plain message whichever kind was wanted`() {
         val junk = folder.newFile().apply { writeBytes(Random(7).nextBytes(4096)) }

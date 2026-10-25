@@ -68,6 +68,8 @@ class ConversationManager(
     private val tools: () -> List<String> = { emptyList() },
     /** Whether web_search is among [tools], which adds its line to the instructions. */
     private val webSearch: () -> Boolean = { false },
+    /** Whether find_photos is among [tools], likewise. */
+    private val photoSearch: () -> Boolean = { false },
     /** Per-turn recall of facts and archived exchanges; none when null. */
     private val retriever: Retriever? = null,
     /** Folds older turns into the chat's rolling summary; without it they are simply dropped. */
@@ -605,6 +607,7 @@ class ConversationManager(
                 settings.systemPrompt,
                 withTools = tools().isNotEmpty() && backend.capabilities?.tools == true,
                 webSearch = webSearch(),
+                photoSearch = photoSearch(),
             ),
             coreFacts = memory.coreFacts(),
             summary = summary,

@@ -19,7 +19,7 @@ see the [README](../README.md).
 | | |
 |---|---|
 | Android | 8.0 (API 26) or newer, `arm64-v8a` |
-| Free storage | ~4.2 GB, plus ~0.35 GB for the search model |
+| Free storage | ~4.2 GB, plus ~0.35 GB for the search model and ~0.4 GB for photo search |
 | RAM | 8 GB+ recommended (GPU backend peaks around 0.7–1 GB, CPU around 3.3 GB) |
 | JDK (to build) | 17 |
 | NDK and CMake (to build) | NDK 28.2.13676358, CMake 3.22.1 (SDK Manager), for sqlite-vec |
@@ -330,8 +330,9 @@ and they are never re-read).
 
 ### Tool list
 
-Sixteen tools, declared in `memory/tools/ToolCatalog.kt`. Fifteen are always declared; `web_lookup`
-only once a Tavily key is saved. Nothing that calls or sends does so by itself: the dialer or the
+Seventeen tools, declared in `memory/tools/ToolCatalog.kt`. Fifteen are always declared; `web_lookup`
+only once a Tavily key is saved, and `find_photos` only once photo search's model is installed and
+the app may read the photos. Nothing that calls or sends does so by itself: the dialer or the
 messaging app opens ready, and the user presses the button.
 
 | Tool | What it does | Arguments (required in bold) | Runs in |
@@ -352,6 +353,7 @@ messaging app opens ready, and the user presses the button.
 | `phone_setting` | Flashlight, ringer, media volume, Do Not Disturb; opens the Wi-Fi, Bluetooth, mobile data, airplane mode, hotspot or location panel | **setting**, value | the phone |
 | `calculate` | Exact arithmetic and unit conversions | **expression** | the app |
 | `web_lookup` | News, weather, prices, scores — anything current (only with a Tavily key) | **query**, topic | Tavily |
+| `find_photos` | The user's own photos of something; shown under the reply, never sent to the model | **query** | the photo index |
 
 ### Tools and reminders
 
@@ -485,7 +487,7 @@ own FTS4 index) for the archive. Nothing in it is included in backup or device-t
 
 ## Images and voice
 
-Both are gated on what the model file itself reports via `Capabilities(modelPath).inputModalities()`
+Both are gated on what the model file itself reports via `ModelInfo.from(modelPath).inputModalities()`
 — read from the file, not assumed — so the image and mic buttons only appear if the installed model
 actually has those encoders. `EngineConfig` only declares `visionBackend` / `audioBackend` when they
 are supported; the encoders load lazily, so declaring them costs nothing until an attachment is sent.
@@ -515,6 +517,57 @@ field there fails silently at decode time).
 (`valid_audio_length <= max_audio_seq_length`), but that value lives in the model file rather than
 the library, so it cannot be read ahead of time. 30 s is the conservative side of it. The recorder
 stops hard at the cap rather than letting the runtime reject the clip.
+
+## Photos
+
+"Photos" in the drawer searches the phone's own photos by what is in them: type "sunset" or
+"birthday cake" and those photos come up. Everything lives in `gallery/` and `ui/gallery/`.
+
+- **Model.** Google's EmbeddingGemma 2, the text + vision build (440M, 388 MB, Apache-2.0,
+  `litert-community/embeddinggemma-2-text-vision-440m-litert-lm`), downloaded from the Photos
+  screen. Text and images share one space, so a typed query is compared directly with each photo's
+  vector. It is separate from memory search's EmbeddingGemma 300M: nobody has compared the two on
+  the chat archive yet, so chat recall is unchanged. `ModelFormat.Kind.GALLERY` refuses a file
+  without both the text and the vision encoder.
+- **Index.** `gallery.db`, a Room database of its own: one row per MediaStore photo, with its
+  date, its `DATE_MODIFIED` (an edited photo is redone) and a 256-byte int8 vector. Everything in
+  it can be rebuilt from the photos, so it never needs a migration of `assistant.db`; a schema
+  change simply drops it. Each photo goes to the model as a 512 px JPEG from the system's
+  thumbnail cache, at 70 vision tokens.
+- **When it indexes.** While the Photos screen is open; while the app stays in front on phones
+  with more than 8 GB (smaller ones stop when the screen closes); and in the nightly job on the
+  charger, after memory's own work. Newest photos first, in batches of 8 through the
+  `ModelScheduler` at `GALLERY_INDEX`, the lowest priority but one, so a chat turn stops it
+  between photos.
+- **Search.** The query gets the model's search prompt, then an exact scan over every vector
+  (`PhotoRanking`). A query matches only if its best photo scores at least 0.72; then every photo
+  within 0.035 of that best is listed, best first. Calibrated on the phone's own 2,428 photos
+  (`GalleryCalibrationTest` makes ranked contact sheets; the right photos in the top 100 were
+  marked by eye): beach 11 listed, 91% right; sunset 30, 93%; food 30, 97%; mountains 27, 100%;
+  car 34, 38% (street scenes with a car in them). A fixed similarity was too strict for one query
+  and too loose for the next, and a cutoff in standard deviations above the query's mean (the
+  first version) listed hundreds of near misses for "sunset" and cut "selfie" to seven. The floor
+  is low because wording moves every score together ("beach" topped out at 0.762, "beaches" at
+  0.727, on the same photos), so the tool asks the model for a short singular query.
+- **Measured on the OnePlus** (`GalleryEvalTest`, 16 Wikipedia lead images, 18 queries): the
+  right picture first for 16 of 16; load 1.4 s; a query 51 ms; a photo 224 ms with the vision
+  encoder on the GPU against 474 ms on four CPU threads (six or eight were no faster), and 560 MB
+  of process memory against 812 MB. So vision runs on the GPU, falling back to the CPU. At that
+  rate 10,000 photos take about 37 minutes, which is why most of a large library is indexed at
+  night.
+- **In a chat.** `find_photos` (see the tool list) searches the same index from any chat or the
+  power-button panel. The model only gets counts back (`{"ok":true,"found":117}`); the photos go in
+  the reply's chip as MediaStore ids (`PhotoSet`, stored in the TOOL row like any chip), so no
+  image tokens are spent and they survive a restart. One or two matches show as small photos in
+  the reply; more become a card with three photos fanned like prints and the count, which opens
+  a sheet with all of them, best first; a tap opens the full-screen viewer. The sheet can also
+  sort them newest or oldest first (dates from MediaStore: when taken, else when added), under a
+  heading per month, and the viewer pages through them in the order shown. Over the lock
+  screen the panel says how many were found and shows none until the phone is unlocked. The
+  photo model is let go two minutes after a chat's last search, unless indexing needs it.
+- **Permissions.** `READ_MEDIA_IMAGES` (or `READ_EXTERNAL_STORAGE` up to Android 12), asked on
+  the Photos screen; on Android 14 the person may share only some photos, and only those are
+  indexed. Photos are read, never changed, moved or sent anywhere.
 
 ## Power-button assistant
 
@@ -616,6 +669,13 @@ They are stored on the message (`tokensPerSecond`, `timeToFirstTokenMs`), so the
 restart, and they are read before the conversation can be recycled — including after a stopped
 generation, which still reports what it managed.
 
+`DecodeSpeedProbeTest` (`-e speed true`) times a 268-token reply by clock, with MTP on and off,
+using only API that exists in both 0.17.1 and 0.18.1. On the OnePlus on 25 Oct 2026, warm from
+testing, LiteRT-LM 0.18.1 wrote 33 tok/s with MTP and 16 without; 0.17.1 under the same conditions
+wrote 21.6 and 8.8. The runtime's own count agreed with the clock on both. Long prompts full of
+digits (`digitPrecision`) decode at about 15 tok/s on 0.18.1: MTP's drafts are accepted less often
+there.
+
 ## Tuning generation
 
 All four live in `SettingsStore` and are read on the next engine load / message:
@@ -693,6 +753,7 @@ URLs, hashes, base64, long random IDs — and the loop is self-reinforcing once 
 | Summarising dropped turns instead of discarding | `memory/prompt/ConversationManager.kt` |
 | A new tool | `memory/tools/ToolCatalog.kt` (declaration + routing rule) and `ToolExecutor` |
 | Time words the resolver misses | `memory/tools/WhenResolver.kt`, with a row in `WhenResolverTest` |
+| Photo search: model, cutoff, when it indexes | `gallery/GalleryModel.kt`, `gallery/PhotoRanking.kt`, `gallery/GalleryIndex.kt`; `GalleryEvalTest` on the phone |
 | Another embedding model | `memory/embed/EmbedderCatalog.kt` (prompts, threshold); `tools/embedder/calibrate_threshold.py`, then `EmbedderProbeTest` on the phone |
 | What counts as trivial, or a rare word | `memory/retrieval/QueryText.kt` |
 | What extraction looks for | `memory/extract/Extraction.kt` (prompt and examples), `ExtractionRouter` (what may be written) |
@@ -747,7 +808,9 @@ the main model, so they don't change this.
 
 **The fix.** `llm/ModelPrecision` sets the text decoder's `prefer_activation_type` to "fp32" in the
 model file's header before the engine loads it. LiteRT-LM 0.17.1 reads the preference from the
-header (`runtime/util/litert_lm_loader.cc`) and offers no API for it. "fp16" and "fp32" are the
+header (`runtime/util/litert_lm_loader.cc`) and offers no API for it. (0.18 added
+`EngineConfig.activationDataType`; the header patch stays until that setting has been checked on
+the phone with `digitPrecision`.) "fp16" and "fp32" are the
 same length, so it is a 2-byte write in place, and nothing else in the 3.6 GB file moves. The
 vision encoder keeps its fp16. The runtime keys its GPU program cache on the file's mtime, so it
 rebuilds the fp32 programs once. A file it can't read, or one that asks for something else, is

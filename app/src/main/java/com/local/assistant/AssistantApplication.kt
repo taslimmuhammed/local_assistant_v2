@@ -8,6 +8,13 @@ import android.content.pm.ApplicationInfo
 import android.net.Uri
 import android.util.Log
 import androidx.lifecycle.ProcessLifecycleOwner
+import com.local.assistant.gallery.GalleryDatabase
+import com.local.assistant.gallery.GalleryEmbedder
+import com.local.assistant.gallery.GalleryIndex
+import com.local.assistant.gallery.GalleryModel
+import com.local.assistant.gallery.PhotoLibrary
+import com.local.assistant.gallery.PhotoThumbnails
+import com.local.assistant.gallery.PhotoTools
 import com.local.assistant.data.db.AppDatabase
 import com.local.assistant.data.prefs.SettingsStore
 import com.local.assistant.data.repo.ChatRepository
@@ -105,6 +112,8 @@ class AppContainer(context: Context) {
         },
         onBackground = {
             backgroundJobs.onBackground()
+            // Out of sight, the photos wait for the charger at night.
+            appScope.launch { galleryIndex.pause() }
             // Away for a while: have the next new chat's conversation ready, so the power button
             // is answered at once. Not straight away: a quick trip out and back finds its chat
             // still open.
@@ -202,6 +211,28 @@ class AppContainer(context: Context) {
 
     val modelScheduler = ModelScheduler()
 
+    /** Photo search: its own model, database and index (see `gallery/`). */
+    val galleryModelManager = ModelManager(context, GalleryModel.FILE, settings::galleryModelPath, appScope)
+
+    val photoLibrary = PhotoLibrary(context)
+
+    val photoThumbnails = PhotoThumbnails(photoLibrary)
+
+    val galleryIndex = GalleryIndex(
+        dao = GalleryDatabase.build(context).photoDao(),
+        library = photoLibrary,
+        embedder = GalleryEmbedder(modelFile = { galleryModelManager.installed.value?.file }, cacheDir = context.cacheDir),
+        scheduler = modelScheduler,
+        scope = appScope,
+    )
+
+    /** find_photos is declared to the model only once its model is here and the photos may be read. */
+    fun photoSearchReady(): Boolean =
+        galleryModelManager.installed.value != null && photoLibrary.access() != PhotoLibrary.Access.NONE
+
+    /** Phones this small give the photo model's memory back as soon as the Photos screen closes. */
+    val isSmallDevice: Boolean = totalMemoryBytes(context) <= SMALL_DEVICE_BYTES
+
     /** Secrets the user pastes in, encrypted with a Keystore key. */
     val secrets = SecretStore(context)
 
@@ -216,8 +247,9 @@ class AppContainer(context: Context) {
         scheduler = modelScheduler,
         scope = appScope,
         estimator = tokenEstimator,
-        tools = { ToolCatalog.declarations(web = webSearch.enabled) },
+        tools = { ToolCatalog.declarations(web = webSearch.enabled, photos = photoSearchReady()) },
         webSearch = { webSearch.enabled },
+        photoSearch = ::photoSearchReady,
         retriever = retriever,
         summarizer = summarizer,
         // A background summary or extraction closed it: make it ready again.
@@ -331,6 +363,7 @@ class AppContainer(context: Context) {
         onImageSaved = ::rereadSavedImage,
         device = deviceTools,
         web = WebTools(webSearch),
+        photos = PhotoTools(galleryIndex, ready = ::photoSearchReady),
     )
 
     private val toolLoop = ToolLoop(
@@ -338,7 +371,7 @@ class AppContainer(context: Context) {
         maxRounds = MemoryBudget.SIXTEEN_K.maxToolRounds,
         isOverflow = llmBackend::isContextOverflow,
         isUnreadable = llmBackend::isUnreadableToolCall,
-        repair = ToolCallRepair(ToolCatalog.declarations(web = true))::repair,
+        repair = ToolCallRepair(ToolCatalog.declarations(web = true, photos = true))::repair,
         onNumberFixed = { wrote, source -> Log.i("ReplyGrounding", "Reply wrote $wrote; the source has $source") },
         groundNumbers = { !llmService.exactDigits },
     )
@@ -542,6 +575,8 @@ class AssistantApplication : Application() {
     override fun onTrimMemory(level: Int) {
         super.onTrimMemory(level)
         val background = level >= ComponentCallbacks2.TRIM_MEMORY_BACKGROUND
+        // Thumbnails are quick to read again; the model is not.
+        if (background) container.photoThumbnails.clear()
         // Kept ready, the model stays: that is the point of the setting (and its foreground
         // service keeps the app out of the cached list this is mostly about).
         val keep = container.settings.keepAssistantReady

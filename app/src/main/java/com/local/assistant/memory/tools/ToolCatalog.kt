@@ -28,6 +28,8 @@ object ToolCatalog {
     const val CALCULATE = "calculate"
     /** Not "web_search": beside search_memory the model blended the two ("web_search_memory"). */
     const val WEB_SEARCH = "web_lookup"
+    /** Not "search_photos", for the same reason. */
+    const val FIND_PHOTOS = "find_photos"
 
     /** Tools that change something, as opposed to reading it. */
     val WRITES = setOf(ADD_TASK, UPDATE_TASK, ADD_EVENT, SAVE_FACT, FORGET, SET_ALARM, REMEMBER_IMAGE)
@@ -38,14 +40,31 @@ object ToolCatalog {
     /** Device tools with an effect a repeat would duplicate: a second dialer, a second timer. */
     val DEVICE_ACTIONS = DEVICE - CALCULATE
 
-    /** Tools that don't touch memory, run outside its transaction: they wait on apps, dialogs or the network. */
-    val OUTSIDE_MEMORY = DEVICE + WEB_SEARCH
+    /** Tools that don't touch memory, run outside its transaction: they wait on apps, dialogs, the network or the photo model. */
+    val OUTSIDE_MEMORY = DEVICE + WEB_SEARCH + FIND_PHOTOS
 
-    /** Every tool the model is given; web search only once the user has set it up. */
-    fun declarations(web: Boolean): List<String> = if (web) declarations + WEB_DECLARATION else declarations
+    /**
+     * Every tool the model is given; web search only once the user has set it up, and photo
+     * search only once its model is installed and the app may see the photos.
+     */
+    fun declarations(web: Boolean, photos: Boolean = false): List<String> =
+        declarations + listOfNotNull(WEB_DECLARATION.takeIf { web }, PHOTOS_DECLARATION.takeIf { photos })
 
     /** How to use the tools, appended to the instructions (section A) when tools are declared. */
-    fun rules(web: Boolean): String = RULES.replace(WEB_SLOT, if (web) WEB_RULE + "\n" else "")
+    fun rules(web: Boolean, photos: Boolean = false): String = RULES
+        .replace(WEB_SLOT, if (web) WEB_RULE + "\n" else "")
+        .replace(PHOTOS_SLOT, if (photos) PHOTOS_RULE + "\n" else "")
+
+    private val PHOTOS_DECLARATION = function(
+        FIND_PHOTOS,
+        "Use when the user wants to see their own photos of something, like their sunset photos or pictures of food. query: what is in the photos in one or two words, singular: beach, not beaches or beach photos.",
+        required = listOf("query"),
+        "query" to "string",
+    )
+
+    private const val PHOTOS_RULE =
+        "- Seeing their own photos of something → find_photos. The app shows the photos under your reply: say in one short sentence how many it found, and don't describe them."
+    private const val PHOTOS_SLOT = "{photos}\n"
 
     private val WEB_DECLARATION = function(
         WEB_SEARCH,
@@ -185,6 +204,7 @@ object ToolCatalog {
         - Lasting facts about the user or their people and places → save_fact. How they want you to reply from now on ("keep answers short", "reply in Hindi") → save_fact with core=true, then follow it. Never for questions, hypotheticals, wishes, other people's opinions, passing moods or jokes.
         - "What's coming up" beyond the agenda → get_upcoming. Something told before that is not above → search_memory. "Forget …" → forget.
         {web}
+        {photos}
         After a tool succeeds, confirm in one short sentence. If it returns ok:false, ask the user for what is missing.
     """.trimIndent()
 

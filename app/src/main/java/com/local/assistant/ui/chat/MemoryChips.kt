@@ -1,5 +1,6 @@
 package com.local.assistant.ui.chat
 
+import com.local.assistant.ui.gallery.PhotoResults
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -57,6 +58,11 @@ fun MemoryChips(
 
     Column(modifier.padding(horizontal = 16.dp, vertical = 2.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
         chips.forEach { item ->
+            val photos = item.chip.photos
+            if (item.chip.kind == MemoryChip.Kind.PHOTOS && photos != null) {
+                PhotoResults(photos)
+                return@forEach
+            }
             MemoryChipRow(
                 item = item,
                 onUndo = { onUndo(item.recordId) },

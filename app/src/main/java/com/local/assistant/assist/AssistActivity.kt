@@ -12,10 +12,13 @@ import androidx.activity.SystemBarStyle
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.viewModels
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import com.local.assistant.MainActivity
 import com.local.assistant.appContainer
+import com.local.assistant.ui.gallery.LocalPhotoAccess
+import com.local.assistant.ui.gallery.PhotoAccess
 import com.local.assistant.ui.theme.LocalAssistantTheme
 
 /**
@@ -63,16 +66,20 @@ class AssistActivity : ComponentActivity() {
             }
         }
 
+        // Photos found over the lock screen stay hidden until the phone is unlocked, then open in the app.
+        val photos = PhotoAccess(appContainer.photoThumbnails, hidden = ::isLocked, onUnlock = { openApp(viewModel.chatId.value) })
         setContent {
             LocalAssistantTheme {
-                AssistOverlay(
-                    viewModel = viewModel,
-                    lockedOut = lockedOut.value,
-                    openCancelled = openCancelled.intValue,
-                    onClosed = ::close,
-                    onOpenApp = ::openApp,
-                    onOpenSettings = ::openSettings,
-                )
+                CompositionLocalProvider(LocalPhotoAccess provides photos) {
+                    AssistOverlay(
+                        viewModel = viewModel,
+                        lockedOut = lockedOut.value,
+                        openCancelled = openCancelled.intValue,
+                        onClosed = ::close,
+                        onOpenApp = ::openApp,
+                        onOpenSettings = ::openSettings,
+                    )
+                }
             }
         }
     }

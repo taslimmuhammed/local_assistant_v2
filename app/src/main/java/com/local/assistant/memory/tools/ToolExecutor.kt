@@ -60,6 +60,8 @@ class ToolExecutor(
     private val device: DeviceTools? = null,
     /** web_search; none when not wired in. */
     private val web: WebTools? = null,
+    /** find_photos; none when not wired in. */
+    private val photos: com.local.assistant.gallery.PhotoTools? = null,
 ) {
 
     data class Outcome(
@@ -161,6 +163,10 @@ class ToolExecutor(
         val args = Args(call.arguments)
         if (call.name == ToolCatalog.WEB_SEARCH) {
             val done = (web ?: throw ToolError("Web search isn't set up.")).search(args)
+            return Applied(done.result, done.chip)
+        }
+        if (call.name == ToolCatalog.FIND_PHOTOS) {
+            val done = (photos ?: throw ToolError("Photo search isn't set up.")).find(args.required("query"))
             return Applied(done.result, done.chip)
         }
         val tools = device ?: throw ToolError("That isn't available in this app.")

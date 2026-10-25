@@ -673,4 +673,23 @@ class ToolRoutingTest {
         assertTrue("web_lookup" in ToolCatalog.rules(web = true))
         assertFalse("{web}" in ToolCatalog.rules(web = false))
     }
+
+    @Test
+    fun `photo search is declared, and its rule given, only when it is set up`() {
+        assertFalse(ToolCatalog.declarations(web = false, photos = false).any { "\"find_photos\"" in it })
+        assertTrue(ToolCatalog.declarations(web = false, photos = true).any { "\"find_photos\"" in it })
+        assertFalse("find_photos" in ToolCatalog.rules(web = true, photos = false))
+        assertTrue("find_photos" in ToolCatalog.rules(web = false, photos = true))
+        assertFalse("{photos}" in ToolCatalog.rules(web = true, photos = false))
+    }
+
+    /** A quote left unescaped in a description once made the app crash as it started. */
+    @Test
+    fun `every declaration is valid JSON with a name and a description`() {
+        for (json in ToolCatalog.declarations(web = true, photos = true)) {
+            val parsed = com.google.gson.JsonParser.parseString(json).asJsonObject
+            assertTrue(json, parsed.get("name").asString.isNotBlank())
+            assertTrue(json, parsed.get("description").asString.isNotBlank())
+        }
+    }
 }

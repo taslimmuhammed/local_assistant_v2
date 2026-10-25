@@ -6,6 +6,7 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -15,6 +16,10 @@ import androidx.compose.runtime.setValue
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.local.assistant.ui.chat.ChatScreen
+import com.local.assistant.ui.gallery.GalleryScreen
+import com.local.assistant.ui.gallery.LocalPhotoAccess
+import com.local.assistant.ui.gallery.PhotoAccess
+import com.local.assistant.ui.gallery.GalleryViewModel
 import com.local.assistant.ui.memory.MemoryScreen
 import com.local.assistant.ui.memory.MemoryViewModel
 import com.local.assistant.ui.profile.ProfileScreen
@@ -44,15 +49,18 @@ class MainActivity : ComponentActivity() {
             settingsToOpen.value = settingsIn(intent)
         }
         val container = appContainer
+        val photos = PhotoAccess(container.photoThumbnails)
         setContent {
             LocalAssistantTheme {
-                AppRoot(
-                    container,
-                    chatToOpen = chatToOpen.value,
-                    onChatOpened = { chatToOpen.value = null },
-                    settingsToOpen = settingsToOpen.value,
-                    onSettingsOpened = { settingsToOpen.value = false },
-                )
+                CompositionLocalProvider(LocalPhotoAccess provides photos) {
+                    AppRoot(
+                        container,
+                        chatToOpen = chatToOpen.value,
+                        onChatOpened = { chatToOpen.value = null },
+                        settingsToOpen = settingsToOpen.value,
+                        onSettingsOpened = { settingsToOpen.value = false },
+                    )
+                }
             }
         }
     }
@@ -88,6 +96,7 @@ private fun AppRoot(
     var showMemoryScreen by remember { mutableStateOf(false) }
     var showProfileScreen by remember { mutableStateOf(false) }
     var showWebSearchScreen by remember { mutableStateOf(false) }
+    var showPhotosScreen by remember { mutableStateOf(false) }
     var profileAsked by remember { mutableStateOf(container.settings.profileAsked) }
     var webSearchAsked by remember { mutableStateOf(container.settings.webSearchAsked || container.webSearch.enabled) }
 
@@ -116,6 +125,7 @@ private fun AppRoot(
         showMemoryScreen = false
         showProfileScreen = false
         showWebSearchScreen = false
+        showPhotosScreen = false
     }
     // The lock-screen notice: straight to Settings, where talking on the lock screen is turned on.
     LaunchedEffect(settingsToOpen) {
@@ -124,6 +134,7 @@ private fun AppRoot(
         showMemoryScreen = false
         showProfileScreen = false
         showWebSearchScreen = false
+        showPhotosScreen = false
         showSettings = true
         onSettingsOpened()
     }
@@ -200,6 +211,13 @@ private fun AppRoot(
         return
     }
 
+    if (showPhotosScreen) {
+        BackHandler { showPhotosScreen = false }
+        val galleryViewModel: GalleryViewModel = viewModel(factory = GalleryViewModel.factory(container))
+        GalleryScreen(viewModel = galleryViewModel, onBack = { showPhotosScreen = false })
+        return
+    }
+
     if (showMemoryScreen) {
         BackHandler { showMemoryScreen = false }
         val memoryViewModel: MemoryViewModel = viewModel(factory = MemoryViewModel.factory(container))
@@ -217,6 +235,7 @@ private fun AppRoot(
     ChatScreen(
         viewModel = viewModel,
         onOpenMemory = { showMemoryScreen = true },
+        onOpenPhotos = { showPhotosScreen = true },
         onOpenSettings = { showSettings = true },
     )
 }

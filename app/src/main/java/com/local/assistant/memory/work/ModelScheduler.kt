@@ -31,6 +31,8 @@ class ModelScheduler(private val clock: () -> Long = System::currentTimeMillis) 
         COMPACTION,
         EMBEDDING_BACKLOG,
         NIGHTLY,
+        /** Photos for photo search: a long job that only ever uses time nobody else wants. */
+        GALLERY_INDEX,
         /** Getting ready for a question that may come later: only once nothing else wants the model. */
         IDLE_WARM_UP,
     }

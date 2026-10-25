@@ -114,7 +114,9 @@ class NightlyWorker(context: Context, params: WorkerParameters) : CoroutineWorke
             return Result.success()
         }
         val container = applicationContext.appContainer
-        val finished = container.consolidation.run(deadline = System.currentTimeMillis() + BackgroundJobs.RUN_BUDGET_MS)
+        val deadline = System.currentTimeMillis() + BackgroundJobs.RUN_BUDGET_MS
+        // Memory first; the photos only once it is done and the chat model has been let go.
+        val finished = container.consolidation.run(deadline) && container.galleryIndex.indexUntil(deadline)
         if (!finished) container.backgroundJobs.continueNightly()
         return Result.success()
     }

@@ -28,6 +28,11 @@ class SettingsStore(context: Context) {
         get() = prefs.getString(KEY_EMBEDDER_PATH, null)
         set(value) = prefs.edit { if (value == null) remove(KEY_EMBEDDER_PATH) else putString(KEY_EMBEDDER_PATH, value) }
 
+    /** Absolute path of the installed photo-search model, or null when there is none. */
+    var galleryModelPath: String?
+        get() = prefs.getString(KEY_GALLERY_MODEL_PATH, null)
+        set(value) = prefs.edit { if (value == null) remove(KEY_GALLERY_MODEL_PATH) else putString(KEY_GALLERY_MODEL_PATH, value) }
+
     /** Which embedder [embedderPath] is (an `EmbedderCatalog` key), which decides its prompts. */
     var embedderKey: String?
         get() = prefs.getString(KEY_EMBEDDER_KEY, null)
@@ -185,6 +190,7 @@ class SettingsStore(context: Context) {
         private const val KEY_MODEL_PATH = "model_path"
         private const val KEY_EMBEDDER_PATH = "embedder_path"
         private const val KEY_EMBEDDER_KEY = "embedder_key"
+        private const val KEY_GALLERY_MODEL_PATH = "gallery_model_path"
         private const val KEY_MEMORY_PAUSED = "memory_paused"
         private const val KEY_PROFILE_ASKED = "profile_asked"
         private const val KEY_WEB_SEARCH_ASKED = "web_search_asked"
