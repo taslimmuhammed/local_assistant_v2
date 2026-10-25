@@ -591,7 +591,13 @@ stops hard at the cap rather than letting the runtime reject the clip.
   `PhotoChatEvalTest` asks photo questions one after another through the real `ChatSender`: after
   two "I found N photos" turns the model answered the third ("photos of taslim") with a made-up
   count and no call, 3 times in 3. The rule now says to call find_photos for every such request,
-  since only the call shows the photos; with it, 9 of 9.
+  since only the call shows the photos; with it, 9 of 9. The user's own documents and cards
+  (licence, passport, Aadhaar, PAN, insurance, tickets, bills) are photos too: asked to "fetch my
+  driving license", the model searched the web in one chat, and in the routing eval it sent
+  "get my passport" and "pull up my train ticket" to search_memory and answered "I need my
+  aadhaar card" with "I don't have access to your documents". The rule and declaration now name
+  them, and all six document requests go to find_photos, while "how do I renew a driving license
+  in Kerala?" still goes online.
 - **Permissions.** `READ_MEDIA_IMAGES` (or `READ_EXTERNAL_STORAGE` up to Android 12), asked on
   the Photos screen; on Android 14 the person may share only some photos, and only those are
   indexed. Photos are read, never changed, moved or sent anywhere.

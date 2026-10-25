@@ -124,6 +124,15 @@ class RoutingEvalTest {
         Case("show me all the photos of taslim", setOf("find_photos")) { args ->
             args["person"].toString().lowercase().let { "taslim" in it || it == "me" }
         },
+        // The user's own documents are photos on the phone, never something to look up online.
+        Case("fetch my driving license", setOf("find_photos")) { args -> "licen" in args["query"].toString().lowercase() },
+        Case("get my passport", setOf("find_photos")) { args -> "passport" in args["query"].toString().lowercase() },
+        Case("I need my aadhaar card", setOf("find_photos")) { args -> "aadhaar" in args["query"].toString().lowercase() },
+        Case("where is my PAN card?", setOf("find_photos")) { args -> "pan" in args["query"].toString().lowercase() },
+        Case("show my vehicle insurance", setOf("find_photos")) { args -> "insurance" in args["query"].toString().lowercase() },
+        Case("pull up my train ticket", setOf("find_photos")) { args -> "ticket" in args["query"].toString().lowercase() },
+        // And documents in general are not the user's: these still go online or get an answer.
+        Case("how do I renew a driving license in Kerala?", setOf(null, "web_lookup")),
         Case("find photos of Amma at the beach", setOf("find_photos")) { args ->
             args["person"].toString().contains("amma", ignoreCase = true) && args["query"].toString().contains("beach", ignoreCase = true)
         },

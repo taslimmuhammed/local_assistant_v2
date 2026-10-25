@@ -57,14 +57,14 @@ object ToolCatalog {
 
     private val PHOTOS_DECLARATION = function(
         FIND_PHOTOS,
-        "Use when the user wants to see their own photos of something or someone, like their sunset photos, pictures of food or photos of themself. query: what is in the photos in one or two words, singular: beach, not beaches or beach photos. person: only for photos showing someone: me for the user, or names; several comma-separated for photos with all of them. My photos means photos the user has, not photos of them.",
+        "Use when the user wants to see their own photos of something or someone, like their sunset photos, pictures of food or photos of themself, or to get one of their own documents or cards (driving licence, passport, Aadhaar, PAN, insurance, ticket, bill): those are photos on this phone. query: what is in the photos in one or two words, singular: beach, not beaches or beach photos. person: only for photos showing someone: me for the user, or names; several comma-separated for photos with all of them. My photos means photos the user has, not photos of them.",
         required = emptyList(),
         "query" to "string",
         "person" to "string",
     )
 
     private const val PHOTOS_RULE =
-        "- Seeing their own photos of something or someone → find_photos, with person: me for photos of the user. Call it for every such request, even one like an earlier one: only the call shows the photos, and you can't know a count without it. The app shows the photos under your reply: say in one short sentence how many it found, and don't describe them."
+        "- Seeing their own photos of something or someone → find_photos, with person: me for photos of the user. Getting, finding or showing one of their own documents or cards (licence, passport, Aadhaar, PAN, insurance, tickets, bills, certificates) → find_photos with its name as query: they keep them as photos on this phone; not web_lookup or search_memory. Call it for every such request, even one like an earlier one: only the call shows the photos, and you can't know a count without it. The app shows the photos under your reply: say in one short sentence how many it found, and don't describe them."
     private const val PHOTOS_SLOT = "{photos}\n"
 
     private val WEB_DECLARATION = function(
