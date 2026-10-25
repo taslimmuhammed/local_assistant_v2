@@ -412,7 +412,7 @@ private fun LockedPhotos(set: PhotoSet, onUnlock: () -> Unit, modifier: Modifier
  * Scrolling on past the last row stops at the grid instead of being handed to the sheet, which
  * has nowhere to go but moves anyway. Pulling down at the top still reaches it, to close it.
  */
-private object KeepScrollPastEnd : NestedScrollConnection {
+internal object KeepScrollPastEnd : NestedScrollConnection {
     override fun onPostScroll(consumed: Offset, available: Offset, source: NestedScrollSource): Offset =
         if (available.y < 0) Offset(0f, available.y) else Offset.Zero
 

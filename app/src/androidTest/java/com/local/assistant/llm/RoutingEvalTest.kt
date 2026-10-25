@@ -115,6 +115,18 @@ class RoutingEvalTest {
         Case("find pictures of food I've eaten", setOf("find_photos")) { args -> args["query"].toString().contains("food", ignoreCase = true) },
         Case("do I have any photos of the beach?", setOf("find_photos")) { args -> args["query"].toString().contains("beach", ignoreCase = true) },
         Case("show the pics from the wedding", setOf("find_photos")),
+        Case("show me all the photos of me", setOf("find_photos")) { args -> args["person"].toString().lowercase() in setOf("me", "myself") },
+        // PhotoTools also takes a second person from the query, as the model sent it once.
+        Case("show me all the photos of me with shiyas", setOf("find_photos")) { args ->
+            "me" in args["person"].toString().lowercase() &&
+                "shiyas" in (args["person"].toString() + " " + args["query"].toString()).lowercase()
+        },
+        Case("show me all the photos of taslim", setOf("find_photos")) { args ->
+            args["person"].toString().lowercase().let { "taslim" in it || it == "me" }
+        },
+        Case("find photos of Amma at the beach", setOf("find_photos")) { args ->
+            args["person"].toString().contains("amma", ignoreCase = true) && args["query"].toString().contains("beach", ignoreCase = true)
+        },
         Case("what does a sunset look like from space?", setOf(null)),
         Case("how do I take a good photo of the moon?", setOf(null)),
         Case("remind me to call amma at 6", setOf("add_task")),
@@ -177,7 +189,11 @@ class RoutingEvalTest {
     }
 
     private fun evaluate(engine: Engine, temperature: Double) {
-        val system = Instructions.render(PERSONA, withTools = true, webSearch = true, photoSearch = true)
+        // "-e profile Taslim": the user's name in the prompt, as the app puts it, which changes how
+        // the model reads "photos of <that name>".
+        val profile = InstrumentationRegistry.getArguments().getString("profile")
+        val system = Instructions.render(PERSONA, withTools = true, webSearch = true, photoSearch = true) +
+            (profile?.let { "\n\n${com.local.assistant.memory.core.CoreMemoryRenderer.HEADER}\nProfile: Name: $it" } ?: "")
         val now = "[Now: ${DateTimeFormatter.ofPattern("EEE d MMM yyyy, HH:mm", Locale.ENGLISH).format(ZonedDateTime.now())}]"
         var right = 0
         var positivesRight = 0

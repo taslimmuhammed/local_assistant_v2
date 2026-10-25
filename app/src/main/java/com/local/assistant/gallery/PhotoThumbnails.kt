@@ -1,5 +1,6 @@
 package com.local.assistant.gallery
 
+import android.graphics.Bitmap
 import android.net.Uri
 import android.util.LruCache
 import androidx.compose.ui.graphics.ImageBitmap
@@ -32,6 +33,26 @@ class PhotoThumbnails(private val library: PhotoLibrary) {
 
     fun uri(mediaId: Long): Uri = library.uri(mediaId)
 
+    /** [face] cut square from its photo, with a little room around it, for a round avatar. */
+    suspend fun face(face: FaceEntity): ImageBitmap? {
+        val key = -face.id - 1 // never a MediaStore id
+        cache.get(key)?.let { return it }
+        return withContext(Dispatchers.IO) {
+            val photo = library.bitmap(face.mediaId, FACE_SOURCE_PIXELS) ?: return@withContext null
+            try {
+                val side = (maxOf(face.w * photo.width, face.h * photo.height) * FACE_ROOM).toInt().coerceAtMost(minOf(photo.width, photo.height))
+                val cx = ((face.x + face.w / 2) * photo.width).toInt()
+                val cy = ((face.y + face.h / 2) * photo.height).toInt()
+                val left = (cx - side / 2).coerceIn(0, photo.width - side)
+                val top = (cy - side / 2).coerceIn(0, photo.height - side)
+                val square = Bitmap.createBitmap(photo, left, top, side, side)
+                Bitmap.createScaledBitmap(square, FACE_PIXELS, FACE_PIXELS, true).also { if (square !== it) square.recycle() }.asImageBitmap()
+            } finally {
+                photo.recycle()
+            }
+        }?.also { cache.put(key, it) }
+    }
+
     /** When each photo was taken, for sorting by date; deleted ones are missing. */
     suspend fun datesTaken(mediaIds: Collection<Long>): Map<Long, Long> =
         withContext(Dispatchers.IO) { library.datesTaken(mediaIds) }
@@ -40,6 +61,9 @@ class PhotoThumbnails(private val library: PhotoLibrary) {
 
     private companion object {
         const val THUMBNAIL_PIXELS = 256
+        const val FACE_SOURCE_PIXELS = 1024
+        const val FACE_PIXELS = 160
+        const val FACE_ROOM = 1.5f
         const val CACHE_BYTES = 24 * 1024 * 1024
     }
 }

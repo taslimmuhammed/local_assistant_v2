@@ -34,6 +34,8 @@ class GalleryIndex(
     private val embedder: GalleryEmbedder,
     private val scheduler: ModelScheduler,
     private val scope: CoroutineScope,
+    /** The people in the photos, looked for once the photos themselves are indexed. */
+    private val faces: com.local.assistant.gallery.faces.FaceIndex? = null,
     private val clock: () -> Long = System::currentTimeMillis,
 ) {
 
@@ -79,6 +81,7 @@ class GalleryIndex(
             it.join()
         }
         embedder.unload()
+        faces?.close()
     }
 
     /** For the nightly job: false when photos are left that a later run should get to. */
@@ -88,6 +91,7 @@ class GalleryIndex(
         } finally {
             _status.update { it.copy(running = false) }
             embedder.unload()
+            faces?.close()
         }
     }
 
@@ -97,7 +101,10 @@ class GalleryIndex(
         _status.update { it.copy(running = true) }
         sync()
         refreshStatus()
-        return indexPending(deadline)
+        if (!indexPending(deadline)) return false
+        // Photo search first, people after: it's what most searches need.
+        embedder.unload()
+        return faces?.indexPending(deadline, ::runWhenIdle) ?: true
     }
 
     /** Brings the table in line with what MediaStore lists now. */
@@ -219,6 +226,27 @@ class GalleryIndex(
                 ids.indices.map { PhotoHit(ids[it], scores[it]) }.sortedByDescending { it.similarity }
             }
         }
+    }
+
+    /**
+     * Of [allowed] (someone's photos), those that match [query], best first, by the same rule as
+     * a search of everything; null when the model isn't installed or won't load.
+     */
+    suspend fun searchAmongForChat(query: String, allowed: Collection<Long>): List<Long>? {
+        val vector = embedder.embedQuery(query)?.let(Int8Vectors::quantize) ?: return null
+        val wanted = allowed.toHashSet()
+        val hits = vectorsLock.withLock {
+            withContext(Dispatchers.Default) {
+                if (vectorsStale) loadVectors()
+                val dims = Int8Vectors.DIMENSIONS
+                val picked = ids.indices.filter { ids[it] in wanted }
+                val subVectors = ByteArray(picked.size * dims)
+                picked.forEachIndexed { n, i -> vectors.copyInto(subVectors, n * dims, i * dims, (i + 1) * dims) }
+                PhotoRanking.rank(vector, LongArray(picked.size) { ids[picked[it]] }, subVectors, IntArray(picked.size) { norms[picked[it]] })
+            }
+        }
+        unloadWhenIdle()
+        return hits.map { it.mediaId }
     }
 
     /** Photos looked at so far and photos still waiting, read from the index itself. */

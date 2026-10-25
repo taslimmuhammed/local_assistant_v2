@@ -9,6 +9,8 @@ import com.local.assistant.AppContainer
 import com.local.assistant.gallery.GalleryIndex
 import com.local.assistant.gallery.PhotoLibrary
 import com.local.assistant.gallery.PhotoThumbnails
+import com.local.assistant.gallery.faces.FaceIndex
+import com.local.assistant.data.prefs.SettingsStore
 import com.local.assistant.model.InstalledModel
 import com.local.assistant.model.ModelManager
 import com.local.assistant.model.Transfer
@@ -24,6 +26,12 @@ import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+
+/** Someone in the People row: a person the user named, or a group of faces still to name. */
+sealed interface PeopleTarget {
+    data class Named(val person: FaceIndex.Person) : PeopleTarget
+    data class Unnamed(val group: FaceIndex.Group) : PeopleTarget
+}
 
 /** What the grid shows. */
 sealed interface PhotoResults {
@@ -46,6 +54,8 @@ class GalleryViewModel(
     val thumbnails: PhotoThumbnails,
     /** Small phones give the photo model's memory back as soon as the screen closes. */
     private val pauseWhenHidden: Boolean,
+    private val faces: FaceIndex,
+    private val settings: SettingsStore,
 ) : ViewModel() {
 
     private val _access = MutableStateFlow(library.access())
@@ -64,7 +74,64 @@ class GalleryViewModel(
     private val _results = MutableStateFlow<PhotoResults>(PhotoResults.Loading)
     val results: StateFlow<PhotoResults> = _results.asStateFlow()
 
+    // --- People ---------------------------------------------------------------------------
+
+    private val _findPeople = MutableStateFlow(settings.findPeople)
+    val findPeople: StateFlow<Boolean> = _findPeople.asStateFlow()
+
+    val faceStatus: StateFlow<FaceIndex.Status> = faces.status
+
+    private val _people = MutableStateFlow<List<FaceIndex.Person>>(emptyList())
+    val people: StateFlow<List<FaceIndex.Person>> = _people.asStateFlow()
+
+    private val _groups = MutableStateFlow<List<FaceIndex.Group>>(emptyList())
+    val groups: StateFlow<List<FaceIndex.Group>> = _groups.asStateFlow()
+
+    /** Turning it on starts looking; turning it off deletes every face found and every name. */
+    fun setFindPeople(on: Boolean) {
+        settings.findPeople = on
+        _findPeople.value = on
+        viewModelScope.launch {
+            if (on) {
+                faces.refreshStatus()
+                startIfReady()
+            } else {
+                faces.forgetAll()
+                loadPeople()
+            }
+        }
+    }
+
+    private suspend fun loadPeople() {
+        _people.value = faces.people()
+        _groups.value = faces.groups()
+    }
+
+    suspend fun photosOf(target: PeopleTarget): List<Long> = when (target) {
+        is PeopleTarget.Named -> faces.photosOfPerson(target.person.id)
+        is PeopleTarget.Unnamed -> faces.photosOfGroup(target.group.id)
+    }
+
+    fun name(group: FaceIndex.Group, name: String, isMe: Boolean, existing: Long?) = viewModelScope.launch {
+        faces.nameGroup(group.id, name, isMe, existing)
+    }
+
+    fun rename(person: FaceIndex.Person, name: String) = viewModelScope.launch { faces.rename(person.id, name) }
+
+    fun setMe(person: FaceIndex.Person) = viewModelScope.launch { faces.setMe(person.id) }
+
+    fun merge(from: FaceIndex.Person, into: FaceIndex.Person) = viewModelScope.launch { faces.merge(from.id, into.id) }
+
+    fun forget(person: FaceIndex.Person) = viewModelScope.launch { faces.forget(person.id) }
+
+    fun notThem(person: FaceIndex.Person, mediaId: Long) = viewModelScope.launch { faces.notThemIn(mediaId, person.id) }
+
     init {
+        // Who's who, read again whenever grouping or a name changed it, and as faces come in.
+        viewModelScope.launch {
+            faces.status.map { it.version to it.photosDone / PEOPLE_REFRESH_EVERY }.distinctUntilChanged().collectLatest { loadPeople() }
+        }
+        viewModelScope.launch { faces.refreshStatus() }
         observeResults()
         // A model that has just arrived starts indexing at once.
         viewModelScope.launch { installed.collect { if (it != null) startIfReady() } }
@@ -125,6 +192,7 @@ class GalleryViewModel(
         const val QUERY_DEBOUNCE_MS = 300L
         const val NEWEST_LIMIT = 300
         const val REFRESH_EVERY = 200
+        const val PEOPLE_REFRESH_EVERY = 100
 
         fun factory(container: AppContainer): ViewModelProvider.Factory = viewModelFactory {
             initializer {
@@ -134,6 +202,8 @@ class GalleryViewModel(
                     modelManager = container.galleryModelManager,
                     thumbnails = container.photoThumbnails,
                     pauseWhenHidden = container.isSmallDevice,
+                    faces = container.faceIndex,
+                    settings = container.settings,
                 )
             }
         }

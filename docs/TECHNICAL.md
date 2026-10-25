@@ -565,6 +565,33 @@ stops hard at the cap rather than letting the runtime reject the clip.
   heading per month, and the viewer pages through them in the order shown. Over the lock
   screen the panel says how many were found and shows none until the phone is unlocked. The
   photo model is let go two minutes after a chat's last search, unless indexing needs it.
+- **People** (`gallery/faces/`), off until "Find people" is turned on on the Photos screen, since
+  faces are biometric data; turning it off deletes every face and name. YuNet finds faces and
+  SFace prints them (128 numbers), both from OpenCV Zoo, converted from ONNX to TensorFlow Lite
+  (SFace with 8-bit weights, 9.9 MB) and run by LiteRT's interpreter from the APK's assets
+  (`assets/faces/NOTICE.txt`). LiteRT is 5.6 MB of native code, against about 34 MB for ONNX
+  Runtime or OpenCV, and loads beside LiteRT-LM without conflict. Decoding and alignment were
+  checked against OpenCV's own FaceDetectorYN and FaceRecognizerSF: the same 34 faces on 18
+  public photos, boxes and landmarks to the pixel, prints at cosine 0.996+ on the Mac and 0.960+
+  on the phone (`FaceEvalTest`; the difference is resampling). The phone's 2,430 photos took 138
+  s: 2,199 faces in 900 photos. Faces are stored in `gallery.db` (version 2, the index's first
+  real migration, since names can't be rebuilt). `FaceGrouping` places them: faces the user
+  confirmed stay; others join the named person whose three closest faces they match at 0.55 or
+  more on average; the rest form unnamed groups by the same closest-faces rule at 0.65. Faces
+  narrower than 8% of the photo aren't placed. Running averages (and SFace's published 0.363)
+  grouped people by look, glasses, sunglasses, children of an age, on this phone's photos; by
+  closest faces at 0.65 each group looked like one person, sometimes one person in two groups,
+  which naming both alike merges. A face's own person scored 0.64+ and the nearest other 0.48 at
+  most. `find_photos` takes `person` (me, a name, or several comma-separated for photos with all
+  of them): their photos newest first, or with a query, ranked within them by the search rule
+  above. "Me" is whoever is marked "This is me", or else the person named as in the user's
+  profile; naming a group with the profile's name marks it. `PhotoTools` takes what the model
+  sends loosely, as seen in real chats: filler queries ("all", "photos") are dropped, and a query
+  that names someone already named counts as another person ("me" plus query "shiyas").
+  `PhotoChatEvalTest` asks photo questions one after another through the real `ChatSender`: after
+  two "I found N photos" turns the model answered the third ("photos of taslim") with a made-up
+  count and no call, 3 times in 3. The rule now says to call find_photos for every such request,
+  since only the call shows the photos; with it, 9 of 9.
 - **Permissions.** `READ_MEDIA_IMAGES` (or `READ_EXTERNAL_STORAGE` up to Android 12), asked on
   the Photos screen; on Android 14 the person may share only some photos, and only those are
   indexed. Photos are read, never changed, moved or sent anywhere.

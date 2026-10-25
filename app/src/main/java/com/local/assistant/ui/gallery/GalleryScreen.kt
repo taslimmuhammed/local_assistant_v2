@@ -83,6 +83,7 @@ fun GalleryScreen(viewModel: GalleryViewModel, onBack: () -> Unit) {
     val query by viewModel.query.collectAsStateWithLifecycle()
     val status by viewModel.status.collectAsStateWithLifecycle()
     var viewing by remember { mutableStateOf<Pair<List<Long>, Int>?>(null) }
+    var person by remember { mutableStateOf<PeopleTarget?>(null) }
 
     val lifecycle = LocalLifecycleOwner.current.lifecycle
     DisposableEffect(lifecycle) {
@@ -137,6 +138,8 @@ fun GalleryScreen(viewModel: GalleryViewModel, onBack: () -> Unit) {
                             } else {
                                 SearchField(query, viewModel::setQuery)
                                 IndexProgress(status)
+                                // People only while nothing is typed: a search result is about the photos.
+                                if (query.isBlank()) PeopleSection(viewModel, onOpen = { person = it })
                             }
                             if (access == PhotoLibrary.Access.SOME) PartialAccessNote(viewModel)
                             ResultLabel(results, status)
@@ -150,6 +153,7 @@ fun GalleryScreen(viewModel: GalleryViewModel, onBack: () -> Unit) {
         }
 
         viewing?.let { (ids, start) -> PhotoViewer(ids, start, viewModel.thumbnails, onClose = { viewing = null }) }
+        person?.let { PersonSheet(it, viewModel, onDismiss = { person = null }) }
     }
 }
 

@@ -76,6 +76,11 @@ android {
         unitTests.isReturnDefaultValues = true
     }
 
+    // The face models are memory-mapped straight from the APK, which needs them stored as is.
+    androidResources {
+        noCompress += "tflite"
+    }
+
     packaging {
         // Compressed in the demo APK (22 MB of LiteRT-LM smaller in the repository); extracted
         // at install. Otherwise stored as usual, uncompressed and loaded in place.
@@ -135,6 +140,9 @@ dependencies {
 
     // On-device LLM runtime.
     implementation(libs.litertlm.android)
+    // TensorFlow Lite's interpreter, for the two small face models (gallery/faces): 5.6 MB of
+    // native code, against about 34 MB for ONNX Runtime or OpenCV.
+    implementation(libs.litert)
     // Already a transitive dependency of LiteRT-LM; declared because tool arguments and results
     // are parsed with it. org.json would be stubbed out in JVM unit tests.
     implementation(libs.gson)

@@ -15,6 +15,8 @@ import com.local.assistant.gallery.GalleryModel
 import com.local.assistant.gallery.PhotoLibrary
 import com.local.assistant.gallery.PhotoThumbnails
 import com.local.assistant.gallery.PhotoTools
+import com.local.assistant.gallery.faces.FaceFinder
+import com.local.assistant.gallery.faces.FaceIndex
 import com.local.assistant.data.db.AppDatabase
 import com.local.assistant.data.prefs.SettingsStore
 import com.local.assistant.data.repo.ChatRepository
@@ -218,12 +220,24 @@ class AppContainer(context: Context) {
 
     val photoThumbnails = PhotoThumbnails(photoLibrary)
 
+    private val galleryDatabase = GalleryDatabase.build(context)
+
+    /** The people in the photos; nothing is looked for until "Find people" is turned on. */
+    val faceIndex = FaceIndex(
+        database = galleryDatabase,
+        library = photoLibrary,
+        newFinder = { FaceFinder(context.assets) },
+        enabled = { settings.findPeople },
+        userName = { memoryRepository.coreFacts().firstOrNull { it.subject == "user" && it.attribute == "name" }?.value },
+    )
+
     val galleryIndex = GalleryIndex(
-        dao = GalleryDatabase.build(context).photoDao(),
+        dao = galleryDatabase.photoDao(),
         library = photoLibrary,
         embedder = GalleryEmbedder(modelFile = { galleryModelManager.installed.value?.file }, cacheDir = context.cacheDir),
         scheduler = modelScheduler,
         scope = appScope,
+        faces = faceIndex,
     )
 
     /** find_photos is declared to the model only once its model is here and the photos may be read. */
@@ -363,7 +377,7 @@ class AppContainer(context: Context) {
         onImageSaved = ::rereadSavedImage,
         device = deviceTools,
         web = WebTools(webSearch),
-        photos = PhotoTools(galleryIndex, ready = ::photoSearchReady),
+        photos = PhotoTools(galleryIndex, ready = ::photoSearchReady, faces = faceIndex, findPeople = { settings.findPeople }),
     )
 
     private val toolLoop = ToolLoop(

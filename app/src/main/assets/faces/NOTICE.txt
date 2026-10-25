@@ -1,0 +1,13 @@
+Face models used by photo search's People feature, from OpenCV Zoo (github.com/opencv/opencv_zoo).
+
+yunet_2023mar.tflite
+  YuNet face detector, face_detection_yunet_2023mar.onnx, by Shiqi Yu and contributors.
+  MIT License (LICENSE-yunet.txt). Converted from ONNX to TensorFlow Lite with onnx2tf;
+  weights and outputs unchanged.
+
+sface_2021dec_int8w.tflite
+  SFace face recognizer (MobileFaceNet trained with the SFace loss),
+  face_recognition_sface_2021dec.onnx. Apache License 2.0 (LICENSE-sface.txt).
+  Modified: converted from ONNX to TensorFlow Lite with onnx2tf, then its weights stored as
+  8-bit integers (TensorFlow Lite dynamic-range quantization). Its outputs agree with the
+  original's at a cosine similarity of 0.996 or more (tools/faces in this repository's history).
