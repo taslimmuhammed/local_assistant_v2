@@ -40,7 +40,8 @@ sealed interface PhotoResults {
     /** Nothing typed: the newest photos. */
     data class Newest(val ids: List<Long>) : PhotoResults
 
-    data class Found(val query: String, val ids: List<Long>) : PhotoResults
+    /** [moments]: for videos, where the match is. */
+    data class Found(val query: String, val ids: List<Long>, val moments: Map<Long, Long> = emptyMap()) : PhotoResults
 
     /** Something typed, but the photo model isn't there (or wouldn't load) to search with. */
     data class CannotSearch(val query: String) : PhotoResults
@@ -61,7 +62,15 @@ class GalleryViewModel(
     private val _access = MutableStateFlow(library.access())
     val access: StateFlow<PhotoLibrary.Access> = _access.asStateFlow()
 
-    val permissions: Array<String> get() = library.permissions
+    val permissions: Array<String> get() = library.permissions + library.locationPermissions
+
+    /**
+     * Asked for as soon as photos are shared: locations for "photos in Munnar" (no dialog of its
+     * own), and videos, for anyone who shared photos before videos were searched.
+     */
+    val followUpPermissions: Array<String>
+        get() = (library.locationPermissions.takeUnless { library.locationAccess() } ?: emptyArray()) +
+            (library.videoPermissions.takeUnless { library.videoAccess() } ?: emptyArray())
 
     val installed: StateFlow<InstalledModel?> = modelManager.installed
     val transfer: StateFlow<Transfer?> = modelManager.transfer
@@ -151,7 +160,7 @@ class GalleryViewModel(
                     }
                     if (_results.value !is PhotoResults.Found) _results.value = PhotoResults.Loading
                     val hits = index.search(q)
-                    _results.value = if (hits == null) PhotoResults.CannotSearch(q) else PhotoResults.Found(q, hits.map { it.mediaId })
+                    _results.value = if (hits == null) PhotoResults.CannotSearch(q) else PhotoResults.Found(q, hits.map { it.mediaId }, hits.mapNotNull { h -> h.atMs?.let { h.mediaId to it } }.toMap())
                 }
         }
     }

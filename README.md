@@ -83,6 +83,14 @@ In the same place:
   Gemma is provided under and subject to the Gemma Terms of Use found at
   [ai.google.dev/gemma/terms](https://ai.google.dev/gemma/terms); its use is subject to the
   [Gemma Prohibited Use Policy](https://ai.google.dev/gemma/prohibited_use_policy).
+- **EmbeddingGemma 2 (text and vision, 440M)**, photo search: by Google, downloaded from
+  litert-community on Hugging Face when Photos is turned on; Gemma Terms of Use, as above.
+- **YuNet** (MIT) and **SFace** (Apache License 2.0), finding and telling faces apart for People:
+  from OpenCV Zoo, converted to TensorFlow Lite; SFace's weights stored as 8-bit. See
+  `app/src/main/assets/faces/NOTICE.txt`.
+- **Place names** for searching photos by where they were taken: from
+  [GeoNames](https://www.geonames.org), [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/),
+  reduced by `tools/places`. See `app/src/main/assets/places/NOTICE.txt`.
 
 ## Privacy
 

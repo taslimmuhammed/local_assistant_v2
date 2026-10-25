@@ -26,8 +26,13 @@
     <!-- Photo search: asked when the Photos screen is first opened, and only read. Android 14
          lets people share just some photos instead of all of them. -->
     <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />
+    <uses-permission android:name="android.permission.READ_MEDIA_VIDEO" />
     <uses-permission android:name="android.permission.READ_MEDIA_VISUAL_USER_SELECTED" />
     <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" android:maxSdkVersion="32" />
+    <!-- "Photos in Munnar": where photos were taken. Android removes it from what the app reads
+         unless this is granted; asked on the Photos screen. Matched against a place list in the
+         APK, so no location leaves the phone. -->
+    <uses-permission android:name="android.permission.ACCESS_MEDIA_LOCATION" />
 
     <!-- "Keep the assistant ready": a foreground service holds the app, and the loaded model,
          in memory so the power button answers at once. Off in Settings, and it stops. -->

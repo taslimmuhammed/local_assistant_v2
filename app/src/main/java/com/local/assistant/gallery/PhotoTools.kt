@@ -1,10 +1,13 @@
 package com.local.assistant.gallery
 
 import com.local.assistant.gallery.faces.FaceIndex
+import com.local.assistant.gallery.places.PlaceList
+import com.local.assistant.gallery.places.Places
 import com.local.assistant.memory.tools.ActionResult
 import com.local.assistant.memory.tools.MemoryChip
 import com.local.assistant.memory.tools.PhotoSet
 import com.local.assistant.memory.tools.ToolError
+import java.time.ZonedDateTime
 
 /**
  * find_photos: the phone's photos that match what the user asked for, of something, of people
@@ -22,9 +25,11 @@ class PhotoTools(
     private val ready: () -> Boolean,
     private val faces: FaceIndex? = null,
     private val findPeople: () -> Boolean = { false },
+    private val places: PlaceList? = null,
+    private val now: () -> ZonedDateTime = ZonedDateTime::now,
 ) {
 
-    internal suspend fun find(query: String?, person: String?): ActionResult {
+    internal suspend fun find(query: String?, person: String?, taken: String? = null, place: String? = null): ActionResult {
         if (!ready()) throw ToolError("Photo search isn't set up. Tell the user to open Photos in the menu to turn it on.")
         val names = people(person).toMutableList()
         var what = query?.trim()?.take(MAX_QUERY)?.takeIf { it.isNotEmpty() }
@@ -36,8 +41,27 @@ class PhotoTools(
                 what = null
             }
         }
+        // "beach videos", "videos from Goa": videos only.
+        val videosOnly = what?.split(Regex("\\s+"))?.any { it.lowercase().trim(',', '.', '!', '?') in VIDEO_WORDS } == true
         what = what?.let(::description)
-        if (what == null && names.isEmpty()) throw ToolError("Say what the photos are of, or who is in them.")
+        var period = taken?.trim()?.takeIf { it.isNotEmpty() }?.let { phrase ->
+            PhotoPeriod.parse(phrase, now()) ?: throw ToolError("Couldn't tell when \"$phrase\" is. Ask the user for a day, month or year.")
+        }
+        // For the card: the time as the user put it.
+        var periodWords = taken?.trim()?.takeIf { period != null }
+        // A date the model left in the query ("2023", "beach last december") is a when.
+        if (period == null && what != null) {
+            PhotoPeriod.parse(what, now())?.let { inQuery ->
+                val rest = PhotoPeriod.withoutTime(what!!)
+                period = inQuery
+                periodWords = what!!.split(Regex("\\s+")).filter { it !in rest.split(' ') }.joinToString(" ")
+                what = description(rest)
+            }
+        }
+        val placeName = place?.trim()?.takeIf { it.isNotEmpty() }
+        if (what == null && names.isEmpty() && period == null && placeName == null && !videosOnly) {
+            throw ToolError("Say what the photos are of, who is in them, where or when they were taken.")
+        }
         val (indexed, remaining) = index.counts()
         if (indexed == 0) {
             throw ToolError("The photos aren't ready for search yet. Tell the user they get ready while Photos in the menu is open, and overnight while charging.")
@@ -56,32 +80,76 @@ class PhotoTools(
             )
         }.distinctBy { it.id }
 
-        val ids = when {
-            named.isNotEmpty() && what == null -> faces!!.photosWithAll(named.map { it.id })
-            named.isNotEmpty() -> index.searchAmongForChat(what!!, faces!!.photosWithAll(named.map { it.id }))
-            else -> index.searchForChat(what!!)?.ids
+        val area = placeName?.let { area(it) }
+
+        // Who, where and when narrow the photos down, newest first; what's in them then ranks those.
+        var narrowed: List<Long>? = null
+        fun narrow(to: List<Long>) {
+            narrowed = narrowed?.let { before -> to.toHashSet().let { set -> before.filter { it in set } } } ?: to
+        }
+        if (videosOnly) narrow(index.videoIds())
+        if (named.isNotEmpty()) narrow(faces!!.photosWithAll(named.map { it.id }))
+        if (area != null) narrow(index.takenAt(area))
+        if (period != null) narrow(index.takenIn(period))
+        val found = when {
+            what == null -> PhotoSet("", narrowed!!)
+            narrowed != null -> index.searchAmongForChat(what, narrowed!!)?.let { PhotoSet.of("", it) }
+            else -> index.searchForChat(what)
         } ?: throw ToolError("Photo search couldn't start. Tell the user to try again in a moment.")
+        val ids = found.ids
 
         val who = named.joinToString(" & ") { if (it.isMe) "You" else it.name }.takeIf { it.isNotEmpty() }
-        val label = listOfNotNull(who, what).joinToString(" · ")
-        val result = linkedMapOf<String, Any?>("ok" to true, "found" to ids.size)
+        val where = when (area) {
+            is Places.Area.Near -> area.name
+            is Places.Area.InRegion -> area.name
+            is Places.Area.InCountry -> area.name
+            null -> null
+        }
+        val label = listOfNotNull(who, what, where, periodWords).joinToString(" · ")
+        val result = linkedMapOf<String, Any?>("ok" to true)
+        // Photos and videos apart, when there are videos: given a total and the videos among it,
+        // the model added them up again ("18 photos and 4 videos" for 14 and 4).
+        val videos = index.videoIds().toHashSet().let { all -> ids.count { it in all } }
+        if (videos == 0) {
+            result["found"] = ids.size
+        } else {
+            result["photos"] = ids.size - videos
+            result["videos"] = videos
+        }
         if (named.isNotEmpty()) result["people"] = named.map { it.name }
         // Said so the model doesn't call it a full answer while most of the library is unseen.
         if (remaining > 0) result["not_yet_searchable"] = remaining
+        if (area != null) index.locating().first.takeIf { it > 0 }?.let { result["location_not_yet_read"] = it }
         return ActionResult(
             result,
-            MemoryChip(MemoryChip.Kind.PHOTOS, "Photos", label, photos = PhotoSet(label, ids)).takeIf { ids.isNotEmpty() },
+            MemoryChip(MemoryChip.Kind.PHOTOS, "Photos", label, photos = found.copy(query = label)).takeIf { ids.isNotEmpty() },
         )
+    }
+
+    /** What [name] stands for, among towns with the user's photos when several share it. */
+    private suspend fun area(name: String): Places.Area {
+        val list = places ?: throw ToolError("Searching photos by place isn't available.")
+        val (pending, canRead) = index.locating()
+        if (!canRead && pending > 0) {
+            throw ToolError("The app can't see where photos were taken yet. Tell the user to open Photos in the menu, which lets it.")
+        }
+        val taken = index.locations()
+        return list.get().resolve(name) { points, radius ->
+            points.filter { (lat, lon) -> taken.any { Places.km(it.first, it.second, lat, lon) <= radius } }
+        } ?: throw ToolError("Couldn't find a place called $name. Ask the user for the nearest town, or the state or country.")
     }
 
     companion object {
         const val MAX_QUERY = 120
 
+        /** Words that ask for videos rather than photos (declared before [FILLER], which takes them in). */
+        private val VIDEO_WORDS = setOf("video", "videos", "clip", "clips", "footage", "recording", "recordings")
+
         /** Words that say "photos" or "all of them" rather than what's in them. */
         private val FILLER = setOf(
             "all", "every", "everything", "any", "photo", "photos", "picture", "pictures", "pic", "pics", "image", "images",
             "of", "the", "my", "me", "myself", "mine", "together", "with", "and", "show", "find",
-        )
+        ) + VIDEO_WORDS
 
         /** "me, shiyas", "me and shiyas", "taslim & shiyas" as separate names. */
         fun people(text: String?): List<String> =

@@ -17,6 +17,7 @@ import com.local.assistant.gallery.PhotoThumbnails
 import com.local.assistant.gallery.PhotoTools
 import com.local.assistant.gallery.faces.FaceFinder
 import com.local.assistant.gallery.faces.FaceIndex
+import com.local.assistant.gallery.places.PlaceList
 import com.local.assistant.data.db.AppDatabase
 import com.local.assistant.data.prefs.SettingsStore
 import com.local.assistant.data.repo.ChatRepository
@@ -222,6 +223,9 @@ class AppContainer(context: Context) {
 
     private val galleryDatabase = GalleryDatabase.build(context)
 
+    /** Towns, states and countries, offline, for "photos in Munnar". */
+    val placeList = PlaceList(context.assets)
+
     /** The people in the photos; nothing is looked for until "Find people" is turned on. */
     val faceIndex = FaceIndex(
         database = galleryDatabase,
@@ -238,6 +242,7 @@ class AppContainer(context: Context) {
         scheduler = modelScheduler,
         scope = appScope,
         faces = faceIndex,
+        places = placeList,
     )
 
     /** find_photos is declared to the model only once its model is here and the photos may be read. */
@@ -377,7 +382,7 @@ class AppContainer(context: Context) {
         onImageSaved = ::rereadSavedImage,
         device = deviceTools,
         web = WebTools(webSearch),
-        photos = PhotoTools(galleryIndex, ready = ::photoSearchReady, faces = faceIndex, findPeople = { settings.findPeople }),
+        photos = PhotoTools(galleryIndex, ready = ::photoSearchReady, faces = faceIndex, findPeople = { settings.findPeople }, places = placeList),
     )
 
     private val toolLoop = ToolLoop(

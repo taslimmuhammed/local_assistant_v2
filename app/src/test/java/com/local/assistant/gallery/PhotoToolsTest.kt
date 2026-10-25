@@ -23,6 +23,8 @@ class PhotoToolsTest {
         assertNull(PhotoTools.description("all photos"))
         assertNull(PhotoTools.description("me"))
         assertEquals("beach", PhotoTools.description("beach photos"))
+        assertEquals("beach", PhotoTools.description("beach videos"))
+        assertNull(PhotoTools.description("my videos"))
         assertEquals("birthday cake", PhotoTools.description("birthday cake"))
     }
 }

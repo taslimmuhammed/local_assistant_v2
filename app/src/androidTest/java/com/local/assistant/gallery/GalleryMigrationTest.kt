@@ -16,8 +16,8 @@ import org.junit.runner.RunWith
 import java.io.File
 
 /**
- * The photo index's first real migration: the phone's 2,428 indexed photos must come through it
- * untouched, and Room checks the result against its own schema.
+ * The photo index's migrations: the phone's 2,428 indexed photos must come through them untouched,
+ * and Room checks each result against its own schema.
  */
 @RunWith(AndroidJUnit4::class)
 class GalleryMigrationTest {
@@ -62,6 +62,40 @@ class GalleryMigrationTest {
             assertEquals(2L, db.long("SELECT COUNT(*) FROM faces WHERE personId IS NULL"))
             db.execSQL("DELETE FROM photos WHERE mediaId = 7")
             assertEquals(1L, db.long("SELECT COUNT(*) FROM faces"))
+        }
+    }
+
+    @Test
+    fun photosGainPlacesStillToRead() {
+        helper.createDatabase(2).use { db ->
+            db.execSQL("INSERT INTO photos (mediaId, dateTaken, dateModified, width, height, embedding, modelId, facesModel) VALUES (7, 100, 200, 4000, 3000, X'0102FF', 'embeddinggemma-2-tv-440m@256@v70', 'yunet+sface')")
+        }
+
+        helper.runMigrationsAndValidate(3, listOf(GalleryDatabase.MIGRATION_2_3)).use { db ->
+            assertArrayEquals(byteArrayOf(1, 2, -1), db.blob("SELECT embedding FROM photos WHERE mediaId = 7"))
+            assertEquals("yunet+sface", db.string("SELECT facesModel FROM photos WHERE mediaId = 7"))
+            // Every photo's place is still to be read, and none is known yet.
+            assertEquals(1L, db.long("SELECT COUNT(*) FROM photos WHERE placeChecked = 0 AND lat IS NULL AND town IS NULL"))
+        }
+    }
+
+    @Test
+    fun photosStayPhotosAndVideosGetFrames() {
+        helper.createDatabase(3).use { db ->
+            db.execSQL("INSERT INTO photos (mediaId, dateTaken, dateModified, width, height, embedding, modelId, town, placeChecked) VALUES (7, 100, 200, 4000, 3000, X'0102FF', 'embeddinggemma-2-tv-440m@256@v70', 'Munnar', 1)")
+        }
+
+        helper.runMigrationsAndValidate(4, listOf(GalleryDatabase.MIGRATION_3_4)).use { db ->
+            assertEquals("Munnar", db.string("SELECT town FROM photos WHERE mediaId = 7"))
+            assertEquals(1L, db.long("SELECT COUNT(*) FROM photos WHERE durationMs IS NULL"))
+
+            db.execSQL("PRAGMA foreign_keys = ON")
+            db.execSQL("INSERT INTO photos (mediaId, dateTaken, dateModified, width, height, durationMs) VALUES (9, 100, 200, 1920, 1080, 30000)")
+            db.execSQL("INSERT INTO frames (mediaId, atMs, embedding) VALUES (9, 5000, X'01'), (9, 15000, X'02')")
+            assertEquals(2L, db.long("SELECT COUNT(*) FROM frames"))
+            // Deleting the video takes its frames.
+            db.execSQL("DELETE FROM photos WHERE mediaId = 9")
+            assertEquals(0L, db.long("SELECT COUNT(*) FROM frames"))
         }
     }
 

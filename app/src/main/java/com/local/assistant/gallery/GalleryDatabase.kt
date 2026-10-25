@@ -1,6 +1,7 @@
 package com.local.assistant.gallery
 
 import android.content.Context
+import androidx.room.ColumnInfo
 import androidx.room.Dao
 import androidx.room.Database
 import androidx.room.Entity
@@ -19,12 +20,15 @@ import androidx.sqlite.driver.bundled.BundledSQLiteDriver
 import kotlinx.coroutines.Dispatchers
 
 /**
- * One row per photo on the phone, keyed by its MediaStore id.
+ * One row per photo or video on the phone, keyed by its MediaStore id (unique across both).
  *
  * [dateModified] is MediaStore's: when it changes the photo was edited, and its vector is made
  * again. [embedding] is [com.local.assistant.memory.embed.Int8Vectors] bytes, null until indexed;
  * [modelId] says which model made it ([FAILED] when the photo could not be read). [facesModel]
  * is set once its faces have been looked for, by which face models; null until then.
+ *
+ * A video has its [durationMs] and no [embedding]: its vectors are [FrameEntity] rows, and
+ * [modelId] says they're done. People aren't looked for in videos.
  */
 @Entity(tableName = "photos")
 data class PhotoEntity(
@@ -36,6 +40,17 @@ data class PhotoEntity(
     val embedding: ByteArray? = null,
     val modelId: String? = null,
     val facesModel: String? = null,
+    /** Where it was taken, from its GPS tags; null when it has none or they can't be read. */
+    val lat: Double? = null,
+    val lon: Double? = null,
+    /** The nearest town in [com.local.assistant.gallery.places.Places], its state ("IN.13") and country ("IN"). */
+    val town: String? = null,
+    val region: String? = null,
+    val country: String? = null,
+    /** Its GPS tags have been read (whether or not it had any). */
+    @ColumnInfo(defaultValue = "0") val placeChecked: Boolean = false,
+    /** How long it runs, for a video; null for a photo. */
+    val durationMs: Long? = null,
 ) {
     override fun equals(other: Any?): Boolean = other is PhotoEntity && other.mediaId == mediaId && other.dateModified == dateModified
     override fun hashCode(): Int = mediaId.hashCode()
@@ -93,8 +108,32 @@ data class FaceEntity(
     override fun hashCode(): Int = id.hashCode()
 }
 
+/** One moment of a video, [atMs] in, and its vector, as for a photo. Deleting the video deletes them. */
+@Entity(
+    tableName = "frames",
+    primaryKeys = ["mediaId", "atMs"],
+    foreignKeys = [ForeignKey(entity = PhotoEntity::class, parentColumns = ["mediaId"], childColumns = ["mediaId"], onDelete = ForeignKey.CASCADE)],
+)
+data class FrameEntity(
+    val mediaId: Long,
+    val atMs: Long,
+    val embedding: ByteArray,
+) {
+    override fun equals(other: Any?): Boolean = other is FrameEntity && other.mediaId == mediaId && other.atMs == atMs
+    override fun hashCode(): Int = 31 * mediaId.hashCode() + atMs.hashCode()
+}
+
+/** A video frame's vector, for the search scan. */
+data class FrameVector(val mediaId: Long, val atMs: Long, val embedding: ByteArray)
+
+/** A video and its length. */
+data class VideoLength(val mediaId: Long, val durationMs: Long)
+
 /** What a scan of MediaStore needs to compare against: id and when it last changed. */
 data class PhotoStamp(val mediaId: Long, val dateModified: Long)
+
+/** A photo's location, for distance from a town. */
+data class LocatedPhoto(val mediaId: Long, val lat: Double, val lon: Double)
 
 /** A stored vector, for the search scan. */
 data class PhotoVector(val mediaId: Long, val embedding: ByteArray)
@@ -131,14 +170,63 @@ interface PhotoDao {
     @Query("SELECT mediaId FROM photos ORDER BY dateTaken DESC LIMIT :limit")
     suspend fun newest(limit: Int): List<Long>
 
+    /** A video's frames, made again: the old ones out, the new ones in, and the video marked done. */
+    @androidx.room.Transaction
+    suspend fun setFrames(mediaId: Long, frames: List<FrameEntity>, modelId: String) {
+        deleteFrames(mediaId)
+        if (frames.isNotEmpty()) insertFrames(frames)
+        setEmbedding(mediaId, null, modelId)
+    }
+
+    @Query("DELETE FROM frames WHERE mediaId = :mediaId")
+    suspend fun deleteFrames(mediaId: Long)
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertFrames(frames: List<FrameEntity>)
+
+    /** Frames whose video is gone or is being made again, for when foreign keys weren't enforced. */
+    @Query("DELETE FROM frames WHERE mediaId NOT IN (SELECT mediaId FROM photos WHERE durationMs IS NOT NULL)")
+    suspend fun deleteOrphanFrames()
+
+    @Query("SELECT f.mediaId, f.atMs, f.embedding FROM frames f JOIN photos p ON p.mediaId = f.mediaId WHERE p.modelId = :modelId")
+    suspend fun frameVectors(modelId: String): List<FrameVector>
+
+    /** Newest first. */
+    @Query("SELECT mediaId, durationMs FROM photos WHERE durationMs IS NOT NULL ORDER BY dateTaken DESC")
+    suspend fun videos(): List<VideoLength>
+
+    /** Photos whose location hasn't been read yet. */
+    @Query("SELECT mediaId FROM photos WHERE placeChecked = 0 ORDER BY dateTaken DESC LIMIT :limit")
+    suspend fun placesPending(limit: Int): List<Long>
+
+    @Query("SELECT COUNT(*) FROM photos WHERE placeChecked = 0")
+    suspend fun placesPendingCount(): Int
+
+    @Query("UPDATE photos SET lat = :lat, lon = :lon, town = :town, region = :region, country = :country, placeChecked = 1 WHERE mediaId = :mediaId")
+    suspend fun setPlace(mediaId: Long, lat: Double?, lon: Double?, town: String?, region: String?, country: String?)
+
+    /** Photos with a location, for "near a town". */
+    @Query("SELECT mediaId, lat, lon FROM photos WHERE lat IS NOT NULL ORDER BY dateTaken DESC")
+    suspend fun located(): List<LocatedPhoto>
+
+    @Query("SELECT mediaId FROM photos WHERE region = :code ORDER BY dateTaken DESC")
+    suspend fun inRegion(code: String): List<Long>
+
+    @Query("SELECT mediaId FROM photos WHERE country = :code ORDER BY dateTaken DESC")
+    suspend fun inCountry(code: String): List<Long>
+
+    /** Photos taken from [start] up to [end] (epoch millis), newest first. */
+    @Query("SELECT mediaId FROM photos WHERE dateTaken >= :start AND dateTaken < :end ORDER BY dateTaken DESC")
+    suspend fun takenBetween(start: Long, end: Long): List<Long>
+
     @Query("DELETE FROM photos")
     suspend fun clear()
 
     /** Photos whose faces haven't been looked for by [model], newest first. */
-    @Query("SELECT * FROM photos WHERE facesModel IS NULL OR facesModel != :model ORDER BY dateTaken DESC LIMIT :limit")
+    @Query("SELECT * FROM photos WHERE (facesModel IS NULL OR facesModel != :model) AND durationMs IS NULL ORDER BY dateTaken DESC LIMIT :limit")
     suspend fun facesPending(model: String, limit: Int): List<PhotoEntity>
 
-    @Query("SELECT COUNT(*) FROM photos WHERE facesModel IS NULL OR facesModel != :model")
+    @Query("SELECT COUNT(*) FROM photos WHERE (facesModel IS NULL OR facesModel != :model) AND durationMs IS NULL")
     suspend fun facesPendingCount(model: String): Int
 
     @Query("UPDATE photos SET facesModel = :model WHERE mediaId = :mediaId")
@@ -221,7 +309,7 @@ interface FaceDao {
  * database. Version 1 held only what can be rebuilt from the photos; version 2 adds the people
  * the user named, which can't be, so from 2 on every schema change gets a real migration.
  */
-@Database(entities = [PhotoEntity::class, PersonEntity::class, FaceEntity::class], version = 2, exportSchema = true)
+@Database(entities = [PhotoEntity::class, PersonEntity::class, FaceEntity::class, FrameEntity::class], version = 4, exportSchema = true)
 abstract class GalleryDatabase : RoomDatabase() {
 
     abstract fun photoDao(): PhotoDao
@@ -255,12 +343,33 @@ abstract class GalleryDatabase : RoomDatabase() {
             }
         }
 
+        /** Where each photo was taken. Nothing is read here: the place pass fills it in. */
+        val MIGRATION_2_3 = object : Migration(2, 3) {
+            override fun migrate(connection: SQLiteConnection) {
+                for (column in listOf("lat REAL", "lon REAL", "town TEXT", "region TEXT", "country TEXT", "placeChecked INTEGER NOT NULL DEFAULT 0")) {
+                    connection.execSQL("ALTER TABLE photos ADD COLUMN $column")
+                }
+            }
+        }
+
+        /** Videos: their length on the photos table, their moments in a table of their own. */
+        val MIGRATION_3_4 = object : Migration(3, 4) {
+            override fun migrate(connection: SQLiteConnection) {
+                connection.execSQL("ALTER TABLE photos ADD COLUMN durationMs INTEGER")
+                connection.execSQL(
+                    "CREATE TABLE IF NOT EXISTS `frames` (`mediaId` INTEGER NOT NULL, `atMs` INTEGER NOT NULL, `embedding` BLOB NOT NULL, " +
+                        "PRIMARY KEY(`mediaId`, `atMs`), " +
+                        "FOREIGN KEY(`mediaId`) REFERENCES `photos`(`mediaId`) ON UPDATE NO ACTION ON DELETE CASCADE )",
+                )
+            }
+        }
+
         fun build(context: Context): GalleryDatabase =
             Room.databaseBuilder(context, GalleryDatabase::class.java, FILE_NAME)
                 .setDriver(BundledSQLiteDriver())
                 .setQueryCoroutineContext(Dispatchers.IO)
                 // No destructive fallback any more: from version 2 it holds names the user gave.
-                .addMigrations(MIGRATION_1_2)
+                .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4)
                 .build()
     }
 }

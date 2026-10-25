@@ -34,8 +34,20 @@ data class MemoryChip(
     enum class Kind { FACT, TASK, EVENT, FORGET, ALARM, IMAGE, CALL, MESSAGE, TIMER, APP, SETTING, WEB, PHOTOS }
 }
 
-/** The phone's photos that answer [query], by MediaStore id, best match first. */
-data class PhotoSet(val query: String, val ids: List<Long>)
+/**
+ * The phone's photos and videos that answer [query], by MediaStore id, best match first. For a
+ * video found by what's in it, [moments] has the moment that matched, to start playing there.
+ * Null in chips saved before videos were searched (Gson leaves a missing field null).
+ */
+data class PhotoSet(val query: String, val ids: List<Long>, val moments: Map<Long, Long>? = null) {
+
+    fun momentOf(mediaId: Long): Long? = moments?.get(mediaId)
+
+    companion object {
+        fun of(query: String, hits: List<com.local.assistant.gallery.PhotoHit>) =
+            PhotoSet(query, hits.map { it.mediaId }, hits.mapNotNull { hit -> hit.atMs?.let { hit.mediaId to it } }.toMap().ifEmpty { null })
+    }
+}
 
 /**
  * What undoing a tool call needs: the state before it. Kept in the TOOL row itself, so an undo

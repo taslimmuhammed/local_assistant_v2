@@ -166,7 +166,7 @@ class ToolExecutor(
             return Applied(done.result, done.chip)
         }
         if (call.name == ToolCatalog.FIND_PHOTOS) {
-            val done = (photos ?: throw ToolError("Photo search isn't set up.")).find(args.text("query"), args.text("person"))
+            val done = (photos ?: throw ToolError("Photo search isn't set up.")).find(args.text("query"), args.text("person"), args.text("when"), args.text("place"))
             return Applied(done.result, done.chip)
         }
         val tools = device ?: throw ToolError("That isn't available in this app.")

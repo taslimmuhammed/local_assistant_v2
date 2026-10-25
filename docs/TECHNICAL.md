@@ -353,7 +353,7 @@ messaging app opens ready, and the user presses the button.
 | `phone_setting` | Flashlight, ringer, media volume, Do Not Disturb; opens the Wi-Fi, Bluetooth, mobile data, airplane mode, hotspot or location panel | **setting**, value | the phone |
 | `calculate` | Exact arithmetic and unit conversions | **expression** | the app |
 | `web_lookup` | News, weather, prices, scores — anything current (only with a Tavily key) | **query**, topic | Tavily |
-| `find_photos` | The user's own photos of something; shown under the reply, never sent to the model | **query** | the photo index |
+| `find_photos` | The user's own photos and documents: of something or someone, from a place or a time; shown under the reply, never sent to the model | query, person, place, when (one at least) | the photo index |
 
 ### Tools and reminders
 
@@ -598,9 +598,48 @@ stops hard at the cap rather than letting the runtime reject the clip.
   aadhaar card" with "I don't have access to your documents". The rule and declaration now name
   them, and all six document requests go to find_photos, while "how do I renew a driving license
   in Kerala?" still goes online.
+- **Dates.** `find_photos` takes `when` in the user's words: "last December", "2023", "this
+  year", "3 weeks ago", "since March", "25 Dec 2023". `PhotoPeriod` turns it into a stretch of the
+  past (a month with no year is the latest one begun; "N years ago" is that calendar year), and
+  the photos are those taken in it (MediaStore's DATE_TAKEN, or DATE_ADDED). Who and when narrow
+  the photos down, newest first; a description then ranks within them. A date the model leaves in
+  the query moves to `when`.
+- **Places.** After the embeddings, a place pass (`GalleryIndex.locatePending`) reads each photo's
+  GPS tags (`ExifInterface` on the original, which needs `ACCESS_MEDIA_LOCATION`) and stores its
+  coordinates and nearest town, with the town's state and country (`gallery/places/Places`, a
+  one-degree grid over GeoNames' 70,000 towns of 5,000 people or more; nothing goes online). On
+  the test phone: 2,430 photos in 10.7 s, 121 with a location. `find_photos` takes `place`: a
+  town means photos within 8, 15 or 30 km of it (by its size: Bangalore takes in its suburbs),
+  a state or country means photos whose nearest town is in it. Other names count ("Calicut",
+  "Bangalore", plain "Kushalnagar"). Of towns sharing a name, those the user has photos near win;
+  failing that a state or country of the name (Goa the state, not the Philippine town); failing
+  that the biggest town. An unknown place is an error that asks for the nearest town. Districts
+  aren't in the list: "photos from Coorg" gets that question. In a chat on the test phone:
+  Kushalnagar 8 photos, Bangalore 18 (Bengaluru and its suburbs), Kerala 91, beach photos in Goa
+  0; routing put Munnar, Goa and Kerala in `place` 18 of 18, and the weather in Munnar still went
+  online.
+  `assets/places/places.tsv` is built by `tools/places/build_places.py`; it's stored as plain
+  text because aapt unpacks a `.gz` asset anyway, and the APK deflates it to 2.7 MB.
+- **Videos.** Videos are rows in the same table, with their length (`durationMs`); their vectors
+  are `frames` rows, one per moment: one every 10 s, at most 20 (the middle of each stretch),
+  grabbed with `MediaMetadataRetriever` at 512 px and embedded like photos. A video takes one
+  scheduler slot of its own. Search scans photo and frame vectors together, ranks them by the same
+  rule, and keeps each video once, at its best moment; `PhotoSet.moments` carries that moment
+  into the chat chip, and the viewer plays the video in place from there ("Starts at 0:42, the
+  part that matched"), with a seek bar. Thumbnails show a ▶ and the length. Time and place narrow
+  videos too (a video's location is its ISO 6709 tag); people aren't looked for in videos. "video"
+  (or clip, footage) in the query keeps to videos, and the result tells the model how many of
+  those found are videos. MediaStore ids are unique across photos and videos, so one id serves
+  everywhere; `PhotoLibrary` keeps which ids are videos, for their address and type.
+  On the test phone: 275 videos (about 9 hours) in 155 s, 656 frames; 197 are clips under 20 s
+  with one frame, 8 got the full 20. A total with "videos" among it was misread by the model
+  ("18 photos and 4 videos" for 14 and 4), so the result gives `photos` and `videos` apart.
 - **Permissions.** `READ_MEDIA_IMAGES` (or `READ_EXTERNAL_STORAGE` up to Android 12), asked on
   the Photos screen; on Android 14 the person may share only some photos, and only those are
-  indexed. Photos are read, never changed, moved or sent anywhere.
+  indexed. `ACCESS_MEDIA_LOCATION` and `READ_MEDIA_VIDEO` are asked as soon as photos are shared;
+  with photos fully shared Android grants both with no dialog (videos share the photos'
+  permission group). Android grants "selected photos only" alongside full access too, so it counts
+  for videos only when photos themselves are partly shared. Photos are read, never changed, moved or sent anywhere.
 
 ## Power-button assistant
 

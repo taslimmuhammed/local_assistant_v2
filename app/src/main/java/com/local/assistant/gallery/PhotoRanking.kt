@@ -2,7 +2,8 @@ package com.local.assistant.gallery
 
 import com.local.assistant.memory.embed.Int8Vectors
 
-data class PhotoHit(val mediaId: Long, val similarity: Float)
+/** A match; for a video, [atMs] is the moment that matched. */
+data class PhotoHit(val mediaId: Long, val similarity: Float, val atMs: Long? = null)
 
 /**
  * Which photos answer a query, best first.

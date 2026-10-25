@@ -33,6 +33,15 @@ class PhotoThumbnails(private val library: PhotoLibrary) {
 
     fun uri(mediaId: Long): Uri = library.uri(mediaId)
 
+    /** The type to open it in another app with: any image, or any video. */
+    fun mimeType(mediaId: Long): String = library.mimeType(mediaId)
+
+    /** How long [mediaId] runs if it's a video; null for a photo. */
+    suspend fun videoLength(mediaId: Long): Long? = withContext(Dispatchers.IO) { library.videoLength(mediaId) }
+
+    /** How many of [mediaIds] are videos. */
+    suspend fun videoCount(mediaIds: Collection<Long>): Int = withContext(Dispatchers.IO) { mediaIds.count { library.videoLength(it) != null } }
+
     /** [face] cut square from its photo, with a little room around it, for a round avatar. */
     suspend fun face(face: FaceEntity): ImageBitmap? {
         val key = -face.id - 1 // never a MediaStore id

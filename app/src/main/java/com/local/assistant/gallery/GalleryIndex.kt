@@ -20,7 +20,8 @@ import kotlinx.coroutines.withContext
 import kotlin.coroutines.coroutineContext
 
 /**
- * The phone's photos as vectors, and searching them.
+ * The phone's photos as vectors, and searching them. Videos too: a vector for each of a few
+ * moments of each, so a search finds the moment as well as the video.
  *
  * [start] brings the index in line with MediaStore (new photos in, edited ones redone, deleted
  * ones out) and then embeds whatever has no vector yet, newest first. Every batch goes through
@@ -36,6 +37,8 @@ class GalleryIndex(
     private val scope: CoroutineScope,
     /** The people in the photos, looked for once the photos themselves are indexed. */
     private val faces: com.local.assistant.gallery.faces.FaceIndex? = null,
+    /** Towns, states and countries, for where photos were taken; none when not wired in. */
+    private val places: com.local.assistant.gallery.places.PlaceList? = null,
     private val clock: () -> Long = System::currentTimeMillis,
 ) {
 
@@ -57,13 +60,23 @@ class GalleryIndex(
     /** One pass at a time, whether from the screen or the nightly job. */
     private val passLock = Mutex()
 
-    /** Syncs and indexes in the background; does nothing if a pass is already running. */
+    /** Asked to start during a pass: what it synced may be out of date (a permission just given). */
+    @Volatile
+    private var again = false
+
+    /** Syncs and indexes in the background; during a pass, runs another once it ends. */
     @Synchronized
     fun start() {
-        if (job?.isActive == true) return
+        if (job?.isActive == true) {
+            again = true
+            return
+        }
         job = scope.launch {
             try {
-                passLock.withLock { pass(deadline = Long.MAX_VALUE) }
+                do {
+                    again = false
+                    passLock.withLock { pass(deadline = Long.MAX_VALUE) }
+                } while (again)
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
@@ -102,8 +115,9 @@ class GalleryIndex(
         sync()
         refreshStatus()
         if (!indexPending(deadline)) return false
-        // Photo search first, people after: it's what most searches need.
+        // Photo search first, then where they were taken (quick), then people.
         embedder.unload()
+        if (!locatePending(deadline)) return false
         return faces?.indexPending(deadline, ::runWhenIdle) ?: true
     }
 
@@ -119,13 +133,14 @@ class GalleryIndex(
         for (photo in photos) {
             seen += photo.mediaId
             if (known[photo.mediaId] != photo.dateModified) {
-                changed += PhotoEntity(photo.mediaId, photo.dateTaken, photo.dateModified, photo.width, photo.height)
+                changed += PhotoEntity(photo.mediaId, photo.dateTaken, photo.dateModified, photo.width, photo.height, durationMs = photo.durationMs)
             }
         }
         val gone = known.keys.filter { it !in seen }
         changed.chunked(SQL_BATCH).forEach { dao.upsert(it) }
         gone.chunked(SQL_BATCH).forEach { dao.delete(it) }
         if (changed.isNotEmpty() || gone.isNotEmpty()) {
+            dao.deleteOrphanFrames()
             vectorsStale = true
             Log.i(TAG, "Synced ${photos.size} photos: ${changed.size} new or edited, ${gone.size} gone, in ${clock() - started} ms")
         }
@@ -141,6 +156,13 @@ class GalleryIndex(
                 val finished = runWhenIdle {
                     for (photo in batch) {
                         coroutineContext.ensureActive()
+                        if (photo.durationMs != null) {
+                            // A video is a slot of its own: up to twenty moments, several seconds.
+                            if (photo !== batch.first()) break
+                            if (!indexVideo(photo.mediaId, photo.durationMs)) return@runWhenIdle false
+                            embedded++
+                            break
+                        }
                         val jpeg = withContext(Dispatchers.IO) { library.jpeg(photo.mediaId, GalleryModel.INPUT_PIXELS) }
                         val vector = jpeg?.let { embedder.embedImage(it) }?.let(Int8Vectors::quantize)
                         if (vector == null && !embedder.isLoaded) return@runWhenIdle false
@@ -163,6 +185,68 @@ class GalleryIndex(
         }
     }
 
+    /** Embeds moments of a video; false when the model won't load. A video that can't be read is marked failed. */
+    private suspend fun indexVideo(mediaId: Long, durationMs: Long): Boolean {
+        val frames = withContext(Dispatchers.IO) {
+            library.frames(mediaId, durationMs, GalleryModel.INPUT_PIXELS, FRAME_EVERY_MS, MAX_FRAMES)
+        }
+        val vectors = ArrayList<FrameEntity>(frames.size)
+        for ((atMs, jpeg) in frames) {
+            coroutineContext.ensureActive()
+            val vector = embedder.embedImage(jpeg)?.let(Int8Vectors::quantize)
+            if (vector == null) {
+                if (!embedder.isLoaded) return false
+                continue
+            }
+            vectors += FrameEntity(mediaId, atMs, vector)
+        }
+        dao.setFrames(mediaId, vectors, if (vectors.isEmpty()) PhotoEntity.FAILED else GalleryModel.MODEL_ID)
+        vectorsStale = true
+        return true
+    }
+
+    /**
+     * Reads where each photo not yet looked at was taken, from its GPS tags, and its nearest town.
+     * Only file reads, so no model slot is needed; it gives way to the user between batches.
+     * Waits for the location permission rather than marking photos as having no location.
+     */
+    private suspend fun locatePending(deadline: Long): Boolean {
+        if (!library.locationAccess()) return true
+        val list = places?.get() ?: return true
+        var read = 0
+        var located = 0
+        val started = clock()
+        while (clock() < deadline) {
+            val batch = dao.placesPending(LOCATE_BATCH)
+            if (batch.isEmpty()) break
+            coroutineContext.ensureActive()
+            for (mediaId in batch) {
+                val at = withContext(Dispatchers.IO) { library.location(mediaId) }
+                val where = at?.let { (lat, lon) -> list.nearest(lat, lon) }
+                dao.setPlace(mediaId, at?.first, at?.second, where?.town, where?.region, where?.country)
+                read++
+                if (at != null) located++
+            }
+        }
+        if (read > 0) Log.i(TAG, "Read the location of $read photos ($located had one) in ${clock() - started} ms")
+        return dao.placesPendingCount() == 0
+    }
+
+    /** Photos taken in [area], newest first. */
+    suspend fun takenAt(area: com.local.assistant.gallery.places.Places.Area): List<Long> = when (area) {
+        is com.local.assistant.gallery.places.Places.Area.InRegion -> dao.inRegion(area.code)
+        is com.local.assistant.gallery.places.Places.Area.InCountry -> dao.inCountry(area.code)
+        is com.local.assistant.gallery.places.Places.Area.Near -> dao.located().filter { photo ->
+            area.points.any { (lat, lon) -> com.local.assistant.gallery.places.Places.km(photo.lat, photo.lon, lat, lon) <= area.radiusKm }
+        }.map { it.mediaId }
+    }
+
+    /** Where photos were taken, for choosing between towns of one name. */
+    suspend fun locations(): List<Pair<Double, Double>> = dao.located().map { it.lat to it.lon }
+
+    /** Photos whose location hasn't been read yet, and whether it can be read now. */
+    suspend fun locating(): Pair<Int, Boolean> = dao.placesPendingCount() to library.locationAccess()
+
     private suspend fun refreshStatus() {
         val total = dao.count()
         val pending = dao.pendingCount(GalleryModel.MODEL_ID)
@@ -184,7 +268,9 @@ class GalleryIndex(
 
     @Volatile
     private var vectorsStale = true
+    /** Side by side, one per vector: whose it is, and for a video's frame, its moment (-1 for a photo). */
     private var ids = LongArray(0)
+    private var moments = LongArray(0)
     private var vectors = ByteArray(0)
     private var norms = IntArray(0)
 
@@ -200,9 +286,19 @@ class GalleryIndex(
         return vectorsLock.withLock {
             withContext(Dispatchers.Default) {
                 if (vectorsStale) loadVectors()
-                PhotoRanking.rank(vector, ids, vectors, norms)
+                perItem(PhotoRanking.rank(vector, LongArray(ids.size) { it.toLong() }, vectors, norms))
             }
-        }.also { Log.i(TAG, "\"$query\": ${it.size} of ${ids.size} photos in ${clock() - started} ms (query $embedMs ms)") }
+        }.also { Log.i(TAG, "\"$query\": ${it.size} of ${ids.size} vectors in ${clock() - started} ms (query $embedMs ms)") }
+    }
+
+    /** Hits on vector positions as hits on photos and videos: a video once, at its best moment. */
+    private fun perItem(hits: List<PhotoHit>): List<PhotoHit> {
+        val seen = HashSet<Long>()
+        return hits.mapNotNull { hit ->
+            val i = hit.mediaId.toInt()
+            if (!seen.add(ids[i])) return@mapNotNull null
+            PhotoHit(ids[i], hit.similarity, moments[i].takeIf { it >= 0 })
+        }
     }
 
     /**
@@ -213,7 +309,7 @@ class GalleryIndex(
     suspend fun searchForChat(query: String): com.local.assistant.memory.tools.PhotoSet? {
         val hits = search(query) ?: return null
         unloadWhenIdle()
-        return com.local.assistant.memory.tools.PhotoSet(query, hits.map { it.mediaId })
+        return com.local.assistant.memory.tools.PhotoSet.of(query, hits)
     }
 
     /** Every indexed photo and its similarity to [query], best first: for calibrating [PhotoRanking]. */
@@ -223,7 +319,7 @@ class GalleryIndex(
             withContext(Dispatchers.Default) {
                 if (vectorsStale) loadVectors()
                 val scores = PhotoRanking.scores(vector, vectors, norms, ids.size) ?: return@withContext emptyList()
-                ids.indices.map { PhotoHit(ids[it], scores[it]) }.sortedByDescending { it.similarity }
+                perItem(ids.indices.map { PhotoHit(it.toLong(), scores[it]) }.sortedByDescending { it.similarity })
             }
         }
     }
@@ -232,7 +328,7 @@ class GalleryIndex(
      * Of [allowed] (someone's photos), those that match [query], best first, by the same rule as
      * a search of everything; null when the model isn't installed or won't load.
      */
-    suspend fun searchAmongForChat(query: String, allowed: Collection<Long>): List<Long>? {
+    suspend fun searchAmongForChat(query: String, allowed: Collection<Long>): List<PhotoHit>? {
         val vector = embedder.embedQuery(query)?.let(Int8Vectors::quantize) ?: return null
         val wanted = allowed.toHashSet()
         val hits = vectorsLock.withLock {
@@ -242,12 +338,18 @@ class GalleryIndex(
                 val picked = ids.indices.filter { ids[it] in wanted }
                 val subVectors = ByteArray(picked.size * dims)
                 picked.forEachIndexed { n, i -> vectors.copyInto(subVectors, n * dims, i * dims, (i + 1) * dims) }
-                PhotoRanking.rank(vector, LongArray(picked.size) { ids[picked[it]] }, subVectors, IntArray(picked.size) { norms[picked[it]] })
+                perItem(PhotoRanking.rank(vector, LongArray(picked.size) { picked[it].toLong() }, subVectors, IntArray(picked.size) { norms[picked[it]] }))
             }
         }
         unloadWhenIdle()
-        return hits.map { it.mediaId }
+        return hits
     }
+
+    /** The videos, newest first. */
+    suspend fun videoIds(): List<Long> = dao.videos().map { it.mediaId }
+
+    /** Photos taken in [period], newest first. */
+    suspend fun takenIn(period: PhotoPeriod.Range): List<Long> = dao.takenBetween(period.start, period.end)
 
     /** Photos looked at so far and photos still waiting, read from the index itself. */
     suspend fun counts(): Pair<Int, Int> {
@@ -272,19 +374,26 @@ class GalleryIndex(
     private suspend fun loadVectors() {
         vectorsStale = false
         val rows = dao.vectors(GalleryModel.MODEL_ID)
+        val frames = dao.frameVectors(GalleryModel.MODEL_ID)
+        val total = rows.size + frames.size
         val dims = Int8Vectors.DIMENSIONS
-        val newIds = LongArray(rows.size)
-        val newVectors = ByteArray(rows.size * dims)
-        val newNorms = IntArray(rows.size)
+        val newIds = LongArray(total)
+        val newMoments = LongArray(total)
+        val newVectors = ByteArray(total * dims)
+        val newNorms = IntArray(total)
         var size = 0
-        for (row in rows) {
-            if (row.embedding.size != dims) continue
-            newIds[size] = row.mediaId
-            row.embedding.copyInto(newVectors, size * dims)
-            newNorms[size] = Int8Vectors.squaredNorm(row.embedding)
+        fun add(mediaId: Long, atMs: Long, embedding: ByteArray) {
+            if (embedding.size != dims) return
+            newIds[size] = mediaId
+            newMoments[size] = atMs
+            embedding.copyInto(newVectors, size * dims)
+            newNorms[size] = Int8Vectors.squaredNorm(embedding)
             size++
         }
+        rows.forEach { add(it.mediaId, -1, it.embedding) }
+        frames.forEach { add(it.mediaId, it.atMs, it.embedding) }
         ids = newIds.copyOf(size)
+        moments = newMoments.copyOf(size)
         vectors = newVectors
         norms = newNorms
     }
@@ -304,6 +413,12 @@ class GalleryIndex(
         const val BATCH = 8
 
         const val SQL_BATCH = 500
+
+        const val LOCATE_BATCH = 100
+
+        /** A video's moments: one every ten seconds, twenty at most (one every 3 minutes in an hour). */
+        const val FRAME_EVERY_MS = 10_000L
+        const val MAX_FRAMES = 20
 
         /** How long the model stays loaded after a search from a chat, for a follow-up one. */
         const val IDLE_UNLOAD_MS = 2 * 60_000L

@@ -1,6 +1,8 @@
 package com.local.assistant.ui.gallery
 
 import android.content.Intent
+import android.net.Uri
+import android.widget.VideoView
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
@@ -17,6 +19,7 @@ import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -33,6 +36,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ArrowForward
 import androidx.compose.material.icons.automirrored.outlined.OpenInNew
+import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material.icons.outlined.Lock
 import androidx.compose.material.icons.outlined.PhotoLibrary
@@ -44,11 +48,15 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.Slider
+import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
@@ -76,11 +84,13 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.Velocity
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import com.local.assistant.gallery.PhotoThumbnails
 import com.local.assistant.memory.tools.PhotoSet
 import com.local.assistant.ui.theme.AppColors
+import kotlinx.coroutines.delay
 import java.text.NumberFormat
 import java.time.Instant
 import java.time.ZoneId
@@ -100,22 +110,57 @@ class PhotoAccess(
 /** Provided at each activity's root; null where photos aren't available. */
 val LocalPhotoAccess = staticCompositionLocalOf<PhotoAccess?> { null }
 
-/** One photo, cropped to fill its box; a grey box while it loads, or if it's gone. */
+/** One photo, cropped to fill its box; a grey box while it loads, or if it's gone. A video shows its length. */
 @Composable
 fun PhotoThumb(mediaId: Long, thumbnails: PhotoThumbnails, modifier: Modifier = Modifier, onClick: (() -> Unit)? = null) {
     val bitmap by produceState<ImageBitmap?>(null, mediaId) { value = thumbnails.thumbnail(mediaId) }
+    val length by produceState<Long?>(null, mediaId) { value = thumbnails.videoLength(mediaId) }
     Box(
         modifier
             .background(AppColors.SurfaceMuted)
             .then(if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier),
     ) {
         bitmap?.let { Image(it, contentDescription = null, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize()) }
+        length?.let { VideoBadge(it, Modifier.align(Alignment.BottomEnd).padding(4.dp)) }
     }
 }
 
-/** Full screen, over everything (a sheet included), swiping through [ids]. Back closes it. */
+/** "▶ 1:23" in the corner of a video's thumbnail. */
 @Composable
-fun PhotoViewer(ids: List<Long>, start: Int, thumbnails: PhotoThumbnails, onClose: () -> Unit) {
+private fun VideoBadge(lengthMs: Long, modifier: Modifier) {
+    Row(
+        modifier.clip(RoundedCornerShape(6.dp)).background(Color.Black.copy(alpha = 0.55f)).padding(start = 2.dp, end = 5.dp, top = 1.dp, bottom = 1.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(Icons.Filled.PlayArrow, contentDescription = "Video", tint = Color.White, modifier = Modifier.size(14.dp))
+        Text(clock(lengthMs), style = MaterialTheme.typography.labelSmall, color = Color.White)
+    }
+}
+
+/** 83,000 ms as "1:23"; an hour or more as "1:02:03". */
+internal fun clock(ms: Long): String {
+    val s = (ms / 1000).coerceAtLeast(0)
+    return if (s >= 3600) "%d:%02d:%02d".format(s / 3600, s / 60 % 60, s % 60) else "%d:%02d".format(s / 60, s % 60)
+}
+
+/** "30 photos", "1 video", "28 photos and 2 videos". */
+internal fun itemCount(total: Int, videos: Int): String {
+    val numbers = NumberFormat.getIntegerInstance()
+    val photos = total - videos
+    fun n(count: Int, one: String, many: String) = "${numbers.format(count)} ${if (count == 1) one else many}"
+    return when {
+        videos == 0 -> n(photos, "photo", "photos")
+        photos == 0 -> n(videos, "video", "videos")
+        else -> "${n(photos, "photo", "photos")} and ${n(videos, "video", "videos")}"
+    }
+}
+
+/**
+ * Full screen, over everything (a sheet included), swiping through [ids]. Back closes it. A video
+ * plays where it's shown, from its moment in [moments] (the part that matched a search) if any.
+ */
+@Composable
+fun PhotoViewer(ids: List<Long>, start: Int, thumbnails: PhotoThumbnails, onClose: () -> Unit, moments: Map<Long, Long> = emptyMap()) {
     val context = LocalContext.current
     Dialog(
         onDismissRequest = onClose,
@@ -128,9 +173,14 @@ fun PhotoViewer(ids: List<Long>, start: Int, thumbnails: PhotoThumbnails, onClos
                 HorizontalPager(state = pager, modifier = Modifier.fillMaxSize(), key = { ids[it] }) { page ->
                     val id = ids[page]
                     val bitmap by produceState<ImageBitmap?>(null, id) { value = thumbnails.full(id, maxSide) }
+                    val length by produceState<Long?>(LOADING, id) { value = thumbnails.videoLength(id) }
                     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                        bitmap?.let { Image(it, contentDescription = null, contentScale = ContentScale.Fit, modifier = Modifier.fillMaxSize()) }
-                            ?: CircularProgressIndicator(color = Color.White)
+                        when (val ms = length) {
+                            LOADING -> CircularProgressIndicator(color = Color.White)
+                            null -> bitmap?.let { Image(it, contentDescription = null, contentScale = ContentScale.Fit, modifier = Modifier.fillMaxSize()) }
+                                ?: CircularProgressIndicator(color = Color.White)
+                            else -> VideoPage(thumbnails.uri(id), ms, moments[id] ?: 0L, poster = bitmap, current = pager.settledPage == page)
+                        }
                     }
                 }
             }
@@ -151,11 +201,112 @@ fun PhotoViewer(ids: List<Long>, start: Int, thumbnails: PhotoThumbnails, onClos
                     modifier = Modifier.weight(1f),
                 )
                 IconButton(onClick = {
-                    val uri = thumbnails.uri(ids[pager.currentPage])
+                    val id = ids[pager.currentPage]
                     runCatching {
-                        context.startActivity(Intent(Intent.ACTION_VIEW).setDataAndType(uri, "image/*").addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION))
+                        context.startActivity(
+                            Intent(Intent.ACTION_VIEW).setDataAndType(thumbnails.uri(id), thumbnails.mimeType(id)).addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION),
+                        )
                     }
                 }) { Icon(Icons.AutoMirrored.Outlined.OpenInNew, contentDescription = "Open in another app", tint = Color.White) }
+            }
+        }
+    }
+}
+
+/**
+ * A video in the viewer: it plays while its page is the one showing, from [startMs]. Until it
+ * starts, its still ([poster]) stands in, since a video view is black before its first frame.
+ * Tapping pauses and resumes; the bar below shows where it is and seeks.
+ */
+@Composable
+private fun VideoPage(uri: Uri, lengthMs: Long, startMs: Long, poster: ImageBitmap?, current: Boolean) {
+    var view by remember { mutableStateOf<VideoView?>(null) }
+    var prepared by remember { mutableStateOf(false) }
+    var playing by remember { mutableStateOf(false) }
+    var started by remember { mutableStateOf(false) }
+    var position by remember { mutableLongStateOf(startMs) }
+
+    LaunchedEffect(current, prepared) {
+        val video = view ?: return@LaunchedEffect
+        if (!prepared) return@LaunchedEffect
+        if (current) {
+            video.start()
+            playing = true
+            started = true
+        } else {
+            video.pause()
+            playing = false
+        }
+    }
+    LaunchedEffect(playing) {
+        while (playing) {
+            view?.let { position = it.currentPosition.toLong() }
+            delay(200)
+        }
+    }
+    DisposableEffect(uri) { onDispose { view?.stopPlayback() } }
+
+    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+        // Not sized here: a video view keeps the video's shape within what it's offered.
+        AndroidView(
+            factory = { context ->
+                VideoView(context).apply {
+                    setOnPreparedListener {
+                        seekTo(startMs.toInt())
+                        prepared = true
+                    }
+                    setOnCompletionListener { playing = false }
+                    setVideoURI(uri)
+                    view = this
+                }
+            },
+        )
+        if (!started) {
+            poster?.let { Image(it, contentDescription = null, contentScale = ContentScale.Fit, modifier = Modifier.fillMaxSize()) }
+        }
+        // Taps anywhere but the bar pause and resume.
+        Box(
+            Modifier.fillMaxSize().clickable(interactionSource = null, indication = null) {
+                val video = view ?: return@clickable
+                if (!prepared) return@clickable
+                if (playing) video.pause() else video.start()
+                playing = !playing
+                started = true
+            },
+        )
+        if (!playing && prepared) {
+            Icon(
+                Icons.Filled.PlayArrow,
+                contentDescription = "Play",
+                tint = Color.White,
+                modifier = Modifier.size(72.dp).clip(RoundedCornerShape(36.dp)).background(Color.Black.copy(alpha = 0.4f)).padding(12.dp),
+            )
+        }
+        Column(
+            Modifier
+                .align(Alignment.BottomCenter)
+                .fillMaxWidth()
+                .background(Brush.verticalGradient(listOf(Color.Transparent, Color.Black.copy(alpha = 0.6f))))
+                .navigationBarsPadding()
+                .padding(horizontal = 16.dp, vertical = 8.dp),
+        ) {
+            if (startMs > 0) {
+                Text("Starts at ${clock(startMs)}, the part that matched", style = MaterialTheme.typography.labelMedium, color = Color.White.copy(alpha = 0.8f))
+            }
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(clock(position), style = MaterialTheme.typography.labelMedium, color = Color.White)
+                Slider(
+                    value = position.coerceIn(0, lengthMs).toFloat(),
+                    onValueChange = { value ->
+                        position = value.toLong()
+                        view?.seekTo(value.toInt())
+                        started = true
+                    },
+                    valueRange = 0f..lengthMs.toFloat().coerceAtLeast(1f),
+                    colors = SliderDefaults.colors(thumbColor = Color.White, activeTrackColor = Color.White, inactiveTrackColor = Color.White.copy(alpha = 0.3f)),
+                    modifier = Modifier.weight(1f).padding(horizontal = 12.dp),
+                )
+                Text(clock(lengthMs), style = MaterialTheme.typography.labelMedium, color = Color.White)
             }
         }
     }
@@ -198,13 +349,13 @@ fun PhotoResults(set: PhotoSet, modifier: Modifier = Modifier) {
     if (sheetOpen) {
         PhotoSheet(set, access.thumbnails, onDismiss = { sheetOpen = false }, onOpenPhoto = { ids, index -> viewing = ids to index })
     }
-    viewing?.let { (ids, start) -> PhotoViewer(ids, start, access.thumbnails, onClose = { viewing = null }) }
+    viewing?.let { (ids, start) -> PhotoViewer(ids, start, access.thumbnails, onClose = { viewing = null }, moments = set.moments.orEmpty()) }
 }
 
 /** "30 photos · Sunset · View all", beside three photos fanned like prints on a table. */
 @Composable
 private fun StackCard(set: PhotoSet, thumbnails: PhotoThumbnails, onOpen: () -> Unit, modifier: Modifier) {
-    val numbers = NumberFormat.getIntegerInstance()
+    val videos by produceState(0, set) { value = thumbnails.videoCount(set.ids) }
     Row(
         modifier
             .fillMaxWidth()
@@ -218,7 +369,7 @@ private fun StackCard(set: PhotoSet, thumbnails: PhotoThumbnails, onOpen: () -> 
         Spacer(Modifier.width(18.dp))
         Column(Modifier.weight(1f)) {
             Text(
-                "${numbers.format(set.ids.size)} photos",
+                itemCount(set.ids.size, videos),
                 style = MaterialTheme.typography.titleMedium,
                 fontWeight = FontWeight.SemiBold,
                 color = AppColors.TextPrimary,
@@ -284,6 +435,7 @@ private fun PhotoSheet(set: PhotoSet, thumbnails: PhotoThumbnails, onDismiss: ()
     // Straight to full height: a gallery wants the room, and a half-open sheet only adds a step.
     val state = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val numbers = NumberFormat.getIntegerInstance()
+    val videos by produceState(0, set) { value = thumbnails.videoCount(set.ids) }
     // A height of its own, from the window. As a share of what the sheet offered it, it chased
     // the sheet: a scroll past the end moved the sheet, which changed what it offered, which
     // resized the content, which moved the sheet again, and the sheet bobbed up and down.
@@ -302,7 +454,7 @@ private fun PhotoSheet(set: PhotoSet, thumbnails: PhotoThumbnails, onDismiss: ()
                 Icon(Icons.Outlined.PhotoLibrary, contentDescription = null, tint = AppColors.TextPrimary)
                 Column(Modifier.weight(1f).padding(start = 12.dp)) {
                     Text(set.query.replaceFirstChar { it.titlecase(Locale.getDefault()) }, style = MaterialTheme.typography.titleMedium, color = AppColors.TextPrimary)
-                    Text("${numbers.format(set.ids.size)} photos, ${sort.subtitle}", style = MaterialTheme.typography.bodySmall, color = AppColors.TextSecondary)
+                    Text("${itemCount(set.ids.size, videos)}, ${sort.subtitle}", style = MaterialTheme.typography.bodySmall, color = AppColors.TextSecondary)
                 }
                 IconButton(onClick = onDismiss) { Icon(Icons.Outlined.Close, contentDescription = "Close") }
             }
@@ -402,7 +554,7 @@ private fun LockedPhotos(set: PhotoSet, onUnlock: () -> Unit, modifier: Modifier
     ) {
         Icon(Icons.Outlined.Lock, contentDescription = null, tint = AppColors.TextPrimary)
         Column(Modifier.weight(1f).padding(start = 12.dp)) {
-            Text("$count ${if (count == 1) "photo" else "photos"} found", style = MaterialTheme.typography.titleSmall, color = AppColors.TextPrimary)
+            Text("${NumberFormat.getIntegerInstance().format(count)} found", style = MaterialTheme.typography.titleSmall, color = AppColors.TextPrimary)
             Text("Unlock your phone to see them.", style = MaterialTheme.typography.bodySmall, color = AppColors.TextSecondary)
         }
     }
@@ -421,6 +573,9 @@ internal object KeepScrollPastEnd : NestedScrollConnection {
 }
 
 private const val SHEET_SHARE = 0.88f
+
+/** A page whose kind (photo or video) isn't known yet. */
+private const val LOADING = -1L
 
 private const val INLINE_MAX = 2
 private val INLINE_SIZE: Dp = 132.dp

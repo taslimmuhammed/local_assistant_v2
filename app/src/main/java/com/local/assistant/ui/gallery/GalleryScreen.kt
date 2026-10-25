@@ -44,8 +44,10 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -97,6 +99,13 @@ fun GalleryScreen(viewModel: GalleryViewModel, onBack: () -> Unit) {
         }
     }
 
+    // Locations and videos, once photos are shared; Android stops asking for a refused one itself.
+    val followUpRequest = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { viewModel.onPermissionResult() }
+    LaunchedEffect(access) {
+        val missing = viewModel.followUpPermissions
+        if (access != PhotoLibrary.Access.NONE && missing.isNotEmpty()) followUpRequest.launch(missing)
+    }
+
     Box(Modifier.fillMaxSize()) {
         Scaffold(
             containerColor = AppColors.Background,
@@ -142,7 +151,7 @@ fun GalleryScreen(viewModel: GalleryViewModel, onBack: () -> Unit) {
                                 if (query.isBlank()) PeopleSection(viewModel, onOpen = { person = it })
                             }
                             if (access == PhotoLibrary.Access.SOME) PartialAccessNote(viewModel)
-                            ResultLabel(results, status)
+                            ResultLabel(results, status, viewModel.thumbnails)
                         }
                     }
                     items(ids, key = { it }) { id ->
@@ -152,7 +161,9 @@ fun GalleryScreen(viewModel: GalleryViewModel, onBack: () -> Unit) {
             }
         }
 
-        viewing?.let { (ids, start) -> PhotoViewer(ids, start, viewModel.thumbnails, onClose = { viewing = null }) }
+        viewing?.let { (ids, start) ->
+            PhotoViewer(ids, start, viewModel.thumbnails, onClose = { viewing = null }, moments = (results as? PhotoResults.Found)?.moments.orEmpty())
+        }
         person?.let { PersonSheet(it, viewModel, onDismiss = { person = null }) }
     }
 }
@@ -308,13 +319,13 @@ private fun PartialAccessNote(viewModel: GalleryViewModel) {
 }
 
 @Composable
-private fun ResultLabel(results: PhotoResults, status: GalleryIndex.Status) {
-    val numbers = NumberFormat.getIntegerInstance()
+private fun ResultLabel(results: PhotoResults, status: GalleryIndex.Status, thumbnails: com.local.assistant.gallery.PhotoThumbnails) {
+    val videos by produceState(0, results) { value = (results as? PhotoResults.Found)?.let { thumbnails.videoCount(it.ids) } ?: 0 }
     val text = when (results) {
         PhotoResults.Loading -> null
         is PhotoResults.Newest -> if (results.ids.isEmpty()) "No photos on this phone yet." else "Recent"
         is PhotoResults.Found -> when {
-            results.ids.isNotEmpty() -> "${numbers.format(results.ids.size)} ${if (results.ids.size == 1) "photo" else "photos"}"
+            results.ids.isNotEmpty() -> itemCount(results.ids.size, videos)
             status.indexed == 0 -> "No photos are ready for search yet."
             else -> "No photos match \"${results.query}\"."
         }

@@ -124,6 +124,31 @@ class RoutingEvalTest {
         Case("show me all the photos of taslim", setOf("find_photos")) { args ->
             args["person"].toString().lowercase().let { "taslim" in it || it == "me" }
         },
+        // When photos were taken, in the user's words; PhotoTools also finds a date left in the query.
+        Case("show my photos from last December", setOf("find_photos")) { args ->
+            "december" in (args["when"].toString() + " " + args["query"].toString()).lowercase()
+        },
+        Case("beach photos from 2023", setOf("find_photos")) { args ->
+            "beach" in args["query"].toString().lowercase() && "2023" in (args["when"].toString() + " " + args["query"].toString())
+        },
+        Case("photos of me with shiyas this year", setOf("find_photos")) { args ->
+            "shiyas" in (args["person"].toString() + " " + args["query"].toString()).lowercase() &&
+                "this year" in (args["when"].toString() + " " + args["query"].toString()).lowercase()
+        },
+        // Where photos were taken: a town, state or country, in place rather than the query.
+        Case("show my photos from Munnar", setOf("find_photos")) { args -> "munnar" in args["place"].toString().lowercase() },
+        Case("beach photos in Goa", setOf("find_photos")) { args ->
+            "beach" in args["query"].toString().lowercase() && "goa" in args["place"].toString().lowercase()
+        },
+        Case("photos I took in Kerala last year", setOf("find_photos")) { args ->
+            "kerala" in args["place"].toString().lowercase() && "last year" in (args["when"].toString() + " " + args["query"].toString()).lowercase()
+        },
+        Case("what's the weather in Munnar this weekend?", setOf("web_lookup")),
+        // Videos are searched the same way; "video" in the query keeps to videos.
+        Case("show me my beach videos", setOf("find_photos")) { args -> args["query"].toString().lowercase().let { "beach" in it && "video" in it } },
+        Case("find the video of the birthday cake", setOf("find_photos")) { args -> args["query"].toString().lowercase().let { "cake" in it && "video" in it } },
+        Case("find videos of a sunset", setOf("find_photos")) { args -> args["query"].toString().lowercase().let { "sunset" in it && "video" in it } },
+        Case("show me my beach photos", setOf("find_photos")) { args -> args["query"].toString().lowercase().let { "beach" in it && "video" !in it } },
         // The user's own documents are photos on the phone, never something to look up online.
         Case("fetch my driving license", setOf("find_photos")) { args -> "licen" in args["query"].toString().lowercase() },
         Case("get my passport", setOf("find_photos")) { args -> "passport" in args["query"].toString().lowercase() },
