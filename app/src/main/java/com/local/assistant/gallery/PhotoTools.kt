@@ -26,10 +26,24 @@ class PhotoTools(
     private val faces: FaceIndex? = null,
     private val findPeople: () -> Boolean = { false },
     private val places: PlaceList? = null,
+    /** A copy of the photo sharp enough to read text from, as a file for the model; null if it can't be read. */
+    private val readable: suspend (mediaId: Long) -> String? = { null },
+    /** Whether a found photo may be read out: not over the lock screen, where photos stay hidden. */
+    private val mayRead: () -> Boolean = { true },
     private val now: () -> ZonedDateTime = ZonedDateTime::now,
 ) {
 
-    internal suspend fun find(query: String?, person: String?, taken: String? = null, place: String? = null): ActionResult {
+    /**
+     * [question]: what the user wants to know from the photos ("SSLC score"); the best match then
+     * goes back to the model with the result, to answer from what it shows.
+     */
+    internal suspend fun find(
+        query: String?,
+        person: String?,
+        taken: String? = null,
+        place: String? = null,
+        question: String? = null,
+    ): ActionResult {
         if (!ready()) throw ToolError("Photo search isn't set up. Tell the user to open Photos in the menu to turn it on.")
         val names = people(person).toMutableList()
         var what = query?.trim()?.take(MAX_QUERY)?.takeIf { it.isNotEmpty() }
@@ -61,6 +75,10 @@ class PhotoTools(
             }
         }
         val placeName = place?.trim()?.takeIf { it.isNotEmpty() }
+        // Given only what to read ("SSLC score", no query), search by that: it names the photo well enough.
+        if (what == null && names.isEmpty() && period == null && placeName == null) {
+            what = question?.trim()?.take(MAX_QUERY)?.let(::description)
+        }
         if (what == null && names.isEmpty() && period == null && placeName == null && !videosOnly) {
             throw ToolError("Say what the photos are of, who is in them, where or when they were taken.")
         }
@@ -125,23 +143,45 @@ class PhotoTools(
         // Said so the model doesn't call it a full answer while most of the library is unseen.
         if (remaining > 0) result["not_yet_searchable"] = remaining
         if (area != null) index.locating().first.takeIf { it > 0 }?.let { result["location_not_yet_read"] = it }
-        // Most photos carry no location (the camera's setting off, received photos stripped of
-        // it): said, so "none from Munnar" isn't taken to mean none were taken there.
         // Said in words: the model read past bare fields, answering "in Kashmir" with place
         // "Jammu and Kashmir" given, and "I found 0 photos" with the located count given.
         val notes = ArrayList<String>()
         if (where != null && !where.equals(placeName, ignoreCase = true)) {
-            notes += "The place searched is $where, which is what \"$placeName\" matched: call it $where in the reply."
+            notes += "The place searched is $where, which is what \"$placeName\" matched: use the name $where in the reply."
         }
+        // Most photos carry no location (the camera's setting off, received photos stripped of
+        // it), so "none from Munnar" mustn't sound like none were taken there.
         if (area != null && ids.isEmpty()) {
             notes += "Only ${index.locatedCount()} of the user's $indexed photos have a saved location, so photos from there " +
                 "may have none. Say so, and that they can search by what's in them instead."
         }
+        val asked = question?.trim()?.takeIf { it.isNotEmpty() }
+        val image = if (asked != null && ids.isNotEmpty()) read(ids, videos = index.videoIds().toHashSet(), asked, notes) else null
         if (notes.isNotEmpty()) result["note"] = notes.joinToString(" ")
         return ActionResult(
             result,
             MemoryChip(MemoryChip.Kind.PHOTOS, "Photos", label, photos = found.copy(query = label)).takeIf { ids.isNotEmpty() },
+            image,
         )
+    }
+
+    /**
+     * The best photo among [ids] (best first; videos skipped) as a file for the model to read
+     * [question] from, with what to do with it added to [notes]; null when none can be read.
+     */
+    private suspend fun read(ids: List<Long>, videos: Set<Long>, question: String, notes: MutableList<String>): String? {
+        if (!mayRead()) {
+            notes += "The phone is locked, so the photos can't be read now: tell the user to unlock it to see them and the answer."
+            return null
+        }
+        val best = ids.firstOrNull { it !in videos } ?: return null
+        val file = readable(best) ?: return null
+        // Named first: given a plus-two question and the SSLC certificate, the model read out the
+        // SSLC marks as the answer; said as "Your SSLC certificate shows…", the user can tell.
+        notes += "The best-matching photo is attached. Say what document or photo it is, then answer \"$question\" from what it " +
+            "shows, in a sentence or two, reading any numbers exactly. If it isn't what they asked about, or doesn't show the " +
+            "answer, say so and that the photos shown below may help."
+        return file
     }
 
     /** What [name] stands for, among towns with the user's photos when several share it. */
@@ -168,6 +208,18 @@ class PhotoTools(
             "all", "every", "everything", "any", "photo", "photos", "picture", "pictures", "pic", "pics", "image", "images",
             "of", "the", "my", "me", "myself", "mine", "together", "with", "and", "show", "find",
         ) + VIDEO_WORDS
+
+        /**
+         * [userText] when it asks what something says ("what was my SSLC score?", "when does my
+         * insurance expire"), for reading from the best photo; null for asking to see or find
+         * photos ("show me…", "where is my PAN card?").
+         */
+        fun questionIn(userText: String): String? {
+            val text = userText.trim()
+            return text.takeIf { QUESTION.containsMatchIn(it) }?.take(MAX_QUERY)
+        }
+
+        private val QUESTION = Regex("^(what|what's|whats|which|when|how much|how many|tell me)\\b", RegexOption.IGNORE_CASE)
 
         /** "me, shiyas", "me and shiyas", "taslim & shiyas" as separate names. */
         fun people(text: String?): List<String> =

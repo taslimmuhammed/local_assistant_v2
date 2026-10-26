@@ -1,7 +1,7 @@
 package com.local.assistant.memory.tools
 
-/** What a device or web tool gives back: the model's JSON and the chip, if any. */
-data class ActionResult(val result: Map<String, Any?>, val chip: MemoryChip? = null)
+/** What a device or web tool gives back: the model's JSON, the chip, and a picture for the model to look at, if any. */
+data class ActionResult(val result: Map<String, Any?>, val chip: MemoryChip? = null, val image: String? = null)
 
 /** What handing something to the phone came to. */
 enum class Handoff {

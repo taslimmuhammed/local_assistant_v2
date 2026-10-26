@@ -149,6 +149,15 @@ class RoutingEvalTest {
         Case("find the video of the birthday cake", setOf("find_photos")) { args -> args["query"].toString().lowercase().let { "cake" in it && "video" in it } },
         Case("find videos of a sunset", setOf("find_photos")) { args -> args["query"].toString().lowercase().let { "sunset" in it && "video" in it } },
         Case("show me my beach photos", setOf("find_photos")) { args -> args["query"].toString().lowercase().let { "beach" in it && "video" !in it } },
+        // Something written in their documents: found by photo search (the app reads the user's own
+        // question from the best photo, whether or not the model passes it on).
+        Case("what was my sslc score?", setOf("find_photos")) { args ->
+            "sslc" in (args["query"].toString() + " " + args["question"].toString()).lowercase()
+        },
+        Case("what's my driving licence number?", setOf("find_photos")) { args -> "licen" in args["query"].toString().lowercase() },
+        // Only seeing them: no question.
+        Case("show me my sslc certificate", setOf("find_photos")) { args -> "sslc" in args["query"].toString().lowercase() && args["question"] == null },
+        Case("get my aadhaar card", setOf("find_photos")) { args -> "aadhaar" in args["query"].toString().lowercase() && args["question"] == null },
         // The user's own documents are photos on the phone, never something to look up online.
         Case("fetch my driving license", setOf("find_photos")) { args -> "licen" in args["query"].toString().lowercase() },
         Case("get my passport", setOf("find_photos")) { args -> "passport" in args["query"].toString().lowercase() },

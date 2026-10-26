@@ -81,7 +81,7 @@ class PhotoChatEvalTest {
                         .map { "${it.tool}(${it.arguments}) -> ${it.result.take(60)}" }
                     asked++
                     if (calls.any { it.startsWith("find_photos") }) called++
-                    report("round $round ${if (calls.isEmpty()) "NO CALL" else "called "} \"$question\": $calls | ${reply.take(100).replace('\n', ' ')}")
+                    report("round $round ${if (calls.isEmpty()) "NO CALL" else "called "} \"$question\": $calls | ${reply.take(400).replace('\n', ' ')}")
                 }
             } finally {
                 chatId?.let {

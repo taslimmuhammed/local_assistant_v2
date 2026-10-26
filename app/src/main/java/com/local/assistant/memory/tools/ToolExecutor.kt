@@ -73,6 +73,8 @@ class ToolExecutor(
         val chip: MemoryChip?,
         /** Whether the system prefix (core memory, agenda) now renders differently. */
         val changedPrefix: Boolean,
+        /** A picture that goes back with [result] for the model to look at. */
+        val image: String? = null,
     )
 
     enum class UndoResult { UNDONE, ALREADY_UNDONE, CHANGED_SINCE, NOT_UNDOABLE }
@@ -90,6 +92,7 @@ class ToolExecutor(
         val undo: UndoToken? = null,
         val changedPrefix: Boolean = false,
         val alarms: List<AlarmChange> = emptyList(),
+        val image: String? = null,
     )
 
     private val recentMutex = Mutex()
@@ -113,7 +116,7 @@ class ToolExecutor(
             // Outside the transaction: finding a contact can wait on the user's answer to a
             // permission dialog, a search on the network, and none of these write to memory.
             val applied = try {
-                device(call)
+                device(call, context.userText)
             } catch (e: ToolError) {
                 Applied(failure(e.message.orEmpty()))
             }
@@ -131,7 +134,7 @@ class ToolExecutor(
         applied.alarms.forEach(::applyAlarm)
 
         val ok = applied.result["ok"] == true
-        val outcome = Outcome(gson.toJson(applied.result), ok, recordId, applied.chip, applied.changedPrefix)
+        val outcome = Outcome(gson.toJson(applied.result), ok, recordId, applied.chip, applied.changedPrefix, applied.image)
         val window = when (call.name) {
             in ToolCatalog.WRITES -> dedupeWindowMs
             // A model that repeats itself within a turn must not open the dialer twice, but
@@ -159,15 +162,21 @@ class ToolExecutor(
         return if (arguments == call.arguments) call else call.copy(arguments = arguments)
     }
 
-    private suspend fun device(call: ToolCall): Applied {
+    private suspend fun device(call: ToolCall, userText: String): Applied {
         val args = Args(call.arguments)
         if (call.name == ToolCatalog.WEB_SEARCH) {
             val done = (web ?: throw ToolError("Web search isn't set up.")).search(args)
             return Applied(done.result, done.chip)
         }
         if (call.name == ToolCatalog.FIND_PHOTOS) {
-            val done = (photos ?: throw ToolError("Photo search isn't set up.")).find(args.text("query"), args.text("person"), args.text("when"), args.text("place"))
-            return Applied(done.result, done.chip)
+            // What to read is the user's own question when they asked one: the model passed it
+            // only some of the time ("what is my driving licence number?" came with only query
+            // driving licence), and reworded it at others ("what was my plus two score?" came as
+            // "what was my SSLC score", and was answered with the SSLC marks).
+            val question = com.local.assistant.gallery.PhotoTools.questionIn(userText) ?: args.text("question")
+            val done = (photos ?: throw ToolError("Photo search isn't set up."))
+                .find(args.text("query"), args.text("person"), args.text("when"), args.text("place"), question)
+            return Applied(done.result, done.chip, image = done.image)
         }
         val tools = device ?: throw ToolError("That isn't available in this app.")
         val done = when (call.name) {

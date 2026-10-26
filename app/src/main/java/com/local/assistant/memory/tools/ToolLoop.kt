@@ -58,6 +58,8 @@ class ToolLoop(
      * decoder in fp32), where a check could only change a number that was right.
      */
     private val groundNumbers: () -> Boolean = { true },
+    /** Whether the model takes images; a result's picture is dropped when it doesn't. */
+    private val seesImages: () -> Boolean = { true },
 ) {
 
     /**
@@ -144,7 +146,7 @@ class ToolLoop(
                     if (outcome.chip != null && outcome.recordId != null) emit(LoopEvent.Memory(outcome.recordId, outcome.chip))
                     if (call.name == ToolCatalog.CALCULATE && outcome.ok) answerOf(outcome.result)?.let(sums::add)
                     grounding.add(outcome.result)
-                    ToolResult(call.name, outcome.result)
+                    ToolResult(call.name, outcome.result, outcome.image)
                 }
             }
             // Only sums, all worked out: the reply is the result itself, written here. The model
@@ -155,8 +157,21 @@ class ToolLoop(
                 emit(LoopEvent.Done(stats, changedPrefix, rounds, staleConversation = true))
                 return@flow
             }
-            reply = session.sendToolResults(results)
+            // A picture to look at (a found photo to read a question from) can't go in a tool
+            // message, so the results go with it in a message of their own, marked as theirs.
+            val image = results.firstNotNullOfOrNull { it.image }?.takeIf { seesImages() && java.io.File(it).isFile }
+            reply = if (image != null) {
+                session.send(toolResultsWithImage(results), PromptAttachment(image, com.local.assistant.data.db.AttachmentKind.IMAGE))
+            } else {
+                session.sendToolResults(results)
+            }
         }
+    }
+
+    /** The results as text, for the message that carries a result's picture. */
+    private fun toolResultsWithImage(results: List<ToolResult>): String = buildString {
+        append("[Tool results, not the user's words; the image is the photo the result's note refers to]\n")
+        results.forEach { append(it.name).append(": ").append(it.json).append('\n') }
     }
 
     private fun answerOf(json: String): String? = runCatching {

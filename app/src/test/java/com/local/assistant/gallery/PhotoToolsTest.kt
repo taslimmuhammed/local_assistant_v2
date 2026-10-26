@@ -27,4 +27,17 @@ class PhotoToolsTest {
         assertNull(PhotoTools.description("my videos"))
         assertEquals("birthday cake", PhotoTools.description("birthday cake"))
     }
+
+    @Test
+    fun `asking what a photo says is a question to read, asking to see one is not`() {
+        assertEquals("what is my driving licence number?", PhotoTools.questionIn("what is my driving licence number?"))
+        assertEquals("What's my passport number", PhotoTools.questionIn("What's my passport number"))
+        assertEquals("when does my insurance expire", PhotoTools.questionIn("when does my insurance expire"))
+        assertEquals("tell me my PAN number", PhotoTools.questionIn("tell me my PAN number"))
+        assertNull(PhotoTools.questionIn("show me my sslc certificate"))
+        assertNull(PhotoTools.questionIn("where is my PAN card?"))
+        assertNull(PhotoTools.questionIn("get my aadhaar card"))
+        // "whatever" isn't "what".
+        assertNull(PhotoTools.questionIn("whatever photos you have from goa"))
+    }
 }

@@ -115,7 +115,12 @@ interface ChatSession : AutoCloseable {
 
 data class ToolCall(val name: String, val arguments: Map<String, Any?>)
 
-data class ToolResult(val name: String, val json: String)
+/**
+ * [image]: a picture that goes with the result, for the model to look at (a found photo to read).
+ * Gemma's template has no place for an image in a tool message ("Provided more images than
+ * expected"), so such results go back in a message of their own ([ToolLoop]).
+ */
+data class ToolResult(val name: String, val json: String, val image: String? = null)
 
 data class GenStats(
     val decodeTokens: Int,

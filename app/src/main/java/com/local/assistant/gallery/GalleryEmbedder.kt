@@ -19,10 +19,12 @@ import java.io.File
 /**
  * EmbeddingGemma 2 on LiteRT-LM's `EmbeddingEngine`: photos and search words into one space.
  *
- * The vision encoder runs on the GPU, falling back to the CPU if the GPU won't start; text stays
- * on the CPU. On the OnePlus (SM8850, 2026-10-25, `GalleryEvalTest`) a photo took 224 ms on the
- * GPU against 474 ms on four CPU threads (six or eight threads were no faster), with 560 MB of
- * process memory against 812 MB. The [com.local.assistant.memory.work.ModelScheduler] already
+ * Everything runs on the CPU. The vision encoder was on the GPU at first: on the OnePlus (SM8850,
+ * 2026-10-25, `GalleryEvalTest`) a photo took 224 ms there against 474 ms on four CPU threads (six
+ * or eight threads were no faster), with 560 MB of process memory against 812 MB. But while it was
+ * loaded on the GPU, the chat model's own vision failed on any image ("TensorBuffer must have all
+ * static dimensions", 2026-10-26): a photo sent in a chat after a search, or a found photo given
+ * to it to read a question from. With this one on the CPU, both work. The [com.local.assistant.memory.work.ModelScheduler] already
  * keeps it from running while the chat model is generating. The engine is only kept while photos
  * are being indexed or searched; [unload] gives it back.
  */
@@ -30,8 +32,8 @@ class GalleryEmbedder(
     private val modelFile: () -> File?,
     private val cacheDir: File?,
     private val threads: Int = DEFAULT_THREADS,
-    /** False keeps the vision encoder on the CPU too. */
-    private val visionOnGpu: Boolean = true,
+    /** True puts the vision encoder on the GPU: faster, but the chat model can't see images meanwhile. */
+    private val visionOnGpu: Boolean = false,
 ) {
 
     private val mutex = Mutex()

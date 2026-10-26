@@ -613,6 +613,20 @@ stops hard at the cap rather than letting the runtime reject the clip.
   aadhaar card" with "I don't have access to your documents". The rule and declaration now name
   them, and all six document requests go to find_photos, while "how do I renew a driving license
   in Kerala?" still goes online.
+- **Questions about a photo.** "What was my SSLC score?" needs the answer, not only the
+  certificate. When the user's message asks what something says ("what…", "which…", "when…",
+  "how much/many…", "tell me…"; not "show me…" or "where is…"), that is the question, else
+  `find_photos`' own `question` argument: the model passed it only some of the time, and once
+  reworded a plus-two question as an SSLC one. Given only a question, the search is by it. The
+  best match that isn't a video then goes to the model as an image (1,024 px) with a note: say
+  what document it is, answer from it reading numbers exactly, or say it isn't there and point
+  to the photos shown. Gemma's template has no place for an image in a tool message ("Provided
+  more images than expected"), so a result with an image goes back as a message of its own,
+  marked as tool results (`ToolLoop`). Over the lock screen, where photos stay hidden until
+  unlock, nothing is read. On the phone it read the SSLC grades, the licence and PAN numbers, and
+  said when the blood group wasn't on the photo. The photo model's vision now runs on the CPU:
+  loaded on the GPU, it broke the chat model's vision for any image ("TensorBuffer must have all
+  static dimensions"), found photos and photos sent in a chat alike.
 - **Dates.** `find_photos` takes `when` in the user's words: "last December", "2023", "this
   year", "3 weeks ago", "since March", "25 Dec 2023". `PhotoPeriod` turns it into a stretch of the
   past (a month with no year is the latest one begun; "N years ago" is that calendar year), and

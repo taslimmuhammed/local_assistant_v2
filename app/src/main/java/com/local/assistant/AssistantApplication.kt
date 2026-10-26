@@ -384,7 +384,20 @@ class AppContainer(context: Context) {
         onImageSaved = ::rereadSavedImage,
         device = deviceTools,
         web = WebTools(webSearch),
-        photos = PhotoTools(galleryIndex, ready = ::photoSearchReady, faces = faceIndex, findPeople = { settings.findPeople }, places = placeList),
+        photos = PhotoTools(
+            galleryIndex,
+            ready = ::photoSearchReady,
+            faces = faceIndex,
+            findPeople = { settings.findPeople },
+            places = placeList,
+            // Sharp enough to read a certificate's marks; one file, replaced by the next question.
+            readable = { mediaId ->
+                kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                    photoLibrary.jpeg(mediaId, PHOTO_READ_PIXELS)?.let { bytes -> java.io.File(context.cacheDir, "photo-question.jpg").apply { writeBytes(bytes) }.absolutePath }
+                }
+            },
+            mayRead = { context.getSystemService(android.app.KeyguardManager::class.java)?.isKeyguardLocked != true },
+        ),
     )
 
     private val toolLoop = ToolLoop(
@@ -395,6 +408,7 @@ class AppContainer(context: Context) {
         repair = ToolCallRepair(ToolCatalog.declarations(web = true, photos = true))::repair,
         onNumberFixed = { wrote, source -> Log.i("ReplyGrounding", "Reply wrote $wrote; the source has $source") },
         groundNumbers = { !llmService.exactDigits },
+        seesImages = { (llmService.capabilities.value?.visionTokensPerImage ?: 0) > 0 },
     )
 
     val turnRunner = TurnRunner(conversations, modelScheduler, toolLoop, onExchangeStored = { userMessageId ->
@@ -551,6 +565,9 @@ class AppContainer(context: Context) {
     }
 
     private companion object {
+        /** The longest side of a found photo the model reads a question from. */
+        const val PHOTO_READ_PIXELS = 1024
+
         /** The longest the setup screen waits for the first chat to be ready. */
         const val FIRST_CHAT_READY_MS = 90_000L
 
