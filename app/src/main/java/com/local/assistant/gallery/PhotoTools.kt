@@ -34,8 +34,10 @@ class PhotoTools(
         val names = people(person).toMutableList()
         var what = query?.trim()?.take(MAX_QUERY)?.takeIf { it.isNotEmpty() }
         // A query that is someone already named is a second person, not something in the photo.
+        // "Me" only beside someone named ("me with shiyas" came as person shiyas, query me): alone,
+        // as in "show me photos from Calicut" (query me), it meant nobody.
         if (what != null && faces != null && findPeople()) {
-            val asPeople = people(what)
+            val asPeople = people(what).filter { names.isNotEmpty() || it.lowercase() !in FaceIndex.SELF }
             if (asPeople.isNotEmpty() && asPeople.all { faces.resolve(it) != null }) {
                 names += asPeople
                 what = null
@@ -102,11 +104,14 @@ class PhotoTools(
         val where = when (area) {
             is Places.Area.Near -> area.name
             is Places.Area.InRegion -> area.name
+            is Places.Area.InDistrict -> area.name
             is Places.Area.InCountry -> area.name
             null -> null
         }
         val label = listOfNotNull(who, what, where, periodWords).joinToString(" · ")
         val result = linkedMapOf<String, Any?>("ok" to true)
+        // The area searched, in full ("Jammu and Kashmir" for "Kashmir"), for the reply to name.
+        if (where != null) result["place"] = where
         // Photos and videos apart, when there are videos: given a total and the videos among it,
         // the model added them up again ("18 photos and 4 videos" for 14 and 4).
         val videos = index.videoIds().toHashSet().let { all -> ids.count { it in all } }
@@ -120,6 +125,19 @@ class PhotoTools(
         // Said so the model doesn't call it a full answer while most of the library is unseen.
         if (remaining > 0) result["not_yet_searchable"] = remaining
         if (area != null) index.locating().first.takeIf { it > 0 }?.let { result["location_not_yet_read"] = it }
+        // Most photos carry no location (the camera's setting off, received photos stripped of
+        // it): said, so "none from Munnar" isn't taken to mean none were taken there.
+        // Said in words: the model read past bare fields, answering "in Kashmir" with place
+        // "Jammu and Kashmir" given, and "I found 0 photos" with the located count given.
+        val notes = ArrayList<String>()
+        if (where != null && !where.equals(placeName, ignoreCase = true)) {
+            notes += "The place searched is $where, which is what \"$placeName\" matched: call it $where in the reply."
+        }
+        if (area != null && ids.isEmpty()) {
+            notes += "Only ${index.locatedCount()} of the user's $indexed photos have a saved location, so photos from there " +
+                "may have none. Say so, and that they can search by what's in them instead."
+        }
+        if (notes.isNotEmpty()) result["note"] = notes.joinToString(" ")
         return ActionResult(
             result,
             MemoryChip(MemoryChip.Kind.PHOTOS, "Photos", label, photos = found.copy(query = label)).takeIf { ids.isNotEmpty() },

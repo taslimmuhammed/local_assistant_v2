@@ -267,7 +267,8 @@ class ArchiveRepository(
         private const val REPLY = "\nAssistant: "
 
         const val KEY_UTILITY_CLEANUP = "archive.utility_cleanup"
-        const val UTILITY_CLEANUP_VERSION = "1"
+        /** 2: photo searches. */
+        const val UTILITY_CLEANUP_VERSION = "2"
         val TOOL_NAME = Regex("\"tool\"\\s*:\\s*\"([a-z_]+)\"")
     }
 }

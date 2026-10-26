@@ -45,12 +45,16 @@ data class PhotoEntity(
     val lon: Double? = null,
     /** The nearest town in [com.local.assistant.gallery.places.Places], its state ("IN.13") and country ("IN"). */
     val town: String? = null,
+    /** That town's district ("IN.13.596"), "" when it has none, null before districts were read. */
+    val district: String? = null,
     val region: String? = null,
     val country: String? = null,
     /** Its GPS tags have been read (whether or not it had any). */
     @ColumnInfo(defaultValue = "0") val placeChecked: Boolean = false,
     /** How long it runs, for a video; null for a photo. */
     val durationMs: Long? = null,
+    /** Its place is estimated from photos taken around then ([com.local.assistant.gallery.places.PlaceGuess]), not its own GPS tags. */
+    @ColumnInfo(defaultValue = "0") val placeGuessed: Boolean = false,
 ) {
     override fun equals(other: Any?): Boolean = other is PhotoEntity && other.mediaId == mediaId && other.dateModified == dateModified
     override fun hashCode(): Int = mediaId.hashCode()
@@ -135,6 +139,19 @@ data class PhotoStamp(val mediaId: Long, val dateModified: Long)
 /** A photo's location, for distance from a town. */
 data class LocatedPhoto(val mediaId: Long, val lat: Double, val lon: Double)
 
+/** What estimating places needs: when each read photo was taken, and its place if any. */
+data class PlaceRow(
+    val mediaId: Long,
+    val dateTaken: Long,
+    val lat: Double?,
+    val lon: Double?,
+    val town: String?,
+    val district: String?,
+    val region: String?,
+    val country: String?,
+    val placeGuessed: Boolean,
+)
+
 /** A stored vector, for the search scan. */
 data class PhotoVector(val mediaId: Long, val embedding: ByteArray)
 
@@ -202,15 +219,33 @@ interface PhotoDao {
     @Query("SELECT COUNT(*) FROM photos WHERE placeChecked = 0")
     suspend fun placesPendingCount(): Int
 
-    @Query("UPDATE photos SET lat = :lat, lon = :lon, town = :town, region = :region, country = :country, placeChecked = 1 WHERE mediaId = :mediaId")
-    suspend fun setPlace(mediaId: Long, lat: Double?, lon: Double?, town: String?, region: String?, country: String?)
+    @Query("UPDATE photos SET lat = :lat, lon = :lon, town = :town, district = :district, region = :region, country = :country, placeChecked = 1, placeGuessed = 0 WHERE mediaId = :mediaId")
+    suspend fun setPlace(mediaId: Long, lat: Double?, lon: Double?, town: String?, district: String?, region: String?, country: String?)
+
+    @Query("SELECT mediaId, dateTaken, lat, lon, town, district, region, country, placeGuessed FROM photos WHERE placeChecked = 1")
+    suspend fun placeRows(): List<PlaceRow>
+
+    /** An estimated place, or none ([guessed] false and the rest null) when it no longer has one. */
+    @Query("UPDATE photos SET lat = :lat, lon = :lon, town = :town, district = :district, region = :region, country = :country, placeGuessed = :guessed WHERE mediaId = :mediaId")
+    suspend fun setGuessedPlace(mediaId: Long, lat: Double?, lon: Double?, town: String?, district: String?, region: String?, country: String?, guessed: Boolean)
+
+    /** Photos placed by their own GPS tags before districts were kept. */
+    @Query("SELECT mediaId, lat, lon FROM photos WHERE lat IS NOT NULL AND placeGuessed = 0 AND district IS NULL")
+    suspend fun withoutDistrict(): List<LocatedPhoto>
+
+    /** Photos with a place, their own or estimated. */
+    @Query("SELECT COUNT(*) FROM photos WHERE lat IS NOT NULL")
+    suspend fun locatedCount(): Int
 
     /** Photos with a location, for "near a town". */
     @Query("SELECT mediaId, lat, lon FROM photos WHERE lat IS NOT NULL ORDER BY dateTaken DESC")
     suspend fun located(): List<LocatedPhoto>
 
-    @Query("SELECT mediaId FROM photos WHERE region = :code ORDER BY dateTaken DESC")
-    suspend fun inRegion(code: String): List<Long>
+    @Query("SELECT mediaId FROM photos WHERE region IN (:codes) ORDER BY dateTaken DESC")
+    suspend fun inRegions(codes: List<String>): List<Long>
+
+    @Query("SELECT mediaId FROM photos WHERE district IN (:codes) ORDER BY dateTaken DESC")
+    suspend fun inDistricts(codes: List<String>): List<Long>
 
     @Query("SELECT mediaId FROM photos WHERE country = :code ORDER BY dateTaken DESC")
     suspend fun inCountry(code: String): List<Long>
@@ -309,7 +344,7 @@ interface FaceDao {
  * database. Version 1 held only what can be rebuilt from the photos; version 2 adds the people
  * the user named, which can't be, so from 2 on every schema change gets a real migration.
  */
-@Database(entities = [PhotoEntity::class, PersonEntity::class, FaceEntity::class, FrameEntity::class], version = 4, exportSchema = true)
+@Database(entities = [PhotoEntity::class, PersonEntity::class, FaceEntity::class, FrameEntity::class], version = 5, exportSchema = true)
 abstract class GalleryDatabase : RoomDatabase() {
 
     abstract fun photoDao(): PhotoDao
@@ -364,12 +399,23 @@ abstract class GalleryDatabase : RoomDatabase() {
             }
         }
 
+        /**
+         * Places estimated from nearby photos are marked apart from GPS tags, and each place
+         * keeps its district; the place pass fills that in for photos already placed.
+         */
+        val MIGRATION_4_5 = object : Migration(4, 5) {
+            override fun migrate(connection: SQLiteConnection) {
+                connection.execSQL("ALTER TABLE photos ADD COLUMN district TEXT")
+                connection.execSQL("ALTER TABLE photos ADD COLUMN placeGuessed INTEGER NOT NULL DEFAULT 0")
+            }
+        }
+
         fun build(context: Context): GalleryDatabase =
             Room.databaseBuilder(context, GalleryDatabase::class.java, FILE_NAME)
                 .setDriver(BundledSQLiteDriver())
                 .setQueryCoroutineContext(Dispatchers.IO)
                 // No destructive fallback any more: from version 2 it holds names the user gave.
-                .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4)
+                .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5)
                 .build()
     }
 }

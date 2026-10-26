@@ -99,6 +99,19 @@ class GalleryMigrationTest {
         }
     }
 
+    @Test
+    fun placesGainDistrictsAndEstimates() {
+        helper.createDatabase(4).use { db ->
+            db.execSQL("INSERT INTO photos (mediaId, dateTaken, dateModified, width, height, lat, lon, town, placeChecked) VALUES (7, 100, 200, 4000, 3000, 10.1, 77.06, 'Munnar', 1)")
+        }
+
+        helper.runMigrationsAndValidate(5, listOf(GalleryDatabase.MIGRATION_4_5)).use { db ->
+            assertEquals("Munnar", db.string("SELECT town FROM photos WHERE mediaId = 7"))
+            // Its district is still to be read, and its place is its own.
+            assertEquals(1L, db.long("SELECT COUNT(*) FROM photos WHERE district IS NULL AND placeGuessed = 0"))
+        }
+    }
+
     private fun SQLiteConnection.long(sql: String): Long = prepare(sql).use { it.step(); it.getLong(0) }
 
     private fun SQLiteConnection.string(sql: String): String = prepare(sql).use { it.step(); it.getText(0) }

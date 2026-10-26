@@ -41,18 +41,32 @@ object ChunkPolicy {
     /** Marks an exchange deliberately left out: a sum, or working the phone. Empty, never embedded. */
     const val SKIPPED = "skipped"
 
-    /** Tools whose turns hold nothing about the user worth recalling. */
-    val UTILITY_TOOLS = setOf("calculate", "set_timer", "open_app", "phone_setting")
+    /**
+     * Tools whose turns hold nothing about the user worth recalling. find_photos too: its answer
+     * is a count that is out of date as soon as photos are added, and recalled beside a new
+     * photo request the model repeated the old answer ("I found 0 photos in Kashmir") instead of
+     * searching, so no photos were shown (2026-10-26, 2 of 2 turns in a fresh chat).
+     */
+    val UTILITY_TOOLS = setOf("calculate", "set_timer", "open_app", "phone_setting", "find_photos")
 
     /**
      * Whether an exchange is left out of the archive: all it did was work something out or work
      * the phone. Such turns hold nothing about the user, and they do harm when recalled — every
      * sum looks like every other sum, so old ones were recalled beside a new one, and the model
-     * mixed their digits into it ("256 × 4" came back as "2*5*4"). A sum answered without the tool
-     * counts too; any other tool makes it a turn worth keeping.
+     * mixed their digits into it ("256 × 4" came back as "2*5*4"). A sum, or a request to see
+     * photos, answered without the tool counts too; any other tool makes it a turn worth keeping.
      */
     fun isUtility(userText: String, tools: Collection<String>): Boolean =
-        tools.all { it in UTILITY_TOOLS } && (tools.isNotEmpty() || looksLikeArithmetic(userText))
+        tools.all { it in UTILITY_TOOLS } && (tools.isNotEmpty() || looksLikeArithmetic(userText) || asksForPhotos(userText))
+
+    /** "Show me photos from Munnar", "get my beach videos": asking to see them, not telling about them. */
+    private fun asksForPhotos(text: String): Boolean {
+        val words = QueryText.words(text.lowercase())
+        return words.any { it in PHOTO_WORDS } && words.any { it in SEE_WORDS }
+    }
+
+    private val PHOTO_WORDS = setOf("photo", "photos", "pic", "pics", "picture", "pictures", "video", "videos", "selfie", "selfies")
+    private val SEE_WORDS = setOf("show", "find", "get", "fetch", "pull", "see", "give", "search")
 
     private fun looksLikeArithmetic(text: String): Boolean {
         val lower = text.lowercase()

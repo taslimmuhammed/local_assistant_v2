@@ -133,7 +133,12 @@ Every exchange — the user's message and the first 300 characters of the reply 
 chunk in `chunks`, keyword-indexed (FTS4) at once and embedded later by `EmbeddingQueue`, only
 while the user is neither generating nor typing. Voice notes are never archived; greetings and
 "ok thanks" are stored and keyword-searchable but not embedded. Existing chats are archived on the
-first start (`ArchiveRepository.backfill`).
+first start (`ArchiveRepository.backfill`). Sums, working the phone and photo searches are left
+out (`ChunkPolicy.isUtility`), with or without their tool: recalled, an old sum's digits got mixed
+into a new one, and an old photo answer was repeated instead of searching again ("I found 0
+photos in Kashmir", no photos shown). Raising `UTILITY_CLEANUP_VERSION` takes such exchanges out
+of an existing archive once; on the test phone, adding photo searches took 62 out, and repeated
+photo questions then searched 8 times in 8 (4 in 8 before).
 
 Before each turn, `Retriever` recalls, across all chats:
 
@@ -596,7 +601,8 @@ stops hard at the cap rather than letting the runtime reject the clip.
   above. "Me" is whoever is marked "This is me", or else the person named as in the user's
   profile; naming a group with the profile's name marks it. `PhotoTools` takes what the model
   sends loosely, as seen in real chats: filler queries ("all", "photos") are dropped, and a query
-  that names someone already named counts as another person ("me" plus query "shiyas").
+  that names someone already named counts as another person ("me" plus query "shiyas", or
+  "shiyas" plus query "me"); "me" alone in the query is "show me", nobody.
   `PhotoChatEvalTest` asks photo questions one after another through the real `ChatSender`: after
   two "I found N photos" turns the model answered the third ("photos of taslim") with a made-up
   count and no call, 3 times in 3. The rule now says to call find_photos for every such request,
@@ -622,8 +628,26 @@ stops hard at the cap rather than letting the runtime reject the clip.
   a state or country means photos whose nearest town is in it. Other names count ("Calicut",
   "Bangalore", plain "Kushalnagar"). Of towns sharing a name, those the user has photos near win;
   failing that a state or country of the name (Goa the state, not the Philippine town); failing
-  that the biggest town. An unknown place is an error that asks for the nearest town. Districts
-  aren't in the list: "photos from Coorg" gets that question. In a chat on the test phone:
+  that the biggest town. An unknown place is an error that asks for the nearest town.
+  Districts are in the list too (GeoNames admin2, "District" dropped: Thrissur, Wayanad, Idukki
+  for Munnar), and a photo keeps its town's district; a town inside a district of its own name
+  means the district ("Thrissur" 38 photos, not 34). A state also answers to the parts of its
+  name around "and" ("Kashmir"). When no name matches, a word search: states, else districts,
+  else a country whose name has every word asked for ("nadu" for Tamil Nadu); a word in more
+  than three of them ("pradesh") means nothing in particular, and towns aren't searched this way.
+  An area is always named in full, in the label and in the result's `place`, so "Kashmir" is
+  answered as Jammu and Kashmir; given only the field, the model still said "in Kashmir" (3 of
+  3), so when the name differs the result's note says to use it (then 3 of 3 right). A town's
+  other name leads to its district as its own name does ("Calicut" is Kozhikode district, 69). Coorg still isn't found (GeoNames calls it Kodagu).
+- **Estimated places.** Only 125 of the test phone's 2,680 photos had GPS tags: this phone's
+  camera tagged 15 of its last 101 (the setting is off at times), and the copies from an older
+  phone (`realme/`) mostly carry no tags at all; the tags were read correctly, checked against
+  the files. `PlaceGuess` gives an untagged photo the place of a tagged one around it: the nearer
+  of the two either side when they're within 12 hours and 25 km of each other, or one within an
+  hour. It placed 105 more (marked `placeGuessed`); tried on the tagged photos, each in turn
+  treated as untagged, all 90 it placed were within 15 km. Photos dated in bunches to the second
+  (copies, dated on arrival) are left out. A place search that finds nothing says, in a note,
+  how few photos have a location: as bare numbers the model only said "I found 0 photos". In a chat on the test phone:
   Kushalnagar 8 photos, Bangalore 18 (Bengaluru and its suburbs), Kerala 91, beach photos in Goa
   0; routing put Munnar, Goa and Kerala in `place` 18 of 18, and the weather in Munnar still went
   online.
@@ -695,7 +719,8 @@ How it fits together:
 - `chat/ChatSender` sends messages and streams replies for the chat screen and the overlay alike,
   one turn at a time. A reply outlives the screen that asked for it: closing the overlay, or a
   tool opening the dialer, doesn't cut it off — it finishes in its chat, and the app shows it
-  streaming if opened meanwhile.
+  streaming if opened meanwhile. A turn that fails, or ends with no reply, is logged (tag
+  `ChatSender`): the screen shows the error only for a moment and nothing of it is stored.
 - End of speech (`voice/EndOfSpeech`) is judged from the recorder's levels against a noise floor
   learned from the quiet readings: 1.3 s of quiet after at least 250 ms of speech sends; 7 s of
   nothing gives up.

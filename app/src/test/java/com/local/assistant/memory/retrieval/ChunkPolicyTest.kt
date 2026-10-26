@@ -49,6 +49,10 @@ class ChunkPolicyTest {
         // Answered without the tool, it is still a sum.
         assertTrue(ChunkPolicy.isUtility("what is 25+25", emptyList()))
         assertTrue(ChunkPolicy.isUtility("what's square root of 25", emptyList()))
+        // Photo searches: their counts go stale, and recalled they were repeated instead of searched.
+        assertTrue(ChunkPolicy.isUtility("show me photos from Kashmir", listOf("find_photos")))
+        assertTrue(ChunkPolicy.isUtility("get me photos from Kashmir", emptyList()))
+        assertTrue(ChunkPolicy.isUtility("find my beach videos", emptyList()))
     }
 
     @Test
@@ -62,5 +66,8 @@ class ChunkPolicyTest {
         assertFalse(ChunkPolicy.isUtility("my salary went up 10% this year", emptyList()))
         assertFalse(ChunkPolicy.isUtility("I love maths, especially square roots", emptyList()))
         assertFalse(ChunkPolicy.isUtility("my dentist is Dr. Rao", emptyList()))
+        // Telling about photos, not asking to see them.
+        assertFalse(ChunkPolicy.isUtility("I took lots of photos in Munnar last year", emptyList()))
+        assertFalse(ChunkPolicy.isUtility("remember this photo of my licence", listOf("remember_image")))
     }
 }

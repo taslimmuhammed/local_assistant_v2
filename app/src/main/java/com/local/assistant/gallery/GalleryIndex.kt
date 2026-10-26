@@ -223,18 +223,62 @@ class GalleryIndex(
             for (mediaId in batch) {
                 val at = withContext(Dispatchers.IO) { library.location(mediaId) }
                 val where = at?.let { (lat, lon) -> list.nearest(lat, lon) }
-                dao.setPlace(mediaId, at?.first, at?.second, where?.town, where?.region, where?.country)
+                dao.setPlace(mediaId, at?.first, at?.second, where?.town, where?.district, where?.region, where?.country)
                 read++
                 if (at != null) located++
             }
         }
         if (read > 0) Log.i(TAG, "Read the location of $read photos ($located had one) in ${clock() - started} ms")
-        return dao.placesPendingCount() == 0
+        val done = dao.placesPendingCount() == 0
+        if (done) {
+            // Placed before districts were kept: their district, from the same nearest town.
+            for (photo in dao.withoutDistrict()) {
+                val where = list.nearest(photo.lat, photo.lon)
+                dao.setPlace(photo.mediaId, photo.lat, photo.lon, where?.town, where?.district ?: "", where?.region, where?.country)
+            }
+            guessPlaces()
+        }
+        return done
     }
+
+    /**
+     * Estimates the place of photos without GPS tags from the photos around them in time
+     * ([com.local.assistant.gallery.places.PlaceGuess]), and drops estimates that no longer hold.
+     * Every photo at once, in memory: a few thousand rows, a few milliseconds.
+     */
+    private suspend fun guessPlaces() {
+        val rows = dao.placeRows()
+        val own = rows.filter { it.lat != null && !it.placeGuessed }
+        val byId = own.associateBy { it.mediaId }
+        val guesses = com.local.assistant.gallery.places.PlaceGuess.guess(
+            unplaced = rows.filter { it.lat == null || it.placeGuessed }.associate { it.mediaId to it.dateTaken },
+            located = own.map { com.local.assistant.gallery.places.PlaceGuess.Fix(it.mediaId, it.dateTaken, it.lat!!, it.lon!!) },
+            everyTakenAt = rows.map { it.dateTaken },
+        )
+        var changed = 0
+        for (row in rows) {
+            if (row.lat != null && !row.placeGuessed) continue
+            val from = guesses[row.mediaId]?.let { byId.getValue(it.mediaId) }
+            if (from == null) {
+                if (row.placeGuessed) {
+                    dao.setGuessedPlace(row.mediaId, null, null, null, null, null, null, guessed = false)
+                    changed++
+                }
+            } else if (!row.placeGuessed || row.lat != from.lat || row.lon != from.lon) {
+                dao.setGuessedPlace(row.mediaId, from.lat, from.lon, from.town, from.district, from.region, from.country, guessed = true)
+                changed++
+            }
+        }
+        if (changed > 0) Log.i(TAG, "Estimated places: ${guesses.size} photos placed by the photos around them ($changed changed)")
+    }
+
+    /** Photos with a place, their own or estimated. */
+    suspend fun locatedCount(): Int = dao.locatedCount()
 
     /** Photos taken in [area], newest first. */
     suspend fun takenAt(area: com.local.assistant.gallery.places.Places.Area): List<Long> = when (area) {
-        is com.local.assistant.gallery.places.Places.Area.InRegion -> dao.inRegion(area.code)
+        is com.local.assistant.gallery.places.Places.Area.InRegion -> dao.inRegions(area.codes)
+        is com.local.assistant.gallery.places.Places.Area.InDistrict -> dao.inDistricts(area.codes)
         is com.local.assistant.gallery.places.Places.Area.InCountry -> dao.inCountry(area.code)
         is com.local.assistant.gallery.places.Places.Area.Near -> dao.located().filter { photo ->
             area.points.any { (lat, lon) -> com.local.assistant.gallery.places.Places.km(photo.lat, photo.lon, lat, lon) <= area.radiusKm }

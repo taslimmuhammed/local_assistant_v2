@@ -1,5 +1,6 @@
 package com.local.assistant.chat
 
+import android.util.Log
 import com.local.assistant.data.db.AttachmentKind
 import com.local.assistant.data.db.Role
 import com.local.assistant.data.repo.ChatRepository
@@ -140,6 +141,8 @@ class ChatSender(
                 throw e
             } catch (e: Exception) {
                 failure = e.message ?: "Generation failed"
+                // The screen shows it for a moment; the log keeps it, for working out why later.
+                Log.w(TAG, "Turn failed in chat $chat", e)
             } finally {
                 // Runs even when stop() cancelled us, so a partial reply is never lost.
                 withContext(NonCancellable) {
@@ -161,6 +164,7 @@ class ChatSender(
                         }
                         turns.finish(chat, asked, assistantMessageId, completed = completed && !incomplete)
                     }
+                    if (failure == null && reply.isEmpty() && !stopRequested) Log.w(TAG, "Turn in chat $chat ended with no reply (completed: $completed)")
                     _live.value = null
                     listener.onFinished(reply.toString(), failure)
                 }
@@ -176,5 +180,9 @@ class ChatSender(
         // Ask the runtime to stop decoding, then unwind the collector.
         llm.stop()
         job?.cancel()
+    }
+
+    private companion object {
+        const val TAG = "ChatSender"
     }
 }

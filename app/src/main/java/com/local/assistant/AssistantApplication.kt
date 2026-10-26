@@ -543,7 +543,7 @@ class AppContainer(context: Context) {
             val finished = memoryControls.finishPastReminders()
             if (finished > 0) android.util.Log.i("AppContainer", "Finished $finished reminders whose time had passed")
             val dropped = archive.dropUtilityExchanges()
-            if (dropped > 0) android.util.Log.i("AppContainer", "Took $dropped sums and phone commands out of the archive")
+            if (dropped > 0) android.util.Log.i("AppContainer", "Took $dropped sums, phone commands and photo searches out of the archive")
             val archived = archive.backfill(beforeId = archive.lastMessageId() + 1)
             if (archived > 0) android.util.Log.i("AppContainer", "Archived $archived earlier exchanges")
             embeddingQueue.kick()

@@ -22,7 +22,7 @@ import java.io.File
  * before. Uses the phone's real photos, people and memory; each round's chat is hidden and
  * deleted afterwards.
  *
- *     adb shell am instrument -w -e eval photochat [-e rounds 3] -e class com.local.assistant.gallery.PhotoChatEvalTest \
+ *     adb shell am instrument -w -e eval photochat [-e rounds 3] [-e warm <photo search>] -e class com.local.assistant.gallery.PhotoChatEvalTest \
  *         com.local.assistant.test/androidx.test.runner.AndroidJUnitRunner
  */
 @RunWith(AndroidJUnit4::class)
@@ -44,6 +44,9 @@ class PhotoChatEvalTest {
         val args = InstrumentationRegistry.getArguments()
         assumeTrue("opt-in: -e eval photochat", args.getString("eval") == "photochat")
         val rounds = args.getString("rounds")?.toInt() ?: 1
+        // "-e warm sunset": a search from the Photos screen first, so the photo model is loaded
+        // as it is after using that screen.
+        args.getString("warm")?.let { query -> report("warm: \"$query\" -> ${container.galleryIndex.search(query)?.size} found") }
         var asked = 0
         var called = 0
         repeat(rounds) { round ->
