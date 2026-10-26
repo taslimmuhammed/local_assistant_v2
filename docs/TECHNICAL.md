@@ -562,7 +562,10 @@ stops hard at the cap rather than letting the runtime reject the clip.
   the reply; more become a card with three photos fanned like prints and the count, which opens
   a sheet with all of them, best first; a tap opens the full-screen viewer. The sheet can also
   sort them newest or oldest first (dates from MediaStore: when taken, else when added), under a
-  heading per month, and the viewer pages through them in the order shown. Over the lock
+  heading per month, and the viewer pages through them in the order shown. This sheet and a
+  person's sheet in People don't move with drags (closed with ✕, back or a tap outside): with
+  drags on, a scroll the grid didn't use went to the sheet, which bobbed at either end, and a
+  swipe before a person's photos had loaded dragged the sheet shut. Over the lock
   screen the panel says how many were found and shows none until the phone is unlocked. The
   photo model is let go two minutes after a chat's last search, unless indexing needs it.
 - **People** (`gallery/faces/`), off until "Find people" is turned on on the Photos screen, since
@@ -578,7 +581,13 @@ stops hard at the cap rather than letting the runtime reject the clip.
   real migration, since names can't be rebuilt). `FaceGrouping` places them: faces the user
   confirmed stay; others join the named person whose three closest faces they match at 0.55 or
   more on average; the rest form unnamed groups by the same closest-faces rule at 0.65. Faces
-  narrower than 8% of the photo aren't placed. Running averages (and SFace's published 0.363)
+  narrower than 8% of the photo can join a named person but never form or join a group. They were
+  first left out altogether, and that is where most missing photos went: `FaceRecallTest` dumps
+  the index, and of the faces scoring 0.55+ against the user's named faces but unplaced, all 82
+  were small, nearly all the user on a contact sheet. Under 0.55 most faces were other people,
+  so that bar stays. Matching small faces took the user from 200 photos to 282 and two friends
+  from 25 to 47 and 10 to 15. `FaceGrouping.VERSION` marks a change of rules: the next indexing
+  pass places every face again once. Running averages (and SFace's published 0.363)
   grouped people by look, glasses, sunglasses, children of an age, on this phone's photos; by
   closest faces at 0.65 each group looked like one person, sometimes one person in two groups,
   which naming both alike merges. A face's own person scored 0.64+ and the nearest other 0.48 at

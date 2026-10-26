@@ -24,6 +24,7 @@ import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.itemsIndexed
+import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -46,6 +47,7 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberModalBottomSheetState
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -57,7 +59,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.ImageBitmap
-import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalWindowInfo
@@ -209,7 +210,8 @@ fun PersonSheet(target: PeopleTarget, viewModel: GalleryViewModel, onDismiss: ()
     val numbers = NumberFormat.getIntegerInstance()
     // The person as they are now: renamed, made "me", or merged away.
     val person = (target as? PeopleTarget.Named)?.let { named -> people.firstOrNull { it.id == named.person.id } }
-    val photos by produceState(emptyList<Long>(), target, status.version) { value = viewModel.photosOf(target) }
+    // Null until read; kept while a regrouping reads them again, so the grid doesn't blank.
+    val photos by produceState<List<Long>?>(null, target, status.version) { value = viewModel.photosOf(target) }
     var naming by remember { mutableStateOf(false) }
     var renaming by remember { mutableStateOf(false) }
     var merging by remember { mutableStateOf(false) }
@@ -220,14 +222,22 @@ fun PersonSheet(target: PeopleTarget, viewModel: GalleryViewModel, onDismiss: ()
     // Merged into someone else, or forgotten: nothing left to show.
     LaunchedEffect(target, person) { if (target is PeopleTarget.Named && person == null) onDismiss() }
 
-    ModalBottomSheet(onDismissRequest = onDismiss, sheetState = state, containerColor = AppColors.Background) {
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = state,
+        containerColor = AppColors.Background,
+        // Never moved by a drag, as the photo results sheet (PhotoSheet). Here a swipe while the
+        // photos were still loading also dragged the sheet shut, the grid being empty.
+        sheetGesturesEnabled = false,
+        dragHandle = null,
+    ) {
         Column(Modifier.height(height)) {
             Row(Modifier.fillMaxWidth().padding(start = 20.dp, end = 8.dp), verticalAlignment = Alignment.CenterVertically) {
                 FaceCircle(person?.cover ?: (target as? PeopleTarget.Unnamed)?.group?.cover, 48.dp)
                 Column(Modifier.weight(1f).padding(start = 12.dp)) {
                     Text(person?.name ?: "Who is this?", style = MaterialTheme.typography.titleMedium, color = AppColors.TextPrimary)
                     Text(
-                        listOfNotNull("${numbers.format(photos.size)} photos", "You".takeIf { person?.isMe == true }).joinToString(" · "),
+                        listOfNotNull(photos?.let { "${numbers.format(it.size)} photos" }, "You".takeIf { person?.isMe == true }).joinToString(" · "),
                         style = MaterialTheme.typography.bodySmall,
                         color = AppColors.TextSecondary,
                     )
@@ -261,9 +271,17 @@ fun PersonSheet(target: PeopleTarget, viewModel: GalleryViewModel, onDismiss: ()
                 horizontalArrangement = Arrangement.spacedBy(2.dp),
                 verticalArrangement = Arrangement.spacedBy(2.dp),
                 contentPadding = PaddingValues(top = 8.dp, bottom = 24.dp),
-                modifier = Modifier.fillMaxSize().nestedScroll(KeepScrollPastEnd),
+                modifier = Modifier.fillMaxSize(),
             ) {
-                itemsIndexed(photos, key = { _, id -> id }) { index, id ->
+                // Until they're read, a spinner where they'll be.
+                if (photos == null) {
+                    item(span = { GridItemSpan(maxLineSpan) }) {
+                        Box(Modifier.fillMaxWidth().padding(top = 48.dp), contentAlignment = Alignment.Center) {
+                            CircularProgressIndicator(Modifier.size(28.dp), strokeWidth = 2.dp, color = AppColors.TextSecondary)
+                        }
+                    }
+                }
+                itemsIndexed(photos.orEmpty(), key = { _, id -> id }) { index, id ->
                     PhotoThumb(
                         id,
                         thumbnails,
@@ -276,7 +294,7 @@ fun PersonSheet(target: PeopleTarget, viewModel: GalleryViewModel, onDismiss: ()
         }
     }
 
-    viewing?.let { start -> PhotoViewer(photos, start, thumbnails, onClose = { viewing = null }) }
+    viewing?.let { start -> PhotoViewer(photos.orEmpty(), start, thumbnails, onClose = { viewing = null }) }
 
     if (naming && target is PeopleTarget.Unnamed) {
         NameDialog(

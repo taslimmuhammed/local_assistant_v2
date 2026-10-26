@@ -30,6 +30,9 @@ class FaceIndex(
     private val enabled: () -> Boolean,
     /** The name in the user's profile: the person of that name is the user, marked or not. */
     private val userName: suspend () -> String? = { null },
+    /** Which [FaceGrouping.VERSION] the faces were last placed by, kept across launches. */
+    private val groupedBy: () -> Int = { FaceGrouping.VERSION },
+    private val setGroupedBy: (Int) -> Unit = {},
     private val clock: () -> Long = System::currentTimeMillis,
 ) {
 
@@ -56,6 +59,11 @@ class FaceIndex(
      */
     suspend fun indexPending(deadline: Long, runWhenIdle: suspend (suspend () -> Boolean) -> Boolean): Boolean {
         if (!enabled()) return true
+        // New matching rules: the faces found so far are placed again by them, once.
+        if (groupedBy() != FaceGrouping.VERSION) {
+            regroup()
+            setGroupedBy(FaceGrouping.VERSION)
+        }
         var looked = 0
         var found = 0
         val started = clock()

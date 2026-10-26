@@ -51,12 +51,19 @@ class FaceGroupingTest {
     }
 
     @Test
-    fun `faces too small to trust are left alone`() {
+    fun `small faces join someone named, but never start or join a group`() {
         val amma = unit()
+        val stranger = unit()
         val named = listOf(face(near(amma, 0.95f), personId = 1, confirmed = true))
-        val tiny = FaceGrouping.Face(nextId++, near(amma, 0.95f), null, false, null, quality = 0.01f, side = 0.03f)
+        fun small(print: FloatArray) = FaceGrouping.Face(nextId++, print, null, false, null, quality = 0.01f, side = 0.03f)
+        val smallAmma = small(near(amma, 0.9f))
+        // Small faces of someone unnamed: alike enough to group, if they were bigger.
+        val smallStrangers = List(3) { small(near(stranger, 0.95f)) }
 
-        assertEquals(FaceGrouping.Placement(null, null), FaceGrouping.place(named + tiny).getValue(tiny.id))
+        val placed = FaceGrouping.place(named + smallAmma + smallStrangers)
+
+        assertEquals(FaceGrouping.Placement(1, null), placed.getValue(smallAmma.id))
+        smallStrangers.forEach { assertEquals(FaceGrouping.Placement(null, null), placed.getValue(it.id)) }
     }
 
     @Test

@@ -10,12 +10,12 @@ import kotlin.math.sqrt
  *    [PERSON_MATCH] and the user hasn't said the face isn't them.
  * 3. What's left is gathered into unnamed groups for the People screen, clearest faces first:
  *    each joins the group it matches best if that reaches [GROUP_MATCH], or starts a new one. A
- *    group of one is no group.
+ *    group of one is no group. Faces narrower than [MIN_SIDE] of the photo are left out of the
+ *    groups: their prints are too unreliable to build a group on.
  *
  * "Matches" is always the mean similarity to the [NEIGHBOURS] closest faces of that person or
  * group, never to their average: people look different from one year, angle or haircut to the
- * next, and an average sits between people who look alike and pulls them all in. Faces narrower
- * than [MIN_SIDE] of the photo aren't placed at all: their prints are too unreliable.
+ * next, and an average sits between people who look alike and pulls them all in.
  *
  * Set from the phone's own 2,199 faces (2026-10-25, `FaceCalibrationTest`): with groups formed by
  * running averages at SFace's published 0.363 and up to 0.55, the biggest groups mixed people who
@@ -25,8 +25,20 @@ import kotlin.math.sqrt
  * its own person and 0.48 at most (median 0.31) against the nearest other one, hence 0.55 for
  * matching a named person. Half the faces were under about 68 px across; under [MIN_SIDE] (about
  * 72 px) is where the mixing came from.
+ *
+ * Small faces were at first left out of matching named people too, and that is where most of a
+ * person's photos went missing (2026-10-26, `FaceRecallTest`): of the faces scoring 0.55 or more
+ * against the user's named faces but not placed, all 82 were small (9 under 4% of the photo),
+ * and on a contact sheet nearly all were the user, scoring 0.39 at most against anyone else
+ * named. Below 0.55, at any size, most were other people (0.50 to 0.55 mixed, 0.45 to 0.50
+ * mostly children, women and other men), so the bar stays. Matching small faces too took the
+ * user from 200 photos to 282, and two friends from 25 to 47 and 10 to 15, all of the 27 added
+ * faces theirs on sight.
  */
 object FaceGrouping {
+
+    /** Raised whenever the rules change, so faces already found are placed again by the new ones. 2: small faces match named people. */
+    const val VERSION = 2
 
     const val PERSON_MATCH = 0.55f
 
@@ -60,10 +72,6 @@ object FaceGrouping {
 
         for (face in faces) {
             if (face.confirmed && face.personId != null) continue
-            if (face.side < MIN_SIDE) {
-                placements[face.id] = Placement(null, null)
-                continue
-            }
             var bestPerson: Long? = null
             var bestScore = PERSON_MATCH
             for ((person, theirs) in confirmed) {
@@ -74,7 +82,11 @@ object FaceGrouping {
                     bestPerson = person
                 }
             }
-            if (bestPerson != null) placements[face.id] = Placement(bestPerson, null) else loose += face
+            when {
+                bestPerson != null -> placements[face.id] = Placement(bestPerson, null)
+                face.side < MIN_SIDE -> placements[face.id] = Placement(null, null)
+                else -> loose += face
+            }
         }
 
         for ((faceId, groupId) in groups(loose)) placements[faceId] = Placement(null, groupId)

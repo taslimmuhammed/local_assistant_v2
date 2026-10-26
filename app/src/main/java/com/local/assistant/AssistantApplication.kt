@@ -233,6 +233,8 @@ class AppContainer(context: Context) {
         newFinder = { FaceFinder(context.assets) },
         enabled = { settings.findPeople },
         userName = { memoryRepository.coreFacts().firstOrNull { it.subject == "user" && it.attribute == "name" }?.value },
+        groupedBy = { settings.faceGroupingVersion },
+        setGroupedBy = { settings.faceGroupingVersion = it },
     )
 
     val galleryIndex = GalleryIndex(

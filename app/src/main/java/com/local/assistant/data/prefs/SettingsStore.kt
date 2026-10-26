@@ -41,6 +41,11 @@ class SettingsStore(context: Context) {
         get() = prefs.getBoolean(KEY_FIND_PEOPLE, false)
         set(value) = prefs.edit { putBoolean(KEY_FIND_PEOPLE, value) }
 
+    /** The face matching rules (`FaceGrouping.VERSION`) the faces were last placed by; 0 before any. */
+    var faceGroupingVersion: Int
+        get() = prefs.getInt(KEY_FACE_GROUPING_VERSION, 0)
+        set(value) = prefs.edit { putInt(KEY_FACE_GROUPING_VERSION, value) }
+
     /** Which embedder [embedderPath] is (an `EmbedderCatalog` key), which decides its prompts. */
     var embedderKey: String?
         get() = prefs.getString(KEY_EMBEDDER_KEY, null)
@@ -200,6 +205,7 @@ class SettingsStore(context: Context) {
         private const val KEY_EMBEDDER_KEY = "embedder_key"
         private const val KEY_GALLERY_MODEL_PATH = "gallery_model_path"
         private const val KEY_FIND_PEOPLE = "find_people"
+        private const val KEY_FACE_GROUPING_VERSION = "face_grouping_version"
         private const val KEY_MEMORY_PAUSED = "memory_paused"
         private const val KEY_PROFILE_ASKED = "profile_asked"
         private const val KEY_WEB_SEARCH_ASKED = "web_search_asked"

@@ -1,7 +1,11 @@
 package com.local.assistant.ui.gallery
 
 import android.content.Intent
+import android.media.MediaPlayer
 import android.net.Uri
+import android.view.Gravity
+import android.view.ViewGroup.LayoutParams.MATCH_PARENT
+import android.widget.FrameLayout
 import android.widget.VideoView
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
@@ -68,13 +72,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.draw.shadow
-import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
-import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
-import androidx.compose.ui.input.nestedscroll.NestedScrollSource
-import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
@@ -82,7 +82,6 @@ import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
-import androidx.compose.ui.unit.Velocity
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.window.Dialog
@@ -247,19 +246,26 @@ private fun VideoPage(uri: Uri, lengthMs: Long, startMs: Long, poster: ImageBitm
     DisposableEffect(uri) { onDispose { view?.stopPlayback() } }
 
     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-        // Not sized here: a video view keeps the video's shape within what it's offered.
+        // Offered the whole screen, a video view keeps the video's shape inside it, but takes its
+        // top-left corner: the frame around it centres it. Offered less, it stayed at the video's
+        // own pixel size, a small box mid-screen.
         AndroidView(
             factory = { context ->
-                VideoView(context).apply {
-                    setOnPreparedListener {
-                        seekTo(startMs.toInt())
-                        prepared = true
+                FrameLayout(context).apply {
+                    val video = VideoView(context).apply {
+                        setOnPreparedListener { player ->
+                            // To the moment itself, not the keyframe before it (five seconds early).
+                            player.seekTo(startMs, MediaPlayer.SEEK_CLOSEST)
+                            prepared = true
+                        }
+                        setOnCompletionListener { playing = false }
+                        setVideoURI(uri)
                     }
-                    setOnCompletionListener { playing = false }
-                    setVideoURI(uri)
-                    view = this
+                    addView(video, FrameLayout.LayoutParams(MATCH_PARENT, MATCH_PARENT, Gravity.CENTER))
+                    view = video
                 }
             },
+            modifier = Modifier.fillMaxSize(),
         )
         if (!started) {
             poster?.let { Image(it, contentDescription = null, contentScale = ContentScale.Fit, modifier = Modifier.fillMaxSize()) }
@@ -448,7 +454,16 @@ private fun PhotoSheet(set: PhotoSet, thumbnails: PhotoThumbnails, onDismiss: ()
     val grid = rememberLazyGridState()
     LaunchedEffect(sort) { grid.scrollToItem(0) }
 
-    ModalBottomSheet(onDismissRequest = onDismiss, sheetState = state, containerColor = AppColors.Background) {
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = state,
+        containerColor = AppColors.Background,
+        // Closed with ✕, back or a tap outside, never by a drag. A drag the grid didn't use went
+        // to the sheet: past the last row it chased its own height and bobbed, and at the top
+        // every pull or fling down moved it a little and it sprang back, over and over.
+        sheetGesturesEnabled = false,
+        dragHandle = null,
+    ) {
         Column(Modifier.height(height)) {
             Row(Modifier.fillMaxWidth().padding(start = 20.dp, end = 8.dp, bottom = 4.dp), verticalAlignment = Alignment.CenterVertically) {
                 Icon(Icons.Outlined.PhotoLibrary, contentDescription = null, tint = AppColors.TextPrimary)
@@ -486,7 +501,7 @@ private fun PhotoSheet(set: PhotoSet, thumbnails: PhotoThumbnails, onDismiss: ()
                 horizontalArrangement = Arrangement.spacedBy(2.dp),
                 verticalArrangement = Arrangement.spacedBy(2.dp),
                 contentPadding = PaddingValues(bottom = 24.dp),
-                modifier = Modifier.fillMaxSize().nestedScroll(KeepScrollPastEnd),
+                modifier = Modifier.fillMaxSize(),
             ) {
                 items(
                     cells,
@@ -558,18 +573,6 @@ private fun LockedPhotos(set: PhotoSet, onUnlock: () -> Unit, modifier: Modifier
             Text("Unlock your phone to see them.", style = MaterialTheme.typography.bodySmall, color = AppColors.TextSecondary)
         }
     }
-}
-
-/**
- * Scrolling on past the last row stops at the grid instead of being handed to the sheet, which
- * has nowhere to go but moves anyway. Pulling down at the top still reaches it, to close it.
- */
-internal object KeepScrollPastEnd : NestedScrollConnection {
-    override fun onPostScroll(consumed: Offset, available: Offset, source: NestedScrollSource): Offset =
-        if (available.y < 0) Offset(0f, available.y) else Offset.Zero
-
-    override suspend fun onPostFling(consumed: Velocity, available: Velocity): Velocity =
-        if (available.y < 0) Velocity(0f, available.y) else Velocity.Zero
 }
 
 private const val SHEET_SHARE = 0.88f
