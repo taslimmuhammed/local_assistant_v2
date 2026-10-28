@@ -27,7 +27,7 @@ class DeviceTools(
         val person = find(who, Need.PHONE)
         check(phone.dial(person.address), "the dialer")
         return ActionResult(
-            ok("dialer" to "open with ${person.name} (${person.address}); the user taps call"),
+            ok("dialer" to "open with ${person.name} (${person.address}); not called yet, the user taps call"),
             MemoryChip(MemoryChip.Kind.CALL, "Call", "${person.name} · ${person.address}", note = "Tap call in the dialer"),
         )
     }
@@ -49,7 +49,7 @@ class DeviceTools(
         }
         check(handoff, appName)
         return ActionResult(
-            ok("ready" to "$appName to ${person.name} with the message written; the user taps send"),
+            ok("ready" to "$appName open to ${person.name} with the message written; not sent yet, the user taps send"),
             MemoryChip(MemoryChip.Kind.MESSAGE, appName, person.name + (text?.let { ": ${it.take(CHIP_TEXT)}" } ?: ""), note = "Tap send in $appName"),
         )
     }

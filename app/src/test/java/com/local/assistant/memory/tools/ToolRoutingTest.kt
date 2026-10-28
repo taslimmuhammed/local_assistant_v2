@@ -683,6 +683,103 @@ class ToolRoutingTest {
         assertFalse("{photos}" in ToolCatalog.rules(web = true, photos = false))
     }
 
+    // ---- Saying it did what no tool did ----
+
+    private fun replies(vararg script: List<GenEvent>): Pair<ScriptedSession, List<LoopEvent>> {
+        val session = ScriptedSession(ArrayDeque(script.toList()))
+        return session to runBlocking { loop.run(session, "envelope", null, context).toList() }
+    }
+
+    private fun shown(events: List<LoopEvent>) = events.filterIsInstance<LoopEvent.Text>().joinToString("") { it.delta }
+
+    /** As it went in the user's chat on 10 Oct 2026: "yes send it", and no call. */
+    @Test
+    fun `a reply that says it sent something when no tool ran is never shown, and the model is asked again`() {
+        val (session, events) = replies(
+            ScriptedSession.says("I've sent the email to Hitesh at infosys.com with \"Hi\" in it."),
+            ScriptedSession.says("I can't send emails myself. I can open your email app with it written; what's his full address?"),
+        )
+        assertEquals("I can't send emails myself. I can open your email app with it written; what's his full address?", shown(events))
+        assertEquals(listOf("envelope", ToolLoop.UNBACKED_CLAIM), session.sentEnvelopes)
+        // The live conversation holds the reply nobody saw.
+        assertTrue((events.last() as LoopEvent.Done).staleConversation)
+    }
+
+    @Test
+    fun `asked again, the model can call the tool it should have, and that is what happens`() {
+        val (_, events) = replies(
+            ScriptedSession.says("Sure! I've sent it to Priya."),
+            ScriptedSession.calls(call("send_message", "to" to "Priya Sharma", "text" to "Notes attached", "app" to "email")),
+            ScriptedSession.says("Your email app is open with it written; tap send."),
+        )
+        assertEquals(listOf("EMAIL priya@example.com: Notes attached"), phone.done)
+        assertEquals("Your email app is open with it written; tap send.", shown(events))
+        val done = events.last() as LoopEvent.Done
+        assertEquals(1, done.toolRounds)
+        assertTrue(done.staleConversation)
+    }
+
+    /** As in the power-button panel on 27 Oct 2026: a draft nobody wrote, then "Sent." */
+    @Test
+    fun `a draft that isn't shown, and a bare Sent, are held back too`() {
+        val (session, events) = replies(
+            ScriptedSession.says("I've drafted the email for you. Would you like me to send it now?"),
+            ScriptedSession.calls(call("send_message", "to" to "priya@example.com", "text" to "Good morning", "app" to "email")),
+            ScriptedSession.says("Your email app is open with it written; tap send."),
+        )
+        assertEquals("Your email app is open with it written; tap send.", shown(events))
+        assertEquals(listOf("envelope", ToolLoop.UNBACKED_CLAIM), session.sentEnvelopes)
+        assertEquals("Sorry, I haven't sent anything.", shown(replies(ScriptedSession.says("Sent."), ScriptedSession.says("Sorry, I haven't sent anything.")).second))
+        // A draft that is shown streams on once its text appears.
+        val draft = "I've drafted an email for you. Here it is:\n\nSubject: Leave on Friday\n\nHi, could I take Friday off?"
+        val (shownDraft, drafted) = replies(ScriptedSession.says(draft))
+        assertEquals(draft, shown(drafted))
+        assertEquals(listOf("envelope"), shownDraft.sentEnvelopes)
+    }
+
+    @Test
+    fun `asked once, a model that still says it did it is not shown, and what is true is`() {
+        val (session, events) = replies(ScriptedSession.says("I've set an alarm for 7."), ScriptedSession.says("I've sent the email."))
+        assertEquals(ToolLoop.NOT_DONE, shown(events))
+        assertEquals(2, session.sentEnvelopes.size)
+        assertTrue((events.last() as LoopEvent.Done).staleConversation)
+    }
+
+    @Test
+    fun `an ordinary reply is shown whole and once, from its first sentence on, and the conversation kept`() {
+        val pieces = listOf("Here is ", "a short haiku about the rain", ". ", "Drops on the tin roof,\n", "the street ", "goes quiet.")
+        val (session, events) = replies(pieces.map { GenEvent.TextDelta(it) } + GenEvent.Done(null))
+        assertEquals(pieces.joinToString(""), shown(events))
+        // Held only until the first sentence was known to claim nothing.
+        assertEquals("Here is a short haiku about the rain. ", events.filterIsInstance<LoopEvent.Text>().first().delta)
+        assertEquals(listOf("envelope"), session.sentEnvelopes)
+        assertFalse((events.last() as LoopEvent.Done).staleConversation)
+        // A short one that never finishes its first sentence is shown at the end.
+        assertEquals("Hello!", shown(replies(ScriptedSession.says("Hello!")).second))
+    }
+
+    @Test
+    fun `after a tool ran, saying it was done is the confirmation`() {
+        val (session, events) = turn(call("set_timer", "duration" to "10 minutes"), reply = "I've set a timer for 10 minutes.")
+        assertEquals("I've set a timer for 10 minutes.", shown(events))
+        assertEquals(listOf("envelope"), session.sentEnvelopes)
+        // Words said before the call, claim or not, go out with it.
+        val (_, before) = replies(
+            listOf(GenEvent.TextDelta("I've set an alarm for 6. "), GenEvent.ToolCalls(listOf(call("set_alarm", "when" to "6am"))), GenEvent.Done(null)),
+            ScriptedSession.says("It will ring at 6."),
+        )
+        assertEquals("I've set an alarm for 6. It will ring at 6.", shown(before))
+    }
+
+    @Test
+    fun `calls and messages say they are not done yet`() {
+        val (dial, _) = turn(call("phone_call", "who" to "amma"))
+        assertTrue(result(dial)["dialer"].toString().contains("not called yet"))
+        now = now.plusMinutes(1)
+        val (text, _) = turn(call("send_message", "to" to "amma", "text" to "Reached home"))
+        assertTrue(result(text)["ready"].toString().contains("not sent yet"))
+    }
+
     /** A quote left unescaped in a description once made the app crash as it started. */
     @Test
     fun `every declaration is valid JSON with a name and a description`() {

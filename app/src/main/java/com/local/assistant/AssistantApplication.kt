@@ -409,6 +409,7 @@ class AppContainer(context: Context) {
         onNumberFixed = { wrote, source -> Log.i("ReplyGrounding", "Reply wrote $wrote; the source has $source") },
         groundNumbers = { !llmService.exactDigits },
         seesImages = { (llmService.capabilities.value?.visionTokensPerImage ?: 0) > 0 },
+        onUnbackedClaim = { said -> Log.i("ActionClaims", "Held back, no tool ran: ${said.take(200)}") },
     )
 
     val turnRunner = TurnRunner(conversations, modelScheduler, toolLoop, onExchangeStored = { userMessageId ->

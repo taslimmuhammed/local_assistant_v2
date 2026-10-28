@@ -257,7 +257,8 @@ class RoutingEvalTest {
         val voice = voiceDir()
         report("t$temperature.voice", voice?.name ?: "off")
         fun clip(case: Case): File? = voice?.let { File(it, "${cases.indexOf(case)}.wav") }?.takeIf { it.isFile }
-        val selected = (if (only == null) cases else cases.filter { only in it.prompt })
+        // "-e only '<words>|<other words>'": the cases whose request has any of them.
+        val selected = (if (only == null) cases else cases.filter { case -> only.split('|').any { it in case.prompt } })
             .filter { voice == null || clip(it) != null }
             .flatMap { case -> List(samples) { seed -> case to seed } }
         for ((case, seed) in selected) {

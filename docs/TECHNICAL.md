@@ -445,6 +445,72 @@ Gemma writes a tool call as `call:<name>{…}`, and the runtime could not parse 
   "2 cups in ml" — length, weight, volume, area (acres, hectares, cents), speed, time, data and
   temperature.
 
+### Saying it did what it didn't
+
+On 10 Oct 2026, by voice, the user asked for an email to Hitesh; "yes send it" got "I've sent the
+email to Hitesh" with no tool call at all, and later "I do not have access to email tools". On
+27 Oct the power-button panel did the same: "I've drafted the email for you. Would you like me to
+send it now?", then "Sent.", and no call, a minute after the same request typed in the app had
+opened the mail app. The panel has the same tools (its conversations are built the same way,
+pre-read ones included); what differs is that it is spoken to. Given the clip instead of the
+words, the model calls the tool less and says it did it more: the same email chat replayed
+typed calls `send_message`, spoken it got "The email has been sent." And after every
+`send_message` or `phone_call` in the user's chats the reply said "I've sent the message" or "I
+have called", though the app had only opened WhatsApp or the dialer. Four things keep replies to
+what happened:
+
+- **The opening is checked before it is shown** (`ToolLoop`, `ActionClaims`). Until a tool has
+  run in a turn, a reply's first sentence (or more, while that is under 30 characters, at most
+  200) is held back. If it says something was done (sent, called, booked, paid, an alarm or
+  reminder set, the flashlight turned on, a bare "Sent.") it is never shown: the model gets a
+  bracketed app note (`ToolLoop.UNBACKED_CLAIM`: nothing was done; call the tool now, or say
+  plainly you can't) and its answer is shown instead. If that answer says so too, the app shows
+  `ToolLoop.NOT_DONE` ("Sorry, I didn't actually do that: nothing was sent, set or saved.").
+  "I've drafted the email" counts only if no draft follows (no colon, no quotes, under 200
+  characters): such a reply is held until its text shows up. The live conversation then holds a
+  reply nobody saw, so it is rebuilt from the stored chat on the next turn. `ActionClaims` is English
+  and errs towards missing a claim: verbs that also describe writing or code ("I've updated the
+  code", "I've ordered the list by date") count only next to what a tool acts on. Over the 188
+  replies in the user's chats it found 19 claims, all real (17 after a tool, 2 with none), and
+  no false ones. Holding the opening delays the first words of a reply with no tool call by the
+  time it takes to write its first sentence.
+- **A rule in the instructions:** the model acts only through its tools, never says it did
+  something unless the tool succeeded just now, and says plainly when none can do what is asked
+  (Teams or Slack, bookings, payments, posts, reading the inbox).
+- **Calls and messages say they aren't done:** their descriptions say the dialer or app opens and
+  the user taps call or send, `send_message` names SMS, WhatsApp and email as its only apps, and
+  the results say "not called yet" and "not sent yet".
+
+`HonestyEvalTest` (`-e eval honesty`, add `-e voice honesty-voice` for the spoken version) sends
+24 requests through the app's own engine and the real prompt: things no tool can do, the Hitesh
+and panel chats replayed, and calls and messages followed by the app's result. The clips are
+made on the Mac with `say -v Rishi -o N-T.wav --file-format=WAVE --data-format=LEI16@16000` and
+pushed to `files/honesty-voice/`; run it with the app closed (it holds the model slot). On 27 Oct
+2026, before → after the rule and wording:
+
+| | spoken | typed |
+|---|---|---|
+| claimed with no call | 2/24 → 1/24 | 0/24 → 0/24 |
+| right tool, or no tool and no claim | 15/24 → 19/24 | 22/24 → 22/24 |
+| the same once the app's check has run | 16/24 → 20/24 | 22/24 → 22/24 |
+| still claiming after the check (now shown as `NOT_DONE`) | 1 → 0 | 0 → 0 |
+
+The panel's "yes go ahead" went from "I've sent the email" (twice, the check included) to a
+`send_message` call; spoken "book an Uber", "post this on Instagram" and "check my email" went
+from a wrong tool to "I can't". The one spoken claim left, the Hitesh "yes send it", is caught by
+the check. With the old result wording, replies after the app opened a message or the dialer said
+"sent" or "called" 12 times in 12 (seeds give the same output on the GPU, so 4 cases); with "not
+sent yet" in the result, 4 in 4 said it was open and ready. Still wrong: spoken, "Teams" and
+"Instagram" sometimes go to `send_message` (which refuses any app but SMS, WhatsApp and email),
+and "pay my electricity bill" to `find_photos`. A spoken email address is often misheard
+("taslim.moosa@infosys.com" came out as "thasaleem.musa@infosec.com"): the mail app opens with
+it, so check it before tapping send.
+
+Routing didn't move: `RoutingEvalTest` scored 88/94 before and after (positives 77/79,
+negatives 11/15; "find photos of Amma at the beach" now passes, "what's my dentist's name?" now
+goes to `find_photos`). The rule and wording cost 108 tokens of prefix: instructions 832 → 901,
+declarations 1,651 → 1,690.
+
 ### Web search
 
 `web_lookup` looks things up through Tavily with the user's own API key, pasted in under "Web
@@ -698,6 +764,18 @@ button switches to typing. The handle at the top works both ways: pulled down it
 panel; pulled up it stretches the panel towards the top ("Release to open the app"), and let go
 past 40% of the way (or 220 dp) it fills the screen and opens the full app at this chat, as the
 "Open in app" button does.
+
+**Memory when spoken to.** Its turns are the app's (same sender, tools and memory), but most are
+spoken, and a spoken message has no words for recall to match: memory went unsearched. Typed in
+the app, "what is my credit card number" was answered from an earlier chat; spoken in the panel,
+it got only the card's photos (2026-10-27). Voice messages stay untranscribed (the user's call),
+so for a spoken photo search (`find_photos`, the tool such questions go to) the executor
+searches memory with the search's own words, as `search_memory` would, and puts what it finds
+first in the result with a note to answer from it. Given as a plain field after the counts it
+was passed over. By voice (`PanelMemoryEvalTest#spokenQuestions`): "what is my credit card
+number" answered from memory 3 times in 3, the number matching the earlier chat's; "show me my
+credit card" showed the photos and read nothing out, 3 in 3. A spoken question that calls no
+tool still gets no recall.
 
 **On the lock screen** the assistant works without unlocking only if **Use on the lock screen**
 is on (Settings → Assistant; off by default, and turning it on first shows a warning). Then it

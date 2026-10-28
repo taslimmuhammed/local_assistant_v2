@@ -43,6 +43,10 @@ sealed interface LoopEvent {
  *
  * The runtime is never allowed to run tools itself: going through [executor] is what validates
  * the arguments, dedupes repeats, records the call and makes undo possible.
+ *
+ * A reply that opens by saying something was done (sent, called, set …) with no tool run is
+ * never shown: the model is asked once more ([UNBACKED_CLAIM]), and its answer shown instead —
+ * or, if that says so too, [NOT_DONE].
  */
 class ToolLoop(
     private val executor: ToolExecutor,
@@ -60,6 +64,8 @@ class ToolLoop(
     private val groundNumbers: () -> Boolean = { true },
     /** Whether the model takes images; a result's picture is dropped when it doesn't. */
     private val seesImages: () -> Boolean = { true },
+    /** A reply said something was done with no tool run, and was held back ([ActionClaims]). */
+    private val onUnbackedClaim: (said: String) -> Unit = {},
 ) {
 
     /**
@@ -78,8 +84,18 @@ class ToolLoop(
         var rounds = 0
         var spoke = false
         var changedPrefix = false
+        // The model was asked again after saying it did something no tool did.
+        var checked = false
         val grounding = ReplyGrounding(sources + envelope)
         val text = if (groundNumbers()) GroundedReply(grounding, onNumberFixed) else null
+
+        /** Reply text the user may see now. */
+        suspend fun FlowCollector<LoopEvent>.show(delta: String) {
+            if (delta.isEmpty()) return
+            spoke = true
+            val shown = text?.push(delta) ?: delta
+            if (shown.isNotEmpty()) emit(LoopEvent.Text(shown))
+        }
 
         /** A pause in the reply (a tool call, the end): what was held back goes out now. */
         suspend fun FlowCollector<LoopEvent>.release() {
@@ -92,12 +108,31 @@ class ToolLoop(
             var stats: GenStats? = null
             var overflowed = false
             var unreadable: Throwable? = null
+            // Before any tool has run, the opening of the reply is held back until it is known
+            // not to say something was done ("I've sent the email"): with no call behind it,
+            // that is never shown, and the model is asked again. Once suspect, all of it is held.
+            var held: StringBuilder? = if (rounds == 0) StringBuilder() else null
+            var suspect = false
             reply.collect { event ->
                 when (event) {
                     is GenEvent.TextDelta -> {
-                        spoke = true
-                        val shown = text?.push(event.text) ?: event.text
-                        if (shown.isNotEmpty()) emit(LoopEvent.Text(shown))
+                        val opening = held
+                        if (opening == null) {
+                            show(event.text)
+                        } else {
+                            opening.append(event.text)
+                            val end = if (suspect) null else ActionClaims.openingEnd(opening)
+                            when {
+                                end == null -> Unit
+                                ActionClaims.claims(opening.substring(0, end)) -> suspect = true
+                                // Says it wrote a message: held until the message shows up.
+                                ActionClaims.unshownDraft(opening) -> Unit
+                                else -> {
+                                    held = null
+                                    show(opening.toString())
+                                }
+                            }
+                        }
                     }
                     is GenEvent.ToolCalls -> calls += event.calls
                     is GenEvent.Done -> stats = event.stats
@@ -129,9 +164,28 @@ class ToolLoop(
                 emit(LoopEvent.Done(null, outcome.changedPrefix, toolRounds = 1, staleConversation = true))
                 return@flow
             }
+            val opening = held
+            if (opening != null) {
+                if (calls.isEmpty() && (suspect || ActionClaims.claims(opening) || ActionClaims.unshownDraft(opening))) {
+                    // Said it did something no tool did: not shown, and the model asked again,
+                    // once. The live conversation now holds a reply nobody saw, so it is
+                    // rebuilt from what is stored next turn.
+                    onUnbackedClaim(opening.toString())
+                    if (!checked) {
+                        checked = true
+                        reply = session.send(UNBACKED_CLAIM, null)
+                        continue
+                    }
+                    // Asked again and still saying it (the panel's "yes go ahead" by voice,
+                    // 27 Oct 2026): what is true goes out instead.
+                    show(NOT_DONE)
+                } else {
+                    show(opening.toString())
+                }
+            }
             release()
             if (calls.isEmpty() || rounds > maxRounds) {
-                emit(LoopEvent.Done(stats, changedPrefix, rounds))
+                emit(LoopEvent.Done(stats, changedPrefix, rounds, staleConversation = checked))
                 return@flow
             }
 
@@ -183,5 +237,14 @@ class ToolLoop(
         private val gson = com.google.gson.Gson()
         const val REPAIRED_REPLY = "Done."
         const val LIMIT_REACHED = """{"ok":false,"error":"Tool limit reached for this message. Answer the user now."}"""
+
+        /** Shown when the model, asked again, still says it did what no tool did. */
+        const val NOT_DONE = "Sorry, I didn't actually do that: nothing was sent, set or saved."
+
+        /** Sent when a reply says something was done and no tool ran ([ActionClaims]). */
+        const val UNBACKED_CLAIM = "[App check: no tool ran for your last reply, so nothing in it was done. " +
+            "If one of your tools does what the user asked, call it now. If none does, tell the user plainly " +
+            "that you can't do that, and offer what you can. What a tool did earlier in this chat still stands. " +
+            "Don't mention this check.]"
     }
 }

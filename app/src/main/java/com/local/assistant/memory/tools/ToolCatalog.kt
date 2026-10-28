@@ -155,13 +155,13 @@ object ToolCatalog {
         ),
         function(
             CALL,
-            "Use when the user asks you to call someone now. who: their name, relation or number, as said.",
+            "Use when the user asks you to call someone now. It opens the dialer; the user taps call. who: their name, relation or number, as said.",
             required = listOf("who"),
             "who" to "string",
         ),
         function(
             SEND_MESSAGE,
-            "Use when the user asks you to text, WhatsApp or email someone now. to: name, relation, number or email; text: the message to send; app: sms, whatsapp or email.",
+            "Use when the user asks you to text, WhatsApp or email someone now, or to send a message you wrote for them. It opens the app with the message written; the user taps send. to: name, relation, number or email; text: the message to send; app: sms, whatsapp or email, no other apps.",
             required = listOf("to"),
             "to" to "string",
             "text" to "string",
@@ -210,6 +210,7 @@ object ToolCatalog {
         {web}
         {photos}
         After a tool succeeds, confirm in one short sentence. If it returns ok:false, ask the user for what is missing.
+        You act only through these tools. Never say you did something (sent, called, booked, set, saved) unless its tool succeeded just now. If none of them can do what is asked (Teams or Slack, bookings, payments, posts, reading their inbox), say plainly that you can't, and offer what you can.
     """.trimIndent()
 
     private fun function(

@@ -176,7 +176,8 @@ class ToolExecutor(
             val question = com.local.assistant.gallery.PhotoTools.questionIn(userText) ?: args.text("question")
             val done = (photos ?: throw ToolError("Photo search isn't set up."))
                 .find(args.text("query"), args.text("person"), args.text("when"), args.text("place"), question)
-            return Applied(done.result, done.chip, image = done.image)
+            val result = if (userText.isBlank()) withRemembered(done.result, args) else done.result
+            return Applied(result, done.chip, image = done.image)
         }
         val tools = device ?: throw ToolError("That isn't available in this app.")
         val done = when (call.name) {
@@ -575,6 +576,31 @@ class ToolExecutor(
                 "more" to (items.size - MAX_LISTED).takeIf { it > 0 },
             ),
         )
+    }
+
+    /**
+     * For a spoken photo search, what memory holds on the same thing. A typed message is matched
+     * against memory before the model answers, but a spoken one has no words to match, so memory
+     * went unsearched: "what's my credit card number" by voice in the power-button panel got
+     * only the card's photos, though the number was in an earlier chat, and typed in the app it
+     * got the number (2026-10-27). The search's own words stand in for the user's.
+     */
+    private suspend fun withRemembered(result: Map<String, Any?>, args: Args): Map<String, Any?> {
+        val text = listOfNotNull(args.text("query"), args.text("question")).joinToString(" ")
+        val words = significantWords(text)
+        if (words.isEmpty()) return result
+        val now = now()
+        val remembered = store.searchFacts(words, MAX_FOUND).map(::describe) +
+            archive.search(text, MAX_NOTES).map { snippet ->
+                "(${NOTE_DATE.format(snippet.at.atZone(now))}) ${FactLabels.inline(snippet.text).take(MAX_NOTE_CHARS)}"
+            }
+        if (remembered.isEmpty()) return result
+        // First, and asked for in the note: given as a field after the photos' counts, it was
+        // passed over ("I found 9 photos that might contain your credit card number").
+        val note = "From memory: the user told you about this before (remembered). If that answers what they asked, give " +
+            "the answer from it first, then mention the photos."
+        return linkedMapOf<String, Any?>("ok" to result["ok"], "remembered" to remembered) +
+            (result - "ok" - "note") + ("note" to listOfNotNull(note, result["note"] as? String).joinToString(" "))
     }
 
     private suspend fun searchMemory(args: Args): Applied {

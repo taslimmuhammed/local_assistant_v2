@@ -10,7 +10,7 @@ import com.local.assistant.memory.tools.ToolCatalog
  */
 object Instructions {
 
-    const val VERSION = 5
+    const val VERSION = 6
 
     /** [withTools] adds the routing rules for the declared tools. */
     fun render(persona: String, withTools: Boolean = false, webSearch: Boolean = false, photoSearch: Boolean = false): String = buildString {
