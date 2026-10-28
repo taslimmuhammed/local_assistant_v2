@@ -59,6 +59,9 @@ import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
+import androidx.compose.ui.graphics.asAndroidBitmap
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -86,6 +89,9 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
+import com.local.assistant.ui.privacy.LocalSensitive
+import com.local.assistant.ui.privacy.sensitiveRevealed
+import com.local.assistant.ui.privacy.unreadable
 import com.local.assistant.gallery.PhotoThumbnails
 import com.local.assistant.memory.tools.PhotoSet
 import com.local.assistant.ui.theme.AppColors
@@ -114,14 +120,35 @@ val LocalPhotoAccess = staticCompositionLocalOf<PhotoAccess?> { null }
 fun PhotoThumb(mediaId: Long, thumbnails: PhotoThumbnails, modifier: Modifier = Modifier, onClick: (() -> Unit)? = null) {
     val bitmap by produceState<ImageBitmap?>(null, mediaId) { value = thumbnails.thumbnail(mediaId) }
     val length by produceState<Long?>(null, mediaId) { value = thumbnails.videoLength(mediaId) }
+    val hidden = rememberDocumentHidden(mediaId, thumbnails)
+    val shown = remember(bitmap, hidden) { if (hidden) bitmap?.let { unreadable(it.asAndroidBitmap()).asImageBitmap() } else bitmap }
     Box(
         modifier
             .background(AppColors.SurfaceMuted)
             .then(if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier),
     ) {
-        bitmap?.let { Image(it, contentDescription = null, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize()) }
+        shown?.let { Image(it, contentDescription = null, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize()) }
+        if (hidden) DocumentLock(Modifier.align(Alignment.Center))
         length?.let { VideoBadge(it, Modifier.align(Alignment.BottomEnd).padding(4.dp)) }
     }
+}
+
+/** Whether [mediaId] looks like a document or card and is to stay hidden for now. */
+@Composable
+private fun rememberDocumentHidden(mediaId: Long, thumbnails: PhotoThumbnails): Boolean {
+    val documents by thumbnails.documents.collectAsState()
+    return mediaId in documents && !sensitiveRevealed()
+}
+
+/** A lock on a hidden document photo. */
+@Composable
+private fun DocumentLock(modifier: Modifier = Modifier) {
+    Icon(
+        Icons.Outlined.Lock,
+        contentDescription = "Hidden document",
+        tint = Color.White,
+        modifier = modifier.size(28.dp).clip(RoundedCornerShape(14.dp)).background(Color.Black.copy(alpha = 0.35f)).padding(6.dp),
+    )
 }
 
 /** "▶ 1:23" in the corner of a video's thumbnail. */
@@ -173,11 +200,16 @@ fun PhotoViewer(ids: List<Long>, start: Int, thumbnails: PhotoThumbnails, onClos
                     val id = ids[page]
                     val bitmap by produceState<ImageBitmap?>(null, id) { value = thumbnails.full(id, maxSide) }
                     val length by produceState<Long?>(LOADING, id) { value = thumbnails.videoLength(id) }
+                    val hidden = rememberDocumentHidden(id, thumbnails)
                     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                         when (val ms = length) {
                             LOADING -> CircularProgressIndicator(color = Color.White)
-                            null -> bitmap?.let { Image(it, contentDescription = null, contentScale = ContentScale.Fit, modifier = Modifier.fillMaxSize()) }
-                                ?: CircularProgressIndicator(color = Color.White)
+                            null -> if (hidden) {
+                                HiddenDocument(bitmap)
+                            } else {
+                                bitmap?.let { Image(it, contentDescription = null, contentScale = ContentScale.Fit, modifier = Modifier.fillMaxSize()) }
+                                    ?: CircularProgressIndicator(color = Color.White)
+                            }
                             else -> VideoPage(thumbnails.uri(id), ms, moments[id] ?: 0L, poster = bitmap, current = pager.settledPage == page)
                         }
                     }
@@ -199,8 +231,16 @@ fun PhotoViewer(ids: List<Long>, start: Int, thumbnails: PhotoThumbnails, onClos
                     color = Color.White,
                     modifier = Modifier.weight(1f),
                 )
+                val sensitive = LocalSensitive.current
+                val documents by thumbnails.documents.collectAsState()
+                val revealed = sensitiveRevealed()
                 IconButton(onClick = {
                     val id = ids[pager.currentPage]
+                    // Another app would show a hidden document in full: asked for first.
+                    if (id in documents && !revealed) {
+                        sensitive?.reveal()
+                        return@IconButton
+                    }
                     runCatching {
                         context.startActivity(
                             Intent(Intent.ACTION_VIEW).setDataAndType(thumbnails.uri(id), thumbnails.mimeType(id)).addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION),
@@ -208,6 +248,33 @@ fun PhotoViewer(ids: List<Long>, start: Int, thumbnails: PhotoThumbnails, onClos
                     }
                 }) { Icon(Icons.AutoMirrored.Outlined.OpenInNew, contentDescription = "Open in another app", tint = Color.White) }
             }
+        }
+    }
+}
+
+/** A document photo in the viewer, as a smear of its colours until the user authenticates. */
+@Composable
+private fun HiddenDocument(photo: ImageBitmap?) {
+    val smear = remember(photo) { photo?.let { unreadable(it.asAndroidBitmap()).asImageBitmap() } }
+    val sensitive = LocalSensitive.current
+    val onLockScreen = sensitive?.onLockScreen ?: true
+    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+        smear?.let { Image(it, contentDescription = null, contentScale = ContentScale.Fit, modifier = Modifier.fillMaxSize()) }
+        Column(
+            Modifier
+                .clip(RoundedCornerShape(16.dp))
+                .background(Color.Black.copy(alpha = 0.55f))
+                .then(if (sensitive != null && !onLockScreen) Modifier.clickable { sensitive.reveal() } else Modifier)
+                .padding(horizontal = 20.dp, vertical = 14.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
+            Icon(Icons.Outlined.Lock, contentDescription = null, tint = Color.White)
+            Text(
+                if (onLockScreen) "Unlock your phone to see this document" else "Looks like a document · Tap to show",
+                style = MaterialTheme.typography.labelLarge,
+                color = Color.White,
+                modifier = Modifier.padding(top = 6.dp),
+            )
         }
     }
 }

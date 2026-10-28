@@ -15,6 +15,9 @@ import kotlinx.coroutines.withContext
  */
 class PhotoThumbnails(private val library: PhotoLibrary) {
 
+    /** Photos that look like documents or cards, kept hidden until the user authenticates. */
+    val documents = kotlinx.coroutines.flow.MutableStateFlow<Set<Long>>(emptySet())
+
     /** About 24 MB of decoded thumbnails, the most recently seen kept. */
     private val cache = object : LruCache<Long, ImageBitmap>(CACHE_BYTES) {
         override fun sizeOf(key: Long, value: ImageBitmap): Int = value.width * value.height * 4

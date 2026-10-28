@@ -39,6 +39,8 @@ class GalleryIndex(
     private val faces: com.local.assistant.gallery.faces.FaceIndex? = null,
     /** Towns, states and countries, for where photos were taken; none when not wired in. */
     private val places: com.local.assistant.gallery.places.PlaceList? = null,
+    /** Which photos look like documents, each time that's worked out again. */
+    private val onDocuments: (Set<Long>) -> Unit = {},
     private val clock: () -> Long = System::currentTimeMillis,
 ) {
 
@@ -115,7 +117,9 @@ class GalleryIndex(
         sync()
         refreshStatus()
         if (!indexPending(deadline)) return false
-        // Photo search first, then where they were taken (quick), then people.
+        // Photo search first, then which are documents (the model is still loaded), then where
+        // they were taken (quick), then people.
+        scoreDocuments()
         embedder.unload()
         if (!locatePending(deadline)) return false
         return faces?.indexPending(deadline, ::runWhenIdle) ?: true
@@ -183,6 +187,33 @@ class GalleryIndex(
                 Log.i(TAG, "Indexed $embedded photos in ${"%.1f".format(seconds)} s; ${_status.value.remaining} left")
             }
         }
+    }
+
+    /**
+     * Scores photos not yet scored for how much they look like a document ([DocumentPhotos]),
+     * from their stored vectors: only the descriptions go through the model.
+     */
+    private suspend fun scoreDocuments() {
+        val pending = dao.documentsPending(GalleryModel.MODEL_ID, DocumentPhotos.SCORED_BY)
+        if (pending.isEmpty()) return
+        val started = clock()
+        val descriptions = DocumentPhotos.DESCRIPTIONS.map { embedder.embedQuery(it)?.let(Int8Vectors::quantize) ?: return }
+        for (photo in pending) {
+            coroutineContext.ensureActive()
+            dao.setDocScore(photo.mediaId, DocumentPhotos.score(photo.embedding, descriptions), DocumentPhotos.SCORED_BY)
+        }
+        refreshDocuments()
+        Log.i(TAG, "Scored ${pending.size} photos as documents in ${clock() - started} ms; ${documentCount} look like one")
+    }
+
+    @Volatile
+    private var documentCount = 0
+
+    /** Tells [onDocuments] which photos look like documents, as the index has them now. */
+    suspend fun refreshDocuments() {
+        val ids = dao.documents(DocumentPhotos.THRESHOLD).toHashSet()
+        documentCount = ids.size
+        onDocuments(ids)
     }
 
     /** Embeds moments of a video; false when the model won't load. A video that can't be read is marked failed. */

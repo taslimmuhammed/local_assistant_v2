@@ -7,7 +7,7 @@ import android.graphics.Color
 import android.os.Build
 import android.os.Bundle
 import android.view.WindowManager
-import androidx.activity.ComponentActivity
+import androidx.fragment.app.FragmentActivity
 import androidx.activity.SystemBarStyle
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -33,7 +33,7 @@ import com.local.assistant.ui.theme.LocalAssistantTheme
  * Assistant, off by default, since whoever holds the phone then gets the assistant's memory and
  * its calls and messages). Otherwise it says how to turn it on, and leaves a notification.
  */
-class AssistActivity : ComponentActivity() {
+class AssistActivity : FragmentActivity() {
 
     private val viewModel: AssistViewModel by viewModels { AssistViewModel.factory(appContainer) }
 
@@ -68,9 +68,10 @@ class AssistActivity : ComponentActivity() {
 
         // Photos found over the lock screen stay hidden until the phone is unlocked, then open in the app.
         val photos = PhotoAccess(appContainer.photoThumbnails, hidden = ::isLocked, onUnlock = { openApp(viewModel.chatId.value) })
+        val sensitive = com.local.assistant.ui.privacy.SensitiveAccess(appContainer.sensitiveLock, this)
         setContent {
             LocalAssistantTheme {
-                CompositionLocalProvider(LocalPhotoAccess provides photos) {
+                CompositionLocalProvider(LocalPhotoAccess provides photos, com.local.assistant.ui.privacy.LocalSensitive provides sensitive) {
                     AssistOverlay(
                         viewModel = viewModel,
                         lockedOut = lockedOut.value,

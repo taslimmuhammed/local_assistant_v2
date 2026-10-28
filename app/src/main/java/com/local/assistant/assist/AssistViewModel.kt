@@ -69,7 +69,14 @@ class AssistViewModel(
     private val speaker: Speaker,
     private val focus: AudioFocus,
     permissions: PermissionBroker,
+    /** Card numbers, PINs and the like are read out only while shown on screen ([SensitiveText.spoken]). */
+    private val sensitive: com.local.assistant.privacy.SensitiveLock? = null,
 ) : ViewModel() {
+
+    /** Says [sentence], with its sensitive details said as how they end, unless they're being shown. */
+    private fun say(sentence: String) {
+        speaker.speak(if (sensitive?.revealed?.value == true) sentence else com.local.assistant.privacy.SensitiveText.spoken(sentence))
+    }
 
     enum class Input { VOICE, TEXT }
 
@@ -164,7 +171,7 @@ class AssistViewModel(
         // Speak each sentence as soon as it is complete.
         viewModelScope.launch {
             sender.live.collect { live ->
-                if (live?.owner === this@AssistViewModel) chunker?.push(live.text)?.forEach(speaker::speak)
+                if (live?.owner === this@AssistViewModel) chunker?.push(live.text)?.forEach(::say)
             }
         }
 
@@ -374,7 +381,7 @@ class AssistViewModel(
 
         override fun onFinished(reply: String, failure: String?) {
             if (closed) return
-            chunker?.finish(reply)?.forEach(speaker::speak)
+            chunker?.finish(reply)?.forEach(::say)
             chunker = null
             _awaitingSpeech.value = false
             failure?.let { _notice.value = it }
@@ -410,6 +417,7 @@ class AssistViewModel(
                     speaker = container.speaker,
                     focus = container.audioFocus,
                     permissions = container.permissions,
+                    sensitive = container.sensitiveLock,
                 )
             }
         }

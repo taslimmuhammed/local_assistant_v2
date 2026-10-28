@@ -63,7 +63,7 @@ fun ChatDrawer(
             title = { Text("Delete this chat?") },
             text = {
                 Text(
-                    "“${chat.title}” and its messages will be deleted for good. What the assistant learned " +
+                    "“${com.local.assistant.ui.privacy.rememberShown(chat.title).text}” and its messages will be deleted for good. What the assistant learned " +
                         "from it — facts, reminders, saved images — stays, under What I know about you.",
                 )
             },
@@ -209,7 +209,7 @@ private fun ChatRow(
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Text(
-            text = chat.title,
+            text = com.local.assistant.ui.privacy.rememberShown(chat.title).text,
             style = MaterialTheme.typography.bodyMedium,
             fontWeight = if (selected) FontWeight.Medium else FontWeight.Normal,
             color = AppColors.TextPrimary,

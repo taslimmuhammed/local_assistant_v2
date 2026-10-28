@@ -754,6 +754,40 @@ stops hard at the cap rather than letting the runtime reject the clip.
   permission group). Android grants "selected photos only" alongside full access too, so it counts
   for videos only when photos themselves are partly shared. Photos are read, never changed, moved or sent anywhere.
 
+## Hidden details
+
+Card, Aadhaar, account, PAN, driving licence and passport numbers, PINs, CVVs, OTPs and passwords
+are hidden wherever they're shown — messages (the user's and the assistant's), chat titles, the
+power-button panel, the memory screen — as "•••• •••• •••• 4242" with "Hidden details · Tap to
+show" under them, and document photos are a smear of their colours with a lock. Tapping asks for
+the fingerprint, face or the phone's PIN (`BiometricPrompt`, weak biometrics or the device
+credential); then everything hidden shows for 5 minutes, and is hidden again at once when the app
+leaves the screen or the screen turns off (`privacy/SensitiveLock`). Over the lock screen nothing
+hidden can be shown. Only what's shown and said is hidden: memory, the chats and the model keep
+the details, so the assistant still answers "what's my card number" — the answer is what's hidden.
+On a phone with no screen lock there's nothing to ask for, so tapping just shows them.
+
+- **Found in code, not by the model** (`privacy/SensitiveText`). The model already has the details
+  in front of it when it would decide, a tool call costs a round of the model, and it skips tools
+  often enough that a guard built on one would leak. Shapes with a checksum are checked (Luhn for
+  cards, Verhoeff for Aadhaar), so phone numbers, dates and amounts stay; an account number needs
+  "account" or "a/c" just before it, a passport number "passport"; a secret is what follows its
+  word ("atm pin is 4417", "the password for the wifi is …"), not "PIN code" (a postal code).
+  IFSC codes are public and left alone. While a reply streams, a number at its end is held back
+  as "…" until it's complete, so a card number never shows its first digits on the way.
+- **Spoken.** The panel reads a card number as "ending in 4 2 4 2" and a PIN as "hidden", unless
+  details are being shown.
+- **Document photos** (`gallery/DocumentPhotos`). While indexing, each photo's vector is compared
+  with a few descriptions of documents (ID card, licence, passport page, bank card, certificate or
+  mark sheet, printed official document) through the photo model's own search; the best similarity
+  is its score, kept in the index (`docScore`, gallery.db v6), 2,409 photos in 1.9 s. Set without
+  looking at anyone's documents (`DocumentCalibrationTest`): the photos the phone's own searches
+  for nine kinds of document found stood for the documents. At 0.72, 117 photos are hidden and 48
+  of the 51 found (every ID card, passport, licence, Aadhaar, PAN and debit card; one certificate,
+  one mark sheet and one credit card missed, which may not be documents at all); 0.68 hid all 51
+  but 360 photos, 0.74 only 43. Posters full of text stay visible. The viewer's "open in another
+  app" asks first too. A saved image whose details hold something sensitive is a smear as well.
+
 ## Power-button assistant
 
 Holding the power button opens the assistant over whatever is on screen, the way it opens Gemini:

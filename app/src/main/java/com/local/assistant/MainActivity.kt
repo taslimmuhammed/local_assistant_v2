@@ -2,7 +2,7 @@ package com.local.assistant
 
 import android.content.Intent
 import android.os.Bundle
-import androidx.activity.ComponentActivity
+import androidx.fragment.app.FragmentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.runtime.Composable
@@ -33,7 +33,8 @@ import com.local.assistant.ui.web.WebSearchScreen
 import com.local.assistant.ui.web.WebSearchViewModel
 import com.local.assistant.ui.theme.LocalAssistantTheme
 
-class MainActivity : ComponentActivity() {
+/** A [FragmentActivity] (a ComponentActivity underneath) for the fingerprint prompt. */
+class MainActivity : FragmentActivity() {
 
     /** A chat to show, from the assistant overlay's "Open in app". */
     private val chatToOpen = mutableStateOf<Long?>(null)
@@ -50,9 +51,10 @@ class MainActivity : ComponentActivity() {
         }
         val container = appContainer
         val photos = PhotoAccess(container.photoThumbnails)
+        val sensitive = com.local.assistant.ui.privacy.SensitiveAccess(container.sensitiveLock, this)
         setContent {
             LocalAssistantTheme {
-                CompositionLocalProvider(LocalPhotoAccess provides photos) {
+                CompositionLocalProvider(LocalPhotoAccess provides photos, com.local.assistant.ui.privacy.LocalSensitive provides sensitive) {
                     AppRoot(
                         container,
                         chatToOpen = chatToOpen.value,

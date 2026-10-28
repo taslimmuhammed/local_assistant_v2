@@ -31,6 +31,8 @@ import androidx.compose.ui.unit.dp
 import com.local.assistant.data.db.AttachmentKind
 import com.local.assistant.data.db.MessageEntity
 import com.local.assistant.data.db.Role
+import com.local.assistant.ui.privacy.HiddenDetails
+import com.local.assistant.ui.privacy.rememberShown
 import com.local.assistant.ui.theme.AppColors
 
 /**
@@ -69,9 +71,10 @@ fun UserMessage(message: MessageEntity, modifier: Modifier = Modifier) {
 
         if (message.text.isNotBlank()) {
             if (message.attachmentKind != null) Spacer(Modifier.height(6.dp))
+            val shown = rememberShown(message.text)
             SelectionContainer {
                 Text(
-                    text = message.text,
+                    text = shown.text,
                     style = MaterialTheme.typography.bodyLarge,
                     color = AppColors.TextPrimary,
                     modifier = Modifier
@@ -81,6 +84,7 @@ fun UserMessage(message: MessageEntity, modifier: Modifier = Modifier) {
                         .padding(horizontal = 16.dp, vertical = 10.dp),
                 )
             }
+            if (shown.hidden) HiddenDetails(Modifier.padding(top = 2.dp))
         }
     }
 }
@@ -88,15 +92,19 @@ fun UserMessage(message: MessageEntity, modifier: Modifier = Modifier) {
 @Composable
 fun AssistantMessage(
     text: String,
+    /** Still being written: a number at the end is held back until it's complete. */
+    streaming: Boolean = false,
     incomplete: Boolean = false,
     tokensPerSecond: Double? = null,
     timeToFirstTokenMs: Long? = null,
     modifier: Modifier = Modifier,
 ) {
     Column(modifier = modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp)) {
+        val shown = rememberShown(text, streaming)
         SelectionContainer {
-            MarkdownText(text)
+            MarkdownText(shown.text)
         }
+        if (shown.hidden && !streaming) HiddenDetails(Modifier.padding(top = 2.dp))
 
         val footnote = listOfNotNull(
             "Stopped".takeIf { incomplete },

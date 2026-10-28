@@ -113,6 +113,8 @@ dependencies {
     implementation(libs.androidx.lifecycle.runtime.compose)
     implementation(libs.androidx.lifecycle.viewmodel.compose)
     implementation(libs.androidx.lifecycle.process)
+    // Fingerprint, face or the phone's PIN before sensitive details are shown.
+    implementation(libs.androidx.biometric)
     implementation(libs.androidx.activity.compose)
     implementation(libs.kotlinx.coroutines.android)
 

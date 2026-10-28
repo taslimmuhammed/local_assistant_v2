@@ -112,6 +112,18 @@ class GalleryMigrationTest {
         }
     }
 
+    @Test
+    fun photosAreScoredAsDocumentsLater() {
+        helper.createDatabase(5).use { db ->
+            db.execSQL("INSERT INTO photos (mediaId, dateTaken, dateModified, width, height, embedding, modelId, town, district) VALUES (7, 100, 200, 4000, 3000, X'0102FF', 'embeddinggemma-2-tv-440m@256@v70', 'Munnar', 'IN.13.596')")
+        }
+
+        helper.runMigrationsAndValidate(6, listOf(GalleryDatabase.MIGRATION_5_6)).use { db ->
+            assertEquals("IN.13.596", db.string("SELECT district FROM photos WHERE mediaId = 7"))
+            assertEquals(1L, db.long("SELECT COUNT(*) FROM photos WHERE docScore IS NULL AND docScoredBy IS NULL"))
+        }
+    }
+
     private fun SQLiteConnection.long(sql: String): Long = prepare(sql).use { it.step(); it.getLong(0) }
 
     private fun SQLiteConnection.string(sql: String): String = prepare(sql).use { it.step(); it.getText(0) }

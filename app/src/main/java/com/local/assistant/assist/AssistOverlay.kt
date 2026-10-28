@@ -121,6 +121,8 @@ import com.local.assistant.llm.LlmService
 import com.local.assistant.ui.chat.MarkdownText
 import com.local.assistant.ui.chat.MemoryChips
 import com.local.assistant.ui.chat.ThinkingIndicator
+import com.local.assistant.ui.privacy.HiddenDetails
+import com.local.assistant.ui.privacy.rememberShown
 import com.local.assistant.ui.theme.AppColors
 import kotlinx.coroutines.launch
 import kotlin.math.PI
@@ -618,7 +620,7 @@ private fun Transcript(
         when {
             waiting || streaming?.isEmpty() == true ->
                 ThinkingIndicator(label = if (modelLoading) "Loading model…" else "Thinking…")
-            streaming != null -> Answer(streaming)
+            streaming != null -> Answer(streaming, streaming = true)
         }
         asking?.let {
             MemoryChips(
@@ -654,9 +656,10 @@ private fun Question(text: String, voice: Boolean, durationMs: Long?) {
             }
         }
         if (text.isNotBlank()) {
+            val shown = rememberShown(text)
             SelectionContainer {
                 Text(
-                    text = text,
+                    text = shown.text,
                     style = MaterialTheme.typography.bodyLarge,
                     color = AppColors.TextPrimary,
                     modifier = Modifier
@@ -667,14 +670,19 @@ private fun Question(text: String, voice: Boolean, durationMs: Long?) {
                         .padding(horizontal = 14.dp, vertical = 8.dp),
                 )
             }
+            if (shown.hidden) HiddenDetails(Modifier.padding(top = 2.dp))
         }
     }
 }
 
 @Composable
-private fun Answer(text: String) {
-    SelectionContainer(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp)) {
-        MarkdownText(text)
+private fun Answer(text: String, streaming: Boolean = false) {
+    val shown = rememberShown(text, streaming)
+    Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp)) {
+        SelectionContainer {
+            MarkdownText(shown.text)
+        }
+        if (shown.hidden && !streaming) HiddenDetails(Modifier.padding(top = 2.dp))
     }
 }
 

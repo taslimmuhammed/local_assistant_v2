@@ -55,6 +55,12 @@ data class PhotoEntity(
     val durationMs: Long? = null,
     /** Its place is estimated from photos taken around then ([com.local.assistant.gallery.places.PlaceGuess]), not its own GPS tags. */
     @ColumnInfo(defaultValue = "0") val placeGuessed: Boolean = false,
+    /**
+     * How much it looks like a document or card ([com.local.assistant.gallery.DocumentPhotos]),
+     * and by which model and descriptions; null until scored.
+     */
+    val docScore: Float? = null,
+    val docScoredBy: String? = null,
 ) {
     override fun equals(other: Any?): Boolean = other is PhotoEntity && other.mediaId == mediaId && other.dateModified == dateModified
     override fun hashCode(): Int = mediaId.hashCode()
@@ -129,6 +135,9 @@ data class FrameEntity(
 
 /** A video frame's vector, for the search scan. */
 data class FrameVector(val mediaId: Long, val atMs: Long, val embedding: ByteArray)
+
+/** A photo's document score ([DocumentPhotos]). */
+data class DocScore(val mediaId: Long, val docScore: Float)
 
 /** A video and its length. */
 data class VideoLength(val mediaId: Long, val durationMs: Long)
@@ -237,6 +246,21 @@ interface PhotoDao {
     @Query("SELECT COUNT(*) FROM photos WHERE lat IS NOT NULL")
     suspend fun locatedCount(): Int
 
+    /** Indexed photos not yet scored as documents by [scoredBy]. */
+    @Query("SELECT mediaId, embedding FROM photos WHERE modelId = :modelId AND embedding IS NOT NULL AND (docScoredBy IS NULL OR docScoredBy != :scoredBy)")
+    suspend fun documentsPending(modelId: String, scoredBy: String): List<PhotoVector>
+
+    @Query("UPDATE photos SET docScore = :score, docScoredBy = :scoredBy WHERE mediaId = :mediaId")
+    suspend fun setDocScore(mediaId: Long, score: Float, scoredBy: String)
+
+    /** Every photo's document score, for setting [DocumentPhotos.THRESHOLD]. */
+    @Query("SELECT mediaId, docScore FROM photos WHERE docScore IS NOT NULL")
+    suspend fun docScores(): List<DocScore>
+
+    /** Photos that look like a document or card, by [threshold]. */
+    @Query("SELECT mediaId FROM photos WHERE docScore >= :threshold")
+    suspend fun documents(threshold: Float): List<Long>
+
     /** Photos with a location, for "near a town". */
     @Query("SELECT mediaId, lat, lon FROM photos WHERE lat IS NOT NULL ORDER BY dateTaken DESC")
     suspend fun located(): List<LocatedPhoto>
@@ -344,7 +368,7 @@ interface FaceDao {
  * database. Version 1 held only what can be rebuilt from the photos; version 2 adds the people
  * the user named, which can't be, so from 2 on every schema change gets a real migration.
  */
-@Database(entities = [PhotoEntity::class, PersonEntity::class, FaceEntity::class, FrameEntity::class], version = 5, exportSchema = true)
+@Database(entities = [PhotoEntity::class, PersonEntity::class, FaceEntity::class, FrameEntity::class], version = 6, exportSchema = true)
 abstract class GalleryDatabase : RoomDatabase() {
 
     abstract fun photoDao(): PhotoDao
@@ -410,12 +434,20 @@ abstract class GalleryDatabase : RoomDatabase() {
             }
         }
 
+        /** How much each photo looks like a document, worked out by the next indexing pass. */
+        val MIGRATION_5_6 = object : Migration(5, 6) {
+            override fun migrate(connection: SQLiteConnection) {
+                connection.execSQL("ALTER TABLE photos ADD COLUMN docScore REAL")
+                connection.execSQL("ALTER TABLE photos ADD COLUMN docScoredBy TEXT")
+            }
+        }
+
         fun build(context: Context): GalleryDatabase =
             Room.databaseBuilder(context, GalleryDatabase::class.java, FILE_NAME)
                 .setDriver(BundledSQLiteDriver())
                 .setQueryCoroutineContext(Dispatchers.IO)
                 // No destructive fallback any more: from version 2 it holds names the user gave.
-                .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5)
+                .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6)
                 .build()
     }
 }

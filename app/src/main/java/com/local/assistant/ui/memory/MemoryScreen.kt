@@ -85,6 +85,9 @@ import com.local.assistant.memory.db.FactEntity
 import com.local.assistant.memory.db.NoteEntity
 import com.local.assistant.memory.db.TaskEntity
 import com.local.assistant.ui.chat.AttachedImage
+import com.local.assistant.ui.privacy.HiddenDetails
+import com.local.assistant.ui.privacy.LocalSensitive
+import com.local.assistant.ui.privacy.rememberShown
 import com.local.assistant.ui.theme.AppColors
 import kotlinx.coroutines.launch
 import java.time.Instant
@@ -265,13 +268,19 @@ private fun SectionHeader(title: String) {
 
 @Composable
 private fun FactRow(fact: FactEntity, onClick: () -> Unit, onPin: () -> Unit) {
+    val shown = rememberShown(fact.value)
+    val sensitive = LocalSensitive.current
     Row(
-        Modifier.fillMaxWidth().background(AppColors.Background).clickable(onClick = onClick).padding(start = 16.dp, top = 8.dp, bottom = 8.dp),
+        Modifier.fillMaxWidth().background(AppColors.Background)
+            // Editing shows the value in full: asked for first, like showing it.
+            .clickable(onClick = { if (shown.hidden) sensitive?.reveal() else onClick() })
+            .padding(start = 16.dp, top = 8.dp, bottom = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Column(Modifier.weight(1f)) {
             Text(MemoryViewModel.label(fact), style = MaterialTheme.typography.labelMedium, color = AppColors.TextSecondary)
-            Text(fact.value, style = MaterialTheme.typography.bodyLarge, color = AppColors.TextPrimary)
+            Text(shown.text, style = MaterialTheme.typography.bodyLarge, color = AppColors.TextPrimary)
+            if (shown.hidden) HiddenDetails()
             Text(MemoryViewModel.provenance(fact), style = MaterialTheme.typography.labelSmall, color = AppColors.TextSecondary)
         }
         if (fact.subject == FactKeys.USER) {
@@ -462,10 +471,11 @@ private fun SavedImageRow(note: NoteEntity, onClick: () -> Unit, onDelete: () ->
         Modifier.fillMaxWidth().background(AppColors.Background).clickable(onClick = onClick).padding(start = 16.dp, end = 4.dp, top = 8.dp, bottom = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Thumbnail(note.imagePath)
+        val shown = rememberShown(note.details)
+        Thumbnail(note.imagePath, blurred = shown.hidden)
         Column(Modifier.weight(1f).padding(start = 12.dp)) {
             Text(note.title, style = MaterialTheme.typography.bodyLarge, color = AppColors.TextPrimary, maxLines = 1, overflow = TextOverflow.Ellipsis)
-            Text(note.details, style = MaterialTheme.typography.bodySmall, color = AppColors.TextSecondary, maxLines = 2, overflow = TextOverflow.Ellipsis)
+            Text(shown.text, style = MaterialTheme.typography.bodySmall, color = AppColors.TextSecondary, maxLines = 2, overflow = TextOverflow.Ellipsis)
             Text("Saved " + formatWhen(note.createdAt, true), style = MaterialTheme.typography.labelSmall, color = AppColors.TextSecondary)
         }
         IconButton(onClick = onDelete) {
@@ -474,12 +484,16 @@ private fun SavedImageRow(note: NoteEntity, onClick: () -> Unit, onDelete: () ->
     }
 }
 
-/** A small square crop, decoded small: these rows can be many. */
+/** A small square crop, decoded small: these rows can be many. [blurred]: a card or document, until shown. */
 @Composable
-private fun Thumbnail(path: String?) {
-    val bitmap = remember(path) {
+private fun Thumbnail(path: String?, blurred: Boolean = false) {
+    val bitmap = remember(path, blurred) {
         path?.let {
-            runCatching { BitmapFactory.decodeFile(it, BitmapFactory.Options().apply { inSampleSize = THUMB_SAMPLE })?.asImageBitmap() }.getOrNull()
+            runCatching {
+                BitmapFactory.decodeFile(it, BitmapFactory.Options().apply { inSampleSize = THUMB_SAMPLE })
+                    ?.let { b -> if (blurred) com.local.assistant.ui.privacy.unreadable(b) else b }
+                    ?.asImageBitmap()
+            }.getOrNull()
         }
     }
     val modifier = Modifier.size(56.dp).clip(RoundedCornerShape(10.dp))
@@ -496,9 +510,15 @@ private fun SavedImageDialog(note: NoteEntity, onDone: () -> Unit, onDelete: () 
         onDismissRequest = onDone,
         title = { Text(note.title) },
         text = {
+            val shown = rememberShown(note.details)
             Column(Modifier.verticalScroll(rememberScrollState())) {
-                note.imagePath?.let { AttachedImage(it, maxHeight = 320) }
-                Text(note.details, style = MaterialTheme.typography.bodyMedium, color = AppColors.TextPrimary, modifier = Modifier.padding(top = 12.dp))
+                if (shown.hidden) {
+                    Thumbnail(note.imagePath, blurred = true)
+                } else {
+                    note.imagePath?.let { AttachedImage(it, maxHeight = 320) }
+                }
+                Text(shown.text, style = MaterialTheme.typography.bodyMedium, color = AppColors.TextPrimary, modifier = Modifier.padding(top = 12.dp))
+                if (shown.hidden) HiddenDetails(Modifier.padding(top = 4.dp))
                 Text("Saved " + formatWhen(note.createdAt, false), style = MaterialTheme.typography.labelSmall, color = AppColors.TextSecondary, modifier = Modifier.padding(top = 8.dp))
             }
         },

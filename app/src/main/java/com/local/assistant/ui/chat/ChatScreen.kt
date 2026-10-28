@@ -288,7 +288,7 @@ fun ChatScreen(
                                         // for it: say so, so the wait doesn't look like a hang.
                                         ThinkingIndicator(label = "Loading model…".takeIf { engineState !is LlmService.State.Ready })
                                     } else {
-                                        AssistantMessage(partial)
+                                        AssistantMessage(partial, streaming = true)
                                     }
                                     asking?.let {
                                         MemoryChips(
@@ -359,7 +359,8 @@ private fun ChatTopBar(
         TopAppBar(
             title = {
                 Text(
-                    text = title,
+                    // Titled after the first message, which may have been a card number.
+                    text = com.local.assistant.ui.privacy.rememberShown(title).text,
                     style = MaterialTheme.typography.titleMedium,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,

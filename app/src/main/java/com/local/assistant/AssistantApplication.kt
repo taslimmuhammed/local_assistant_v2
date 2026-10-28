@@ -100,6 +100,9 @@ class AppContainer(context: Context) {
     /** Outlives any screen, so downloads and model loading survive navigation. */
     val appScope = CoroutineScope(SupervisorJob())
 
+    /** Whether card and ID numbers, passwords and document photos are shown: not until the user authenticates. */
+    val sensitiveLock = com.local.assistant.privacy.SensitiveLock(appScope)
+
     val settings = SettingsStore(context)
 
     private val appContext: Context = context.applicationContext
@@ -115,6 +118,7 @@ class AppContainer(context: Context) {
         },
         onBackground = {
             backgroundJobs.onBackground()
+            sensitiveLock.lock()
             // Out of sight, the photos wait for the charger at night.
             appScope.launch { galleryIndex.pause() }
             // Away for a while: have the next new chat's conversation ready, so the power button
@@ -245,7 +249,13 @@ class AppContainer(context: Context) {
         scope = appScope,
         faces = faceIndex,
         places = placeList,
+        onDocuments = { photoThumbnails.documents.value = it },
     )
+
+    init {
+        // Which photos to keep hidden, from the index, before any is shown.
+        appScope.launch { galleryIndex.refreshDocuments() }
+    }
 
     /** find_photos is declared to the model only once its model is here and the photos may be read. */
     fun photoSearchReady(): Boolean =
@@ -601,6 +611,15 @@ class AssistantApplication : Application() {
         super.onCreate()
         container = AppContainer(this)
         ProcessLifecycleOwner.get().lifecycle.addObserver(container.appForeground)
+        // The screen going off hides shown details too, even with the app (or the panel) in front.
+        androidx.core.content.ContextCompat.registerReceiver(
+            this,
+            object : android.content.BroadcastReceiver() {
+                override fun onReceive(context: android.content.Context, intent: android.content.Intent) = container.sensitiveLock.lock()
+            },
+            android.content.IntentFilter(android.content.Intent.ACTION_SCREEN_OFF),
+            androidx.core.content.ContextCompat.RECEIVER_NOT_EXPORTED,
+        )
         ReminderNotifications.createChannel(this)
     }
 
