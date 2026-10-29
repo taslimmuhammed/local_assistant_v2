@@ -179,6 +179,19 @@ class SettingsStore(context: Context) {
         get() = prefs.getString(KEY_ASSISTANT_VOICE, null)
         set(value) = prefs.edit { if (value == null) remove(KEY_ASSISTANT_VOICE) else putString(KEY_ASSISTANT_VOICE, value) }
 
+    /**
+     * The downloaded natural voice the assistant speaks with (voice/NaturalVoices, by id), or
+     * null for the phone's; [assistantVoice] stays as the phone voice it falls back to. Null
+     * until one is downloaded. The first build had one voice and a switch, kept on as Heart.
+     */
+    var naturalVoice: String?
+        get() = prefs.getString(KEY_NATURAL_VOICE_ID, null)
+            ?: if (prefs.getBoolean(KEY_NATURAL_VOICE, false)) "kokoro-heart" else null
+        set(value) = prefs.edit {
+            remove(KEY_NATURAL_VOICE)
+            if (value == null) remove(KEY_NATURAL_VOICE_ID) else putString(KEY_NATURAL_VOICE_ID, value)
+        }
+
     /** How fast the voice speaks; 1.0 is the engine's normal pace. */
     var speechRate: Float
         get() = prefs.getFloat(KEY_SPEECH_RATE, DEFAULT_SPEECH_RATE)
@@ -234,6 +247,8 @@ class SettingsStore(context: Context) {
         private const val KEY_ON_LOCK_SCREEN = "assistant_on_lock_screen"
         private const val KEY_ASSISTANT_VOICE = "assistant_voice"
         private const val KEY_SPEECH_RATE = "speech_rate"
+        private const val KEY_NATURAL_VOICE = "natural_voice"
+        private const val KEY_NATURAL_VOICE_ID = "natural_voice_id"
 
         const val DEFAULT_SPEECH_RATE = 1.0f
 

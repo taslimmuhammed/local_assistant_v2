@@ -40,4 +40,30 @@ class PhotoToolsTest {
         // "whatever" isn't "what".
         assertNull(PhotoTools.questionIn("whatever photos you have from goa"))
     }
+
+    @Test
+    fun `a document's short name is spelled out for the search`() {
+        assertEquals("PAN card", PhotoTools.documentQuery("pan"))
+        assertEquals("PAN card number", PhotoTools.documentQuery("pan number"))
+        assertEquals("PAN card", PhotoTools.documentQuery("PAN card"))
+        assertEquals("driving licence number", PhotoTools.documentQuery("DL number"))
+        assertEquals("Japan trip", PhotoTools.documentQuery("Japan trip"))
+    }
+
+    @Test
+    fun `asking for something printed on a document is a question however it's put`() {
+        for (asked in listOf(
+            "fetch my pan number", "give me my PAN card number", "get my sslc marks", "fetch my 10th marks", "my DL number?",
+            "my dl no", "send me my aadhaar no", "fetch my credit card expiry", "my blood group?", "get my CGPA",
+        )) {
+            assertEquals(asked, asked, PhotoTools.questionIn(asked))
+        }
+        // The document itself, or photos of something: shown, not read.
+        for (asked in listOf(
+            "show me my marks card", "get my aadhaar card", "photos of my car's number plate", "show me photos of Mark",
+            "photos with no people in them", "find my sslc mark sheet",
+        )) {
+            assertNull(asked, PhotoTools.questionIn(asked))
+        }
+    }
 }

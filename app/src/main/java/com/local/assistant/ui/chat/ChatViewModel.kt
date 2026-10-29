@@ -18,6 +18,7 @@ import com.local.assistant.device.PermissionBroker
 import com.local.assistant.llm.LlmService
 import com.local.assistant.media.AttachmentStore
 import com.local.assistant.media.AudioRecorder
+import com.local.assistant.media.Recording
 import com.local.assistant.media.RecordingState
 import com.local.assistant.memory.prompt.ConversationManager
 import com.local.assistant.memory.prompt.TurnRunner
@@ -25,12 +26,20 @@ import com.local.assistant.memory.tools.ChatToolLog
 import com.local.assistant.memory.tools.MemoryChip
 import com.local.assistant.memory.tools.SystemAlarms
 import com.local.assistant.memory.tools.ToolExecutor
+import com.local.assistant.privacy.SensitiveLock
+import com.local.assistant.privacy.SensitiveText
+import com.local.assistant.voice.AudioFocus
+import com.local.assistant.voice.Speaker
+import com.local.assistant.voice.SpeechChunker
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
@@ -48,7 +57,11 @@ class ChatViewModel(
     private val settings: SettingsStore,
     private val attachments: AttachmentStore,
     private val recorder: AudioRecorder,
+    private val speaker: Speaker,
+    private val focus: AudioFocus,
     permissions: PermissionBroker,
+    /** Card numbers, PINs and the like are read out only while shown on screen ([SensitiveText.spoken]). */
+    private val sensitive: SensitiveLock? = null,
 ) : ViewModel() {
 
     /** A tool waiting on the user's answer to a permission dialog, e.g. contacts for "call amma". */
@@ -128,10 +141,55 @@ class ChatViewModel(
 
     val engineState: StateFlow<LlmService.State> = llm.state
 
+    /** The reply to a voice message is being read aloud. */
+    val speaking: StateFlow<Boolean> = speaker.speaking
+
+    /** Cuts the streaming reply into sentences to speak; null when this reply isn't spoken. */
+    private var chunker: SpeechChunker? = null
+
+    /** A voice message is waiting for its spoken reply: other audio stays quiet until it's said. */
+    private val awaitingSpeech = MutableStateFlow(false)
+
     init {
         // The chat opens at once and the model loads behind it; a message sent before it is ready
         // waits for it. Also covers a model installed just now, which the app's start didn't see.
         llm.warmUp()
+
+        // A reply to a voice message is spoken sentence by sentence as it arrives, as in the overlay.
+        viewModelScope.launch {
+            sender.live.collect { live ->
+                if (live?.owner === this@ChatViewModel) chunker?.push(live.text)?.forEach(::say)
+            }
+        }
+
+        // Music pauses while recording and while the answer is read out; the grace period
+        // bridges the gaps between sentences.
+        viewModelScope.launch {
+            combine(recorder.state, speaker.speaking, awaitingSpeech) { recording, speaking, awaiting ->
+                recording != null || speaking || awaiting
+            }
+                .distinctUntilChanged()
+                .collectLatest { busy ->
+                    if (busy) {
+                        focus.hold()
+                    } else {
+                        delay(FOCUS_GRACE_MS)
+                        focus.release()
+                    }
+                }
+        }
+    }
+
+    /** Says [sentence], with its sensitive details said as how they end, unless they're being shown. */
+    private fun say(sentence: String) {
+        speaker.speak(if (sensitive?.revealed?.value == true) sentence else SensitiveText.spoken(sentence))
+    }
+
+    /** Stops reading the reply aloud, and doesn't read the rest of it as it comes. */
+    fun stopSpeaking() {
+        chunker = null
+        awaitingSpeech.value = false
+        speaker.stop()
     }
 
     /** After the model failed to start: from the banner that says so. */
@@ -167,12 +225,14 @@ class ChatViewModel(
 
     fun startNewChat() {
         if (generatingHere()) return
+        stopSpeaking()
         _activeChatId.value = null
         conversations.onChatSelected(null)
     }
 
     fun selectChat(chatId: Long) {
         if (generatingHere() || _activeChatId.value == chatId) return
+        stopSpeaking()
         _activeChatId.value = chatId
         conversations.onChatSelected(chatId)
     }
@@ -222,42 +282,73 @@ class ChatViewModel(
         _pendingAttachment.value = null
     }
 
-    /** Caller must already hold RECORD_AUDIO permission. */
+    /**
+     * Starts a voice message, which goes as soon as it ends ([stopRecording], or the length cap):
+     * on its own, as on WhatsApp, never with text. Caller must already hold RECORD_AUDIO permission.
+     */
     fun startRecording() {
         if (generatingHere() || recorder.isRecording) return
-        discardPendingAttachment()
+        // Don't talk over the user; and load the natural voice while they speak.
+        stopSpeaking()
+        if (settings.speakReplies) speaker.prepare()
         val destination = attachments.newAudioFile()
         recorder.start(destination) { recording ->
-            _pendingAttachment.value = recording?.let {
-                PendingAttachment(it.file.absolutePath, AttachmentKind.AUDIO, it.durationMs)
-            }
+            if (recording != null) viewModelScope.launch { sendVoice(recording) }
         }
     }
 
+    /** Ends the recording and sends it. */
     fun stopRecording() = recorder.stop()
 
+    /** Ends the recording and throws it away. */
     fun cancelRecording() = recorder.cancel()
 
     fun send(text: String) {
+        stopSpeaking()
         val attachment = _pendingAttachment.value
         val started = sender.send(
             chatId = _activeChatId.value,
             text = text,
             attachment = attachment?.let { ChatSender.Attachment(it.path, it.kind, it.durationMs) },
             owner = this,
-            listener = object : ChatSender.Listener {
-                override fun onChatCreated(chatId: Long) {
-                    _activeChatId.value = chatId
-                }
-
-                override fun onMemory(chip: MemoryChip) = noticeReminder(chip)
-
-                override fun onFinished(reply: String, failure: String?) {
-                    _error.value = failure
-                }
-            },
+            listener = listener,
         )
         if (started) _pendingAttachment.value = null
+    }
+
+    /** A finished recording goes straight out, and its reply is read aloud (Settings: Answer out loud). */
+    private fun sendVoice(recording: Recording) {
+        val speak = settings.speakReplies
+        chunker = if (speak) SpeechChunker() else null
+        awaitingSpeech.value = speak
+        val started = sender.send(
+            chatId = _activeChatId.value,
+            text = "",
+            attachment = ChatSender.Attachment(recording.file.absolutePath, AttachmentKind.AUDIO, recording.durationMs),
+            owner = this,
+            listener = listener,
+        )
+        if (!started) {
+            chunker = null
+            awaitingSpeech.value = false
+            attachments.delete(recording.file.absolutePath)
+            _error.value = "Another reply is still coming. Try again when it's done."
+        }
+    }
+
+    private val listener = object : ChatSender.Listener {
+        override fun onChatCreated(chatId: Long) {
+            _activeChatId.value = chatId
+        }
+
+        override fun onMemory(chip: MemoryChip) = noticeReminder(chip)
+
+        override fun onFinished(reply: String, failure: String?) {
+            chunker?.finish(reply)?.forEach(::say)
+            chunker = null
+            awaitingSpeech.value = false
+            _error.value = failure
+        }
     }
 
     /** Puts back whatever the chip's tool call changed. */
@@ -300,16 +391,23 @@ class ChatViewModel(
         if (chip.note != null && !settings.offeredExactAlarms) _offerExactAlarms.value = true
     }
 
+    /** The stop button: the reply stops where it is, and so does the voice. */
     fun stop() {
+        stopSpeaking()
         if (generatingHere()) sender.stop()
     }
 
     override fun onCleared() {
         // As when this screen ran its own turns: gone for good, it takes its reply with it.
         if (sender.live.value?.owner === this) sender.stop()
+        stopSpeaking()
+        focus.release()
     }
 
     companion object {
+        /** How long other audio stays paused after the chat falls quiet. */
+        private const val FOCUS_GRACE_MS = 800L
+
         fun factory(container: AppContainer): ViewModelProvider.Factory = viewModelFactory {
             initializer {
                 ChatViewModel(
@@ -323,7 +421,10 @@ class ChatViewModel(
                     settings = container.settings,
                     attachments = container.attachmentStore,
                     recorder = container.audioRecorder,
+                    speaker = container.speaker,
+                    focus = container.chatAudioFocus,
                     permissions = container.permissions,
+                    sensitive = container.sensitiveLock,
                 )
             }
         }

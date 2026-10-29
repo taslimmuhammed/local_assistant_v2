@@ -75,6 +75,8 @@ class ToolExecutor(
         val changedPrefix: Boolean,
         /** A picture that goes back with [result] for the model to look at. */
         val image: String? = null,
+        /** The reply itself, written by the tool; the turn ends with it ([ActionResult.reply]). */
+        val reply: String? = null,
     )
 
     enum class UndoResult { UNDONE, ALREADY_UNDONE, CHANGED_SINCE, NOT_UNDOABLE }
@@ -93,6 +95,7 @@ class ToolExecutor(
         val changedPrefix: Boolean = false,
         val alarms: List<AlarmChange> = emptyList(),
         val image: String? = null,
+        val reply: String? = null,
     )
 
     private val recentMutex = Mutex()
@@ -134,7 +137,7 @@ class ToolExecutor(
         applied.alarms.forEach(::applyAlarm)
 
         val ok = applied.result["ok"] == true
-        val outcome = Outcome(gson.toJson(applied.result), ok, recordId, applied.chip, applied.changedPrefix, applied.image)
+        val outcome = Outcome(gson.toJson(applied.result), ok, recordId, applied.chip, applied.changedPrefix, applied.image, applied.reply)
         val window = when (call.name) {
             in ToolCatalog.WRITES -> dedupeWindowMs
             // A model that repeats itself within a turn must not open the dialer twice, but
@@ -177,7 +180,7 @@ class ToolExecutor(
             val done = (photos ?: throw ToolError("Photo search isn't set up."))
                 .find(args.text("query"), args.text("person"), args.text("when"), args.text("place"), question)
             val result = if (userText.isBlank()) withRemembered(done.result, args) else done.result
-            return Applied(result, done.chip, image = done.image)
+            return Applied(result, done.chip, image = done.image, reply = done.reply)
         }
         val tools = device ?: throw ToolError("That isn't available in this app.")
         val done = when (call.name) {

@@ -65,7 +65,9 @@ In the same place:
   answer in about a second. It holds about 1.8 GB of memory and shows a silent notification.
 - **Use on the lock screen** (off by default) lets it answer without unlocking. Anyone holding
   your phone could then ask it what it remembers about you, or have it call or message someone.
-- **Voice** and **Answer out loud** set how it speaks.
+- **Voice** and **Answer out loud** set how it speaks. At the top of Voice is a natural voice that
+  sounds like a person: a 334 MB download that uses about 600 MB of memory while it talks.
+  Without it, the assistant uses your phone's own voices.
 
 ### Optional extras
 

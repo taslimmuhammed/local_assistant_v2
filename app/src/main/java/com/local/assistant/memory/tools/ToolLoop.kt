@@ -191,6 +191,7 @@ class ToolLoop(
 
             rounds++
             val sums = mutableListOf<String>()
+            val written = mutableListOf<String>()
             val results = calls.map { call ->
                 if (rounds > maxRounds) {
                     ToolResult(call.name, LIMIT_REACHED)
@@ -199,9 +200,17 @@ class ToolLoop(
                     changedPrefix = changedPrefix || outcome.changedPrefix
                     if (outcome.chip != null && outcome.recordId != null) emit(LoopEvent.Memory(outcome.recordId, outcome.chip))
                     if (call.name == ToolCatalog.CALCULATE && outcome.ok) answerOf(outcome.result)?.let(sums::add)
+                    outcome.reply?.let(written::add)
                     grounding.add(outcome.result)
                     ToolResult(call.name, outcome.result, outcome.image)
                 }
+            }
+            // A photo question answered from the photo in a conversation of its own (PhotoReader),
+            // which closed this one: the reply is that answer, and the chat is rebuilt next turn.
+            if (written.isNotEmpty()) {
+                emit(LoopEvent.Text((if (spoke) "\n" else "") + written.joinToString("\n")))
+                emit(LoopEvent.Done(stats, changedPrefix, rounds, staleConversation = true))
+                return@flow
             }
             // Only sums, all worked out: the reply is the result itself, written here. The model
             // would only restate it, and past token 2,048 it can't be trusted to copy the digits

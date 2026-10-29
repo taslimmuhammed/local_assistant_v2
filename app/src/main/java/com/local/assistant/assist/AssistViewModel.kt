@@ -167,6 +167,8 @@ class AssistViewModel(
         // whole system prompt first (3.4 s on the phone, 6 s just after the model loads). Do it
         // now, while the user is still talking; the first message then takes it over.
         conversations.prepareFresh()
+        // The natural voice takes about a second to load: likewise while the user talks.
+        if (!_muted.value) speaker.prepare()
 
         // Speak each sentence as soon as it is complete.
         viewModelScope.launch {

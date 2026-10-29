@@ -159,40 +159,7 @@ class ModelManager(
         val url = model.downloadUrl ?: throw IOException("This model can only be imported")
         val part = partFile()
         ensureSpace(model.requiredFreeBytes - part.length())
-
-        var alreadyHave = part.length()
-        val request = Request.Builder()
-            .url(url)
-            .apply { if (alreadyHave > 0) header("Range", "bytes=$alreadyHave-") }
-            .build()
-
-        http.newCall(request).execute().use { response ->
-            if (!response.isSuccessful) {
-                throw IOException("Download failed: HTTP ${response.code}")
-            }
-            // A 200 to a ranged request means the server ignored the range; start over.
-            val resuming = response.code == 206
-            if (!resuming) {
-                part.delete()
-                alreadyHave = 0
-            }
-            val body = response.body ?: throw IOException("Empty response body")
-            val total = if (body.contentLength() > 0) {
-                alreadyHave + body.contentLength()
-            } else {
-                model.sizeBytes
-            }
-
-            RandomAccessFile(part, "rw").use { out ->
-                out.seek(alreadyHave)
-                body.byteStream().copyTo(
-                    write = { buffer, length -> out.write(buffer, 0, length) },
-                    startingAt = alreadyHave,
-                    total = total,
-                    onProgress = onProgress,
-                )
-            }
-        }
+        fetchResumable(http, url, part, model.sizeBytes, onProgress)
 
         model.sha256?.let { expected ->
             if (sha256Of(part) != expected) {
@@ -264,19 +231,6 @@ class ModelManager(
             }
         }.getOrNull()
 
-    private fun sha256Of(file: File): String {
-        val digest = MessageDigest.getInstance("SHA-256")
-        file.inputStream().use { input ->
-            val buffer = ByteArray(BUFFER_BYTES)
-            while (true) {
-                val read = input.read(buffer)
-                if (read < 0) break
-                digest.update(buffer, 0, read)
-            }
-        }
-        return digest.digest().joinToString("") { "%02x".format(it) }
-    }
-
     private fun sizeOf(uri: Uri): Long? =
         context.contentResolver.query(uri, arrayOf(OpenableColumns.SIZE), null, null, null)
             ?.use { cursor ->
@@ -289,23 +243,6 @@ class ModelManager(
             }
 
     // --- shared plumbing ------------------------------------------------------------------
-
-    private inline fun InputStream.copyTo(
-        write: (ByteArray, Int) -> Unit,
-        startingAt: Long,
-        total: Long,
-        onProgress: (Long, Long) -> Unit,
-    ) {
-        val buffer = ByteArray(BUFFER_BYTES)
-        var done = startingAt
-        while (true) {
-            val read = read(buffer)
-            if (read < 0) break
-            write(buffer, read)
-            done += read
-            onProgress(done, total)
-        }
-    }
 
     private fun ensureSpace(needed: Long) {
         val usable = modelsDir.usableSpace
@@ -346,36 +283,114 @@ class ModelManager(
         }
     }
 
-    /** Coalesces per-buffer progress into at most one UI update per [INTERVAL_MS]. */
-    private class ProgressThrottle(private val emit: (Long, Long, Long) -> Unit) {
-        private var lastAt = 0L
-        private var lastBytes = 0L
+    companion object {
+        private const val PART_SUFFIX = ".part"
+        private const val FREE_SPACE_HEADROOM = 256L * 1024 * 1024
+    }
+}
 
-        fun report(done: Long, total: Long) {
-            val now = System.currentTimeMillis()
-            if (lastAt == 0L) {
-                lastAt = now
-                lastBytes = done
-                emit(done, total, 0)
-                return
-            }
-            val elapsed = now - lastAt
-            if (elapsed < INTERVAL_MS) return
-            val rate = (done - lastBytes) * 1000 / elapsed
+/**
+ * Fetches [url] into [part], carrying on from whatever [part] already holds: a ~3 GB model or a
+ * 350 MB voice needn't start again after a dropped connection. [expectedBytes] stands in for the
+ * total when the server doesn't say.
+ */
+internal fun fetchResumable(
+    http: OkHttpClient,
+    url: String,
+    part: File,
+    expectedBytes: Long,
+    onProgress: (Long, Long) -> Unit,
+) {
+    var alreadyHave = part.length()
+    val request = Request.Builder()
+        .url(url)
+        .apply { if (alreadyHave > 0) header("Range", "bytes=$alreadyHave-") }
+        .build()
+
+    http.newCall(request).execute().use { response ->
+        if (!response.isSuccessful) {
+            throw IOException("Download failed: HTTP ${response.code}")
+        }
+        // A 200 to a ranged request means the server ignored the range; start over.
+        val resuming = response.code == 206
+        if (!resuming) {
+            part.delete()
+            alreadyHave = 0
+        }
+        val body = response.body ?: throw IOException("Empty response body")
+        val total = if (body.contentLength() > 0) {
+            alreadyHave + body.contentLength()
+        } else {
+            expectedBytes
+        }
+
+        RandomAccessFile(part, "rw").use { out ->
+            out.seek(alreadyHave)
+            body.byteStream().copyTo(
+                write = { buffer, length -> out.write(buffer, 0, length) },
+                startingAt = alreadyHave,
+                total = total,
+                onProgress = onProgress,
+            )
+        }
+    }
+}
+
+internal fun sha256Of(file: File): String {
+    val digest = MessageDigest.getInstance("SHA-256")
+    file.inputStream().use { input ->
+        val buffer = ByteArray(COPY_BUFFER_BYTES)
+        while (true) {
+            val read = input.read(buffer)
+            if (read < 0) break
+            digest.update(buffer, 0, read)
+        }
+    }
+    return digest.digest().joinToString("") { "%02x".format(it) }
+}
+
+private inline fun InputStream.copyTo(
+    write: (ByteArray, Int) -> Unit,
+    startingAt: Long,
+    total: Long,
+    onProgress: (Long, Long) -> Unit,
+) {
+    val buffer = ByteArray(COPY_BUFFER_BYTES)
+    var done = startingAt
+    while (true) {
+        val read = read(buffer)
+        if (read < 0) break
+        write(buffer, read)
+        done += read
+        onProgress(done, total)
+    }
+}
+
+private const val COPY_BUFFER_BYTES = 1 shl 16
+
+/** Coalesces per-buffer progress into at most one UI update per [INTERVAL_MS]. */
+internal class ProgressThrottle(private val emit: (Long, Long, Long) -> Unit) {
+    private var lastAt = 0L
+    private var lastBytes = 0L
+
+    fun report(done: Long, total: Long) {
+        val now = System.currentTimeMillis()
+        if (lastAt == 0L) {
             lastAt = now
             lastBytes = done
-            emit(done, total, rate)
+            emit(done, total, 0)
+            return
         }
-
-        companion object {
-            private const val INTERVAL_MS = 250L
-        }
+        val elapsed = now - lastAt
+        if (elapsed < INTERVAL_MS) return
+        val rate = (done - lastBytes) * 1000 / elapsed
+        lastAt = now
+        lastBytes = done
+        emit(done, total, rate)
     }
 
     companion object {
-        private const val PART_SUFFIX = ".part"
-        private const val BUFFER_BYTES = 1 shl 16
-        private const val FREE_SPACE_HEADROOM = 256L * 1024 * 1024
+        private const val INTERVAL_MS = 250L
     }
 }
 

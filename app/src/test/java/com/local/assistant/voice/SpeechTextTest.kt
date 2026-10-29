@@ -90,6 +90,44 @@ class SpeechChunkerTest {
     }
 
     @Test
+    fun `the first clause goes before its sentence ends`() {
+        val chunker = SpeechChunker()
+        assertEquals(listOf("Hello Taslim,"), chunker.push("Hello Taslim, how"))
+        assertEquals(emptyList<String>(), chunker.push("Hello Taslim, how can I help you"))
+        assertEquals(listOf("how can I help you today?"), chunker.finish("Hello Taslim, how can I help you today?"))
+    }
+
+    @Test
+    fun `a one-word clause waits for more`() {
+        val chunker = SpeechChunker()
+        assertEquals(emptyList<String>(), chunker.push("Sure, it is"))
+        assertEquals(listOf("Sure, it is done,"), chunker.push("Sure, it is done, and"))
+    }
+
+    @Test
+    fun `once started, only a long sentence is cut at a clause`() {
+        val chunker = SpeechChunker()
+        assertEquals(listOf("I set the alarm for six in the morning."), chunker.push("I set the alarm for six in the morning. Also,"))
+        assertEquals(emptyList<String>(), chunker.push("I set the alarm for six in the morning. Also, if you want, "))
+        val long = "I set the alarm for six in the morning. Also, if you want I can add a reminder for your " +
+            "dentist on Thursday at five, and "
+        assertEquals(listOf("Also, if you want I can add a reminder for your dentist on Thursday at five,"), chunker.push(long))
+    }
+
+    @Test
+    fun `numbers and times are not clause ends`() {
+        val chunker = SpeechChunker()
+        assertEquals(emptyList<String>(), chunker.push("It costs 1,000 rupees at 8:30 today"))
+    }
+
+    @Test
+    fun `without clauses, only whole sentences go`() {
+        val chunker = SpeechChunker(clauses = false)
+        assertEquals(emptyList<String>(), chunker.push("Hello Taslim, how can I help"))
+        assertEquals(listOf("Hello Taslim, how can I help you today?"), chunker.push("Hello Taslim, how can I help you today? I"))
+    }
+
+    @Test
     fun `skipping starts from the next sentence`() {
         val chunker = SpeechChunker()
         chunker.skip("First one. Second")

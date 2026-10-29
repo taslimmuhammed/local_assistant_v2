@@ -31,6 +31,7 @@ import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.RadioButton
@@ -48,6 +49,7 @@ import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -65,11 +67,16 @@ import com.local.assistant.assist.LockScreenNotice
 import com.local.assistant.data.prefs.SettingsStore
 import com.local.assistant.llm.LlmService
 import com.local.assistant.model.ModelCatalog
+import com.local.assistant.model.formatBytes
 import com.local.assistant.ui.memory.MemoryViewModel
 import com.local.assistant.ui.theme.AppColors
 import com.local.assistant.ui.theme.AppSwitch
 import com.local.assistant.voice.Speaker
+import com.local.assistant.voice.NaturalVoices
 import com.local.assistant.voice.VoiceOption
+import com.local.assistant.voice.VoicePack
+import com.local.assistant.voice.VoicePackInstaller
+import kotlinx.coroutines.launch
 import java.time.LocalDate
 
 /**
@@ -83,6 +90,7 @@ fun SettingsScreen(
     llmService: LlmService,
     settings: SettingsStore,
     speaker: Speaker,
+    voicePacks: List<VoicePackInstaller>,
     webSearchOn: Boolean,
     memory: MemoryViewModel,
     onBack: () -> Unit,
@@ -129,7 +137,7 @@ fun SettingsScreen(
 
             SectionDivider()
             SectionHeader("Assistant")
-            AssistantSettings(settings, speaker, llmService)
+            AssistantSettings(settings, speaker, voicePacks, llmService)
 
             SectionDivider()
             SectionHeader("Web search")
@@ -223,7 +231,7 @@ private fun ContextWindow(llmService: LlmService, settings: SettingsStore) {
  * grant, so this only says whether it is and opens the page where it's chosen.
  */
 @Composable
-private fun AssistantSettings(settings: SettingsStore, speaker: Speaker, llmService: LlmService) {
+private fun AssistantSettings(settings: SettingsStore, speaker: Speaker, voicePacks: List<VoicePackInstaller>, llmService: LlmService) {
     val context = LocalContext.current
     val lifecycle = LocalLifecycleOwner.current.lifecycle
     var isAssistant by remember { mutableStateOf(AssistantRole.isDefault(context)) }
@@ -343,13 +351,17 @@ private fun AssistantSettings(settings: SettingsStore, speaker: Speaker, llmServ
         voices = speaker.voiceOptions()
         current = speaker.currentVoice()
     }
+    val installedPacks = voicePacks.map { it.installed.collectAsStateWithLifecycle().value }
+    var naturalId by remember { mutableStateOf(settings.naturalVoice) }
+    // A download that finishes switches to its voice (AppContainer.voicePacks).
+    LaunchedEffect(installedPacks) { naturalId = settings.naturalVoice }
+    val natural = NaturalVoices.byId(naturalId)
+        ?.takeIf { voice -> installedPacks[voicePacks.indexOfFirst { it.pack == voice.pack }] != null }
     val options = voices
     when {
+        natural != null -> NavRow("Voice", natural.label) { picking = true }
         options == null -> NavRow("Voice", "Loading the phone's voices…") {}
-        options.isEmpty() -> NavRow(
-            "Voice",
-            "No voices on this phone that work offline. Tap to add one in the text-to-speech settings.",
-        ) { openTextToSpeechSettings(context) }
+        options.isEmpty() -> NavRow("Voice", "No phone voices work offline. Tap to download a natural voice.") { picking = true }
         else -> NavRow("Voice", options.firstOrNull { it.name == current }?.label ?: options.first().label) { picking = true }
     }
 
@@ -384,7 +396,7 @@ private fun AssistantSettings(settings: SettingsStore, speaker: Speaker, llmServ
         }
     }
 
-    if (picking && !options.isNullOrEmpty()) {
+    if (picking) {
         AlertDialog(
             onDismissRequest = {
                 picking = false
@@ -393,26 +405,63 @@ private fun AssistantSettings(settings: SettingsStore, speaker: Speaker, llmServ
             title = { Text("Voice") },
             text = {
                 Column(Modifier.verticalScroll(rememberScrollState())) {
-                    Text(
-                        "Tap one to hear it. Only voices that run on the phone are listed.",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = AppColors.TextSecondary,
-                        modifier = Modifier.padding(bottom = 8.dp),
-                    )
-                    for (option in options) {
-                        Row(
-                            Modifier
-                                .fillMaxWidth()
-                                .selectable(selected = option.name == current, role = Role.RadioButton) {
-                                    current = option.name
-                                    settings.assistantVoice = option.name
-                                    speaker.preview()
+                    for (installer in voicePacks) {
+                        VoicePackChoices(
+                            installer = installer,
+                            selected = natural,
+                            onSelect = { voice ->
+                                naturalId = voice.id
+                                settings.naturalVoice = voice.id
+                                speaker.preview()
+                            },
+                            onRemoved = {
+                                if (natural?.pack == installer.pack) {
+                                    naturalId = null
+                                    settings.naturalVoice = null
                                 }
-                                .padding(vertical = 6.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            RadioButton(selected = option.name == current, onClick = null)
-                            Text(option.label, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.padding(start = 8.dp))
+                            },
+                        )
+                    }
+                    Text(
+                        "Phone voices",
+                        style = MaterialTheme.typography.labelLarge,
+                        color = AppColors.TextPrimary,
+                        modifier = Modifier.padding(top = 16.dp, bottom = 4.dp),
+                    )
+                    if (options.isNullOrEmpty()) {
+                        Text(
+                            "None on this phone work offline.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = AppColors.TextSecondary,
+                        )
+                        TextButton(onClick = { openTextToSpeechSettings(context) }, contentPadding = PaddingValues(0.dp)) {
+                            Text("Add one in the text-to-speech settings")
+                        }
+                    } else {
+                        Text(
+                            "Tap one to hear it. Only voices that run on the phone are listed.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = AppColors.TextSecondary,
+                            modifier = Modifier.padding(bottom = 8.dp),
+                        )
+                        for (option in options) {
+                            val chosen = natural == null && option.name == current
+                            Row(
+                                Modifier
+                                    .fillMaxWidth()
+                                    .selectable(selected = chosen, role = Role.RadioButton) {
+                                        current = option.name
+                                        naturalId = null
+                                        settings.naturalVoice = null
+                                        settings.assistantVoice = option.name
+                                        speaker.preview()
+                                    }
+                                    .padding(vertical = 6.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                RadioButton(selected = chosen, onClick = null)
+                                Text(option.label, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.padding(start = 8.dp))
+                            }
                         }
                     }
                 }
@@ -426,6 +475,106 @@ private fun AssistantSettings(settings: SettingsStore, speaker: Speaker, llmServ
         )
     }
 }
+
+/**
+ * One natural voice download at the top of the voice list: what it is and costs, then its
+ * voices to choose from once it's here, or its download and progress until then.
+ */
+@Composable
+private fun VoicePackChoices(
+    installer: VoicePackInstaller,
+    selected: NaturalVoices.Voice?,
+    onSelect: (NaturalVoices.Voice) -> Unit,
+    onRemoved: () -> Unit,
+) {
+    val pack = installer.pack
+    val installed by installer.installed.collectAsStateWithLifecycle()
+    val progress by installer.progress.collectAsStateWithLifecycle()
+    val error by installer.error.collectAsStateWithLifecycle()
+    val scope = rememberCoroutineScope()
+    Column(Modifier.padding(bottom = 12.dp)) {
+        Text(pack.title, style = MaterialTheme.typography.labelLarge, color = AppColors.TextPrimary)
+        Text(
+            PACK_NOTES[pack.name].orEmpty() +
+                if (installed == null) " A ${formatBytes(pack.archiveBytes)} download." else "",
+            style = MaterialTheme.typography.bodySmall,
+            color = AppColors.TextSecondary,
+        )
+        if (installed != null) {
+            for (voice in NaturalVoices.ALL.filter { it.pack == pack }) {
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .selectable(selected = voice == selected, role = Role.RadioButton) { onSelect(voice) }
+                        .padding(vertical = 6.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    RadioButton(selected = voice == selected, onClick = null)
+                    Text(voice.label, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.padding(start = 8.dp))
+                }
+            }
+            TextButton(
+                onClick = {
+                    scope.launch {
+                        installer.delete()
+                        onRemoved()
+                    }
+                },
+                contentPadding = PaddingValues(0.dp),
+            ) { Text("Remove ${pack.title} (frees ${formatBytes(pack.installedBytes)})") }
+            return@Column
+        }
+        when (val now = progress) {
+            is VoicePackInstaller.Progress.Downloading -> {
+                LinearProgressIndicator(
+                    progress = { now.transfer.fraction },
+                    modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+                    color = AppColors.Accent,
+                    trackColor = AppColors.SurfaceMuted,
+                )
+                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        "Downloading ${formatBytes(now.transfer.bytesDone)} of ${formatBytes(now.transfer.bytesTotal)}",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = AppColors.TextSecondary,
+                        modifier = Modifier.weight(1f),
+                    )
+                    TextButton(onClick = installer::cancel) { Text("Cancel") }
+                }
+            }
+            is VoicePackInstaller.Progress.Unpacking -> {
+                LinearProgressIndicator(
+                    progress = { now.fraction },
+                    modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+                    color = AppColors.Accent,
+                    trackColor = AppColors.SurfaceMuted,
+                )
+                Text(
+                    "Unpacking ${(now.fraction * 100).toInt()}%",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = AppColors.TextSecondary,
+                    modifier = Modifier.padding(top = 4.dp),
+                )
+            }
+            null -> {
+                error?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = AppColors.Danger, modifier = Modifier.padding(top = 4.dp)) }
+                val partial = installer.partialBytes()
+                OutlinedButton(onClick = installer::download, modifier = Modifier.padding(top = 8.dp)) {
+                    Text(if (partial > 0) "Resume download (${formatBytes(pack.archiveBytes - partial)} left)" else "Download ${pack.title}")
+                }
+            }
+        }
+    }
+}
+
+/**
+ * What each natural voice download is like. Memory is the app's PSS growth on the OnePlus
+ * (NaturalVoiceEvalTest): Kokoro +481 MB loaded, +613 MB at peak. The word slips are from
+ * eight typical replies run through a speech recogniser (Mac comparison, 2026-10-28).
+ */
+private val PACK_NOTES = mapOf(
+    VoicePack.KOKORO.name to "Sounds like a person, and read every word right in tests. Uses about 600 MB of memory while it talks.",
+)
 
 /** What keeping the model loaded costs: the app's PSS on the test phone (fp32 decoder, 8K), AssistLatencyEvalTest. */
 private const val KEEP_READY_MEMORY = "1.8 GB"
@@ -468,6 +617,15 @@ private fun ModelLicences() {
         "Granite Embedding 311M (if imported)",
         "By IBM, in LiteRT-LM format. Apache License 2.0.",
         listOf("Apache License 2.0" to "https://www.apache.org/licenses/LICENSE-2.0"),
+    )
+    Entry(
+        "Kokoro-82M (a natural voice, if downloaded)",
+        "By hexgrad, in ONNX format from the sherpa-onnx project, run by sherpa-onnx (Apache License 2.0). " +
+            "Apache License 2.0. Pronunciation by eSpeak NG, GNU General Public License v3.",
+        listOf(
+            "Apache License 2.0" to "https://www.apache.org/licenses/LICENSE-2.0",
+            "eSpeak NG" to "https://github.com/espeak-ng/espeak-ng",
+        ),
     )
 }
 

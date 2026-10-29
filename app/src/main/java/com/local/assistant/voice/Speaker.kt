@@ -15,16 +15,19 @@ import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import java.io.File
 import java.util.Locale
 
 /**
- * The assistant's voice: the phone's own text-to-speech engine, with one of its on-device voices
- * (see [VoiceChoice]), so speaking needs no network and no model of our own in memory.
+ * The assistant's voice: the natural voice ([NaturalVoice]) when it is downloaded and chosen,
+ * otherwise the phone's own text-to-speech engine with one of its on-device voices (see
+ * [VoiceChoice]). Both run without a network. The phone's voice also says whatever the natural
+ * one can't, so a voice that fails to load still answers.
  *
- * The engine is bound the first time something is said, not at app start, and text said before
- * it is ready waits for it. Everything here runs on the main thread.
+ * The phone's engine is bound the first time something is said, not at app start, and text said
+ * before it is ready waits for it. Everything here runs on the main thread.
  */
-class Speaker(context: Context, private val settings: SettingsStore) {
+class Speaker(context: Context, private val settings: SettingsStore, installed: (VoicePack) -> File? = { null }) {
 
     private val appContext = context.applicationContext
     private val main = Handler(Looper.getMainLooper())
@@ -43,6 +46,17 @@ class Speaker(context: Context, private val settings: SettingsStore) {
     private var nextId = 0L
 
     private val _speaking = MutableStateFlow(false)
+
+    private val natural = NaturalVoice(
+        chosen = {
+            NaturalVoices.byId(settings.naturalVoice)?.let { voice ->
+                installed(voice.pack)?.let { dir -> NaturalVoice.Chosen(voice, dir) }
+            }
+        },
+        rate = { settings.speechRate },
+        fallback = ::speakWithPhone,
+        onSpeakingChanged = ::updateSpeaking,
+    )
 
     /** Something is being said, or waiting to be. */
     val speaking: StateFlow<Boolean> = _speaking.asStateFlow()
@@ -72,6 +86,20 @@ class Speaker(context: Context, private val settings: SettingsStore) {
     /** Says [text] after anything still being said. */
     fun speak(text: String) {
         if (text.isBlank()) return
+        if (useNatural()) natural.speak(text) else speakWithPhone(text)
+    }
+
+    /** About to speak (the overlay opened): loads the natural voice now rather than on the first sentence. */
+    fun prepare() {
+        if (useNatural()) natural.prepare()
+    }
+
+    /** The natural voice is chosen and can speak. */
+    fun naturalVoiceInUse(): Boolean = useNatural()
+
+    private fun useNatural(): Boolean = natural.usable()
+
+    private fun speakWithPhone(text: String) {
         val engine = engine()
         if (engineReady) say(engine, text) else queued.addLast(text)
         updateSpeaking()
@@ -79,6 +107,7 @@ class Speaker(context: Context, private val settings: SettingsStore) {
 
     /** Stops at once, and drops anything waiting. */
     fun stop() {
+        natural.stop()
         queued.clear()
         pending.clear()
         if (engineReady) tts?.stop()
@@ -100,13 +129,14 @@ class Speaker(context: Context, private val settings: SettingsStore) {
     /** Settings changed the voice or its pace: use them from now on, and let the user hear it. */
     fun preview() {
         stop()
-        if (engineReady) tts?.let(::configure)
+        if (!useNatural() && engineReady) tts?.let(::configure)
         speak(SAMPLE)
     }
 
     /** Gives the engine back, e.g. when the system asks for memory. It binds again when needed. */
     fun release() {
         stop()
+        natural.release()
         tts?.shutdown()
         tts = null
         ready = null
@@ -175,7 +205,7 @@ class Speaker(context: Context, private val settings: SettingsStore) {
     }
 
     private fun updateSpeaking() {
-        _speaking.value = queued.isNotEmpty() || pending.isNotEmpty()
+        _speaking.value = queued.isNotEmpty() || pending.isNotEmpty() || natural.isSpeaking
     }
 
     private companion object {

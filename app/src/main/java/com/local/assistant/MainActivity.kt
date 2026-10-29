@@ -203,6 +203,7 @@ private fun AppRoot(
             llmService = container.llmService,
             settings = container.settings,
             speaker = container.speaker,
+            voicePacks = container.voicePacks,
             webSearchOn = container.webSearch.enabled,
             memory = memoryViewModel,
             onBack = { showSettings = false },

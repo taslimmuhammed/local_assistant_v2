@@ -1,3 +1,6 @@
+import java.net.URI
+import java.security.MessageDigest
+
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
@@ -12,6 +15,54 @@ plugins {
  * Build and copy it with `./gradlew :app:demoApk -Pdemo`.
  */
 val demo = providers.gradleProperty("demo").isPresent
+
+/** Downloads one file once, and fails the build unless it has the expected SHA-256. */
+abstract class FetchVerifiedFile : DefaultTask() {
+    @get:Input abstract val url: Property<String>
+    @get:Input abstract val sha256: Property<String>
+    @get:OutputFile abstract val output: RegularFileProperty
+
+    @TaskAction
+    fun fetch() {
+        val file = output.get().asFile
+        if (file.isFile && sha256Of(file) == sha256.get()) return
+        val part = File(file.path + ".part")
+        URI(url.get()).toURL().openStream().use { input -> part.outputStream().use { input.copyTo(it) } }
+        val actual = sha256Of(part)
+        if (actual != sha256.get()) {
+            part.delete()
+            throw GradleException("${url.get()} has SHA-256 $actual, expected ${sha256.get()}")
+        }
+        file.delete()
+        check(part.renameTo(file)) { "Could not move ${part.name} into place" }
+    }
+
+    private fun sha256Of(file: File): String {
+        val digest = MessageDigest.getInstance("SHA-256")
+        file.inputStream().use { input ->
+            val buffer = ByteArray(1 shl 16)
+            while (true) {
+                val n = input.read(buffer)
+                if (n < 0) break
+                digest.update(buffer, 0, n)
+            }
+        }
+        return digest.digest().joinToString("") { "%02x".format(it) }
+    }
+}
+
+// sherpa-onnx publishes its Android library only as a release asset, so the build fetches it
+// (once, into build/) rather than keeping 39 MB of binary in git. Digest from the release page.
+val sherpaOnnxVersion = "1.13.8"
+val sherpaOnnxAar = layout.buildDirectory.file("sherpa-onnx/sherpa-onnx-static-link-onnxruntime-$sherpaOnnxVersion.aar")
+val fetchSherpaOnnx = tasks.register<FetchVerifiedFile>("fetchSherpaOnnx") {
+    url.set(
+        "https://github.com/k2-fsa/sherpa-onnx/releases/download/v$sherpaOnnxVersion/" +
+            "sherpa-onnx-static-link-onnxruntime-$sherpaOnnxVersion.aar",
+    )
+    sha256.set("b22c3fc1b6a45666d28892bb2f7694beeb77a8362d7ebd77c1a5431ec9435471")
+    output.set(sherpaOnnxAar)
+}
 
 android {
     namespace = "com.local.assistant"
@@ -148,6 +199,13 @@ dependencies {
     // Already a transitive dependency of LiteRT-LM; declared because tool arguments and results
     // are parsed with it. org.json would be stubbed out in JVM unit tests.
     implementation(libs.gson)
+
+    // The natural voice (voice/NaturalVoice): Kokoro run by sherpa-onnx, with ONNX Runtime linked
+    // into its one native library (24 MB on arm64). 1.13.8 is the last release with eSpeak NG
+    // built in; 2.0 drops it and silently skips numbers and names. Not on Maven: see fetchSherpaOnnx.
+    implementation(files(sherpaOnnxAar).builtBy(fetchSherpaOnnx))
+    // The voice is published as a .tar.bz2, which Android can't unpack on its own.
+    implementation(libs.commons.compress)
 
     testImplementation(libs.junit)
 

@@ -30,6 +30,11 @@ class PhotoTools(
     private val readable: suspend (mediaId: Long) -> String? = { null },
     /** Whether a found photo may be read out: not over the lock screen, where photos stay hidden. */
     private val mayRead: () -> Boolean = { true },
+    /**
+     * Answers a question from a found photo on its own ([PhotoReader]), the reply written; null
+     * when it can't, and then the photo goes to the chat model to read.
+     */
+    private val reader: (suspend (path: String, question: String) -> String?)? = null,
     private val now: () -> ZonedDateTime = ZonedDateTime::now,
 ) {
 
@@ -79,6 +84,8 @@ class PhotoTools(
         if (what == null && names.isEmpty() && period == null && placeName == null) {
             what = question?.trim()?.take(MAX_QUERY)?.let(::description)
         }
+        // Asking what a document says, "pan" is the PAN card: alone, it found a frying pan.
+        if (!question.isNullOrBlank()) what = what?.let(::documentQuery)
         if (what == null && names.isEmpty() && period == null && placeName == null && !videosOnly) {
             throw ToolError("Say what the photos are of, who is in them, where or when they were taken.")
         }
@@ -156,32 +163,39 @@ class PhotoTools(
                 "may have none. Say so, and that they can search by what's in them instead."
         }
         val asked = question?.trim()?.takeIf { it.isNotEmpty() }
-        val image = if (asked != null && ids.isNotEmpty()) read(ids, videos = index.videoIds().toHashSet(), asked, notes) else null
+        val read = if (asked != null && ids.isNotEmpty()) read(ids, videos = index.videoIds().toHashSet(), asked, notes) else null
+        if (read?.reply != null) result["answered"] = "from the best-matching photo, read on its own"
         if (notes.isNotEmpty()) result["note"] = notes.joinToString(" ")
         return ActionResult(
             result,
             MemoryChip(MemoryChip.Kind.PHOTOS, "Photos", label, photos = found.copy(query = label)).takeIf { ids.isNotEmpty() },
-            image,
+            read?.image,
+            read?.reply,
         )
     }
 
+    /** A found photo read for a question: the reply written from it, or the photo for the chat model. */
+    private class Read(val image: String? = null, val reply: String? = null)
+
     /**
-     * The best photo among [ids] (best first; videos skipped) as a file for the model to read
-     * [question] from, with what to do with it added to [notes]; null when none can be read.
+     * The best photo among [ids] (best first; videos skipped) read for [question]: answered by
+     * [reader], or else as a file for the chat model to read, with what to do with it added to
+     * [notes]; null when none can be read.
      */
-    private suspend fun read(ids: List<Long>, videos: Set<Long>, question: String, notes: MutableList<String>): String? {
+    private suspend fun read(ids: List<Long>, videos: Set<Long>, question: String, notes: MutableList<String>): Read? {
         if (!mayRead()) {
             notes += "The phone is locked, so the photos can't be read now: tell the user to unlock it to see them and the answer."
             return null
         }
         val best = ids.firstOrNull { it !in videos } ?: return null
         val file = readable(best) ?: return null
+        reader?.invoke(file, question)?.let { return Read(reply = it) }
         // Named first: given a plus-two question and the SSLC certificate, the model read out the
         // SSLC marks as the answer; said as "Your SSLC certificate shows…", the user can tell.
         notes += "The best-matching photo is attached. Say what document or photo it is, then answer \"$question\" from what it " +
             "shows, in a sentence or two, reading any numbers exactly. If it isn't what they asked about, or doesn't show the " +
             "answer, say so and that the photos shown below may help."
-        return file
+        return Read(image = file)
     }
 
     /** What [name] stands for, among towns with the user's photos when several share it. */
@@ -211,21 +225,42 @@ class PhotoTools(
 
         /**
          * [userText] when it asks what something says ("what was my SSLC score?", "when does my
-         * insurance expire"), for reading from the best photo; null for asking to see or find
-         * photos ("show me…", "where is my PAN card?").
+         * insurance expire") or asks for something printed on one ("fetch my pan number", "get my
+         * sslc marks", "my DL no?"), for reading from the best photo; null for asking to see or
+         * find photos ("show me…", "where is my PAN card?", "get my aadhaar card"). Without the
+         * second kind, none of ten "fetch / get / give me … number" requests on the phone was
+         * read (28 Oct 2026): the model passed no question for them.
          */
         fun questionIn(userText: String): String? {
             val text = userText.trim()
-            return text.takeIf { QUESTION.containsMatchIn(it) }?.take(MAX_QUERY)
+            return text.takeIf { QUESTION.containsMatchIn(it) || DETAIL.containsMatchIn(it) || NUMBER_NO.containsMatchIn(it) }?.take(MAX_QUERY)
         }
 
         private val QUESTION = Regex("^(what|what's|whats|which|when|how much|how many|tell me)\\b", RegexOption.IGNORE_CASE)
+
+        /** Something printed on a document, not the document ("marks card", "number plate"). */
+        private val DETAIL = Regex(
+            "\\b(numbers?|marks|scores?|grades?|c?gpa|percentage|expiry|expires?|expired|validity|valid (?:till|until|upto|up to)|" +
+                "date of birth|dob|blood group|ifsc)\\b(?!\\s*(?:card|sheet|list|memo|plate|certificate)s?\\b)",
+            RegexOption.IGNORE_CASE,
+        )
+
+        /** "dl no", "pan no": a bare "no" only after what it numbers ("photos with no people" isn't one). */
+        private val NUMBER_NO = Regex(
+            "\\b(dl|pan|aadhaa?r|licen[cs]e|passport|card|account|a/c|policy|roll|reg(?:ister)?)\\s*no\\b",
+            RegexOption.IGNORE_CASE,
+        )
 
         /** "me, shiyas", "me and shiyas", "taslim & shiyas" as separate names. */
         fun people(text: String?): List<String> =
             text.orEmpty().split(Regex("\\s*(?:,|&|/|\\band\\b|\\bwith\\b)\\s*", RegexOption.IGNORE_CASE))
                 .map { it.trim() }
                 .filter { it.isNotEmpty() }
+
+        /** [query] with a document's short name spelled out: "pan" → "PAN card", "dl" → "driving licence". */
+        fun documentQuery(query: String): String =
+            query.replace(Regex("\\bpan\\b(?!\\s*card)", RegexOption.IGNORE_CASE), "PAN card")
+                .replace(Regex("\\bdl\\b", RegexOption.IGNORE_CASE), "driving licence")
 
         /** What the photos are of, without the filler; null when nothing is left. */
         fun description(query: String): String? =

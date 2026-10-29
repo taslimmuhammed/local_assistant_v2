@@ -1,6 +1,10 @@
 package com.local.assistant.ui.chat
 
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.background
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.clickable
 import android.Manifest
 import android.content.Intent
@@ -18,6 +22,7 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.Spacer
@@ -32,8 +37,8 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.Send
+import androidx.compose.material.icons.automirrored.outlined.VolumeUp
 import androidx.compose.material.icons.outlined.Add
-import androidx.compose.material.icons.outlined.Check
 import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material.icons.outlined.DeleteOutline
 import androidx.compose.material.icons.outlined.Image
@@ -52,27 +57,41 @@ import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.SnackbarResult
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.material3.rememberDrawerState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.pointer.PointerInputChange
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalUriHandler
+import androidx.compose.ui.semantics.Role as SemanticsRole
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.disabled
+import androidx.compose.ui.semantics.onClick
+import androidx.compose.ui.semantics.role
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.Lifecycle
@@ -87,6 +106,7 @@ import com.local.assistant.llm.LlmService
 import com.local.assistant.media.RecordingState
 import com.local.assistant.ui.theme.AppColors
 import kotlinx.coroutines.launch
+import kotlin.math.roundToInt
 
 @Composable
 fun ChatScreen(
@@ -107,6 +127,7 @@ fun ChatScreen(
     val supportsAudio by viewModel.supportsAudio.collectAsStateWithLifecycle()
     val pendingAttachment by viewModel.pendingAttachment.collectAsStateWithLifecycle()
     val recording by viewModel.recordingState.collectAsStateWithLifecycle()
+    val speaking by viewModel.speaking.collectAsStateWithLifecycle()
     val droppedFromContext by viewModel.droppedFromContext.collectAsStateWithLifecycle()
     val chips by viewModel.chips.collectAsStateWithLifecycle()
     val askForNotifications by viewModel.askForNotifications.collectAsStateWithLifecycle()
@@ -307,6 +328,8 @@ fun ChatScreen(
 
                 ContextMeter(contextUsage)
 
+                if (speaking && recording == null) SpeakingBar(onStop = viewModel::stopSpeaking)
+
                 Composer(
                     // While the model loads, a message can still be sent: it waits for the engine.
                     // Not while the overlay's reply is running, though: one turn at a time.
@@ -469,6 +492,9 @@ private fun EmptyState(modifier: Modifier = Modifier) {
     )
 }
 
+/** What the round button at the end of the composer does right now. */
+private enum class ComposerAction { STOP, MIC, SEND, SEND_RECORDING }
+
 @Composable
 private fun Composer(
     enabled: Boolean,
@@ -487,128 +513,257 @@ private fun Composer(
     onCancelRecording: () -> Unit,
 ) {
     var text by remember { mutableStateOf("") }
+    // WhatsApp's voice messages: hold the mic to talk and let go to send, sliding left cancels;
+    // a quick tap records hands-free until send or discard. A voice message goes on its own.
+    var holding by remember { mutableStateOf(false) }
+    var slide by remember { mutableFloatStateOf(0f) }
 
     Column(Modifier.navigationBarsPadding()) {
         HorizontalDivider(color = AppColors.Border)
 
-        if (recording != null) {
-            RecordingBar(recording, onCancelRecording, onStopRecording)
-            return@Column
-        }
-
-        pendingAttachment?.let { PendingAttachmentChip(it, onDiscardAttachment) }
+        if (recording == null) pendingAttachment?.let { PendingAttachmentChip(it, onDiscardAttachment) }
 
         // WhatsApp's rule: the mic turns into send as soon as there is something to send.
         val hasContent = text.isNotBlank() || pendingAttachment != null
-        val showMic = supportsAudio && !hasContent && !isGenerating
+        val action = when {
+            recording != null -> ComposerAction.SEND_RECORDING
+            isGenerating -> ComposerAction.STOP
+            supportsAudio && !hasContent -> ComposerAction.MIC
+            else -> ComposerAction.SEND
+        }
 
         Row(
             modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 10.dp),
             verticalAlignment = Alignment.Bottom,
             horizontalArrangement = Arrangement.spacedBy(4.dp),
         ) {
-            if (supportsImages) {
-                IconButton(
-                    onClick = onPickImage,
-                    enabled = enabled && !isGenerating,
-                    modifier = Modifier.size(44.dp),
+            if (recording != null) {
+                RecordingInfo(recording, holding, slide, onCancelRecording, Modifier.weight(1f))
+            } else {
+                if (supportsImages) {
+                    IconButton(
+                        onClick = onPickImage,
+                        enabled = enabled && !isGenerating,
+                        modifier = Modifier.size(44.dp),
+                    ) {
+                        Icon(
+                            Icons.Outlined.Image,
+                            contentDescription = "Attach image",
+                            tint = if (enabled && !isGenerating) AppColors.TextSecondary else AppColors.Border,
+                        )
+                    }
+                }
+
+                Box(
+                    modifier = Modifier
+                        .weight(1f)
+                        .clip(RoundedCornerShape(24.dp))
+                        .background(AppColors.SurfaceMuted)
+                        .padding(horizontal = 16.dp, vertical = 12.dp),
                 ) {
-                    Icon(
-                        Icons.Outlined.Image,
-                        contentDescription = "Attach image",
-                        tint = if (enabled && !isGenerating) AppColors.TextSecondary else AppColors.Border,
+                    if (text.isEmpty()) {
+                        Text(
+                            text = "Message",
+                            style = MaterialTheme.typography.bodyLarge,
+                            color = AppColors.TextSecondary,
+                        )
+                    }
+                    BasicTextField(
+                        value = text,
+                        onValueChange = {
+                            text = it
+                            onTyping()
+                        },
+                        enabled = enabled,
+                        textStyle = MaterialTheme.typography.bodyLarge.merge(
+                            TextStyle(color = AppColors.TextPrimary),
+                        ),
+                        cursorBrush = SolidColor(AppColors.TextPrimary),
+                        keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(
+                            imeAction = ImeAction.Default,
+                        ),
+                        maxLines = 6,
+                        modifier = Modifier.fillMaxWidth(),
                     )
                 }
             }
 
-            Box(
-                modifier = Modifier
-                    .weight(1f)
-                    .clip(RoundedCornerShape(24.dp))
-                    .background(AppColors.SurfaceMuted)
-                    .padding(horizontal = 16.dp, vertical = 12.dp),
-            ) {
-                if (text.isEmpty()) {
-                    Text(
-                        text = "Message",
-                        style = MaterialTheme.typography.bodyLarge,
-                        color = AppColors.TextSecondary,
-                    )
-                }
-                BasicTextField(
-                    value = text,
-                    onValueChange = {
-                        text = it
-                        onTyping()
-                    },
-                    enabled = enabled,
-                    textStyle = MaterialTheme.typography.bodyLarge.merge(
-                        TextStyle(color = AppColors.TextPrimary),
-                    ),
-                    cursorBrush = SolidColor(AppColors.TextPrimary),
-                    keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(
-                        imeAction = ImeAction.Default,
-                    ),
-                    maxLines = 6,
-                    modifier = Modifier.fillMaxWidth(),
-                )
+            val actionEnabled = when (action) {
+                ComposerAction.STOP, ComposerAction.SEND_RECORDING -> true
+                ComposerAction.MIC -> enabled
+                ComposerAction.SEND -> enabled && hasContent
             }
-
-            val actionEnabled = isGenerating || showMic || (enabled && hasContent)
-            IconButton(
-                onClick = {
-                    when {
-                        isGenerating -> onStop()
-                        showMic -> onStartRecording()
-                        else -> {
+            ComposerButton(
+                action = action,
+                enabled = actionEnabled,
+                holding = holding,
+                onClick = { pressed ->
+                    when (pressed) {
+                        ComposerAction.STOP -> onStop()
+                        // Without a hold (TalkBack, or a tap): hands-free recording.
+                        ComposerAction.MIC -> onStartRecording()
+                        ComposerAction.SEND_RECORDING -> onStopRecording()
+                        ComposerAction.SEND -> {
                             onSend(text)
                             text = ""
                         }
                     }
                 },
-                enabled = actionEnabled,
-                modifier = Modifier
-                    .size(44.dp)
-                    .clip(CircleShape)
-                    .background(if (actionEnabled) AppColors.Accent else AppColors.Border),
-            ) {
-                Icon(
-                    imageVector = when {
-                        isGenerating -> Icons.Outlined.Stop
-                        showMic -> Icons.Outlined.Mic
-                        else -> Icons.AutoMirrored.Outlined.Send
-                    },
-                    contentDescription = when {
-                        isGenerating -> "Stop"
-                        showMic -> "Record voice message"
-                        else -> "Send"
-                    },
-                    tint = AppColors.OnAccent,
-                    modifier = Modifier.size(20.dp),
-                )
-            }
+                onHoldStart = {
+                    holding = true
+                    onStartRecording()
+                },
+                onSlide = { slide = it },
+                onHoldEnd = { result ->
+                    holding = false
+                    slide = 0f
+                    when (result) {
+                        HoldResult.SEND -> onStopRecording()
+                        HoldResult.CANCEL -> onCancelRecording()
+                        HoldResult.KEEP_RECORDING -> Unit
+                    }
+                },
+            )
         }
     }
 }
 
-/** Replaces the composer while recording: elapsed time, a cancel, and a stop that keeps it. */
+private enum class HoldResult { SEND, CANCEL, KEEP_RECORDING }
+
+/**
+ * The composer's round button. On the mic, pressing starts recording at once: let go after
+ * [TAP_MS] and it's sent, slide [SLIDE_TO_CANCEL] left and it's dropped, let go sooner (a tap)
+ * and it keeps recording hands-free. Any other action is a plain tap.
+ *
+ * One gesture handler for every action, so a press that starts on the mic keeps being followed
+ * after the button turns into the recording's send.
+ */
 @Composable
-private fun RecordingBar(
+private fun ComposerButton(
+    action: ComposerAction,
+    enabled: Boolean,
+    holding: Boolean,
+    onClick: (ComposerAction) -> Unit,
+    onHoldStart: () -> Unit,
+    onSlide: (Float) -> Unit,
+    onHoldEnd: (HoldResult) -> Unit,
+) {
+    val currentAction by rememberUpdatedState(action)
+    val currentEnabled by rememberUpdatedState(enabled)
+    val click by rememberUpdatedState(onClick)
+    val holdStart by rememberUpdatedState(onHoldStart)
+    val slideTo by rememberUpdatedState(onSlide)
+    val holdEnd by rememberUpdatedState(onHoldEnd)
+    val cancelAtPx = with(LocalDensity.current) { SLIDE_TO_CANCEL.toPx() }
+    val scale by animateFloatAsState(if (holding) 1.3f else 1f, label = "mic")
+    val label = when (action) {
+        ComposerAction.STOP -> "Stop"
+        ComposerAction.MIC -> "Record voice message. Hold to talk, or tap for hands-free."
+        ComposerAction.SEND_RECORDING -> "Send voice message"
+        ComposerAction.SEND -> "Send"
+    }
+
+    Box(
+        contentAlignment = Alignment.Center,
+        modifier = Modifier
+            .size(44.dp)
+            .graphicsLayer {
+                scaleX = scale
+                scaleY = scale
+            }
+            .clip(CircleShape)
+            .background(if (enabled) AppColors.Accent else AppColors.Border)
+            .semantics {
+                role = SemanticsRole.Button
+                contentDescription = label
+                if (!enabled) disabled()
+                onClick(label) {
+                    click(currentAction)
+                    true
+                }
+            }
+            .pointerInput(Unit) {
+                awaitEachGesture {
+                    val down = awaitFirstDown()
+                    if (!currentEnabled) return@awaitEachGesture
+                    val pressed = currentAction
+                    if (pressed == ComposerAction.MIC) holdStart()
+                    var cancelled = false
+                    var released: PointerInputChange? = null
+                    while (true) {
+                        val change = awaitPointerEvent().changes.firstOrNull { it.id == down.id } ?: break
+                        if (pressed == ComposerAction.MIC) {
+                            val dx = (change.position.x - down.position.x).coerceAtMost(0f)
+                            slideTo(dx)
+                            if (!cancelled && dx < -cancelAtPx) cancelled = true
+                            change.consume()
+                        }
+                        if (!change.pressed) {
+                            released = change
+                            break
+                        }
+                    }
+                    if (pressed == ComposerAction.MIC) {
+                        val heldMs = (released?.uptimeMillis ?: down.uptimeMillis) - down.uptimeMillis
+                        holdEnd(
+                            when {
+                                cancelled -> HoldResult.CANCEL
+                                // A tap, or a press the system took away: carry on hands-free.
+                                released == null || heldMs < TAP_MS -> HoldResult.KEEP_RECORDING
+                                else -> HoldResult.SEND
+                            },
+                        )
+                    } else if (released != null) {
+                        val inside = released.position.x in 0f..size.width.toFloat() &&
+                            released.position.y in 0f..size.height.toFloat()
+                        if (inside) click(pressed)
+                    }
+                }
+            },
+    ) {
+        Icon(
+            imageVector = when {
+                // Held, it stays a mic, as on WhatsApp: letting go is what sends.
+                holding -> Icons.Outlined.Mic
+                action == ComposerAction.STOP -> Icons.Outlined.Stop
+                action == ComposerAction.MIC -> Icons.Outlined.Mic
+                else -> Icons.AutoMirrored.Outlined.Send
+            },
+            contentDescription = null,
+            tint = AppColors.OnAccent,
+            modifier = Modifier.size(20.dp),
+        )
+    }
+}
+
+/**
+ * Where the text field was, while recording: elapsed time, and either how to cancel (held) or
+ * a discard button and the time left (hands-free). The cap is a hard stop, so near it the time
+ * left shows either way.
+ */
+@Composable
+private fun RecordingInfo(
     recording: RecordingState,
-    onCancel: () -> Unit,
-    onStop: () -> Unit,
+    holding: Boolean,
+    slide: Float,
+    onDiscard: () -> Unit,
+    modifier: Modifier = Modifier,
 ) {
     Row(
-        modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 10.dp),
+        modifier = modifier.height(44.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(10.dp),
     ) {
-        IconButton(onClick = onCancel, modifier = Modifier.size(44.dp)) {
-            Icon(
-                Icons.Outlined.DeleteOutline,
-                contentDescription = "Discard recording",
-                tint = AppColors.TextSecondary,
-            )
+        if (holding) {
+            Spacer(Modifier.width(8.dp))
+        } else {
+            IconButton(onClick = onDiscard, modifier = Modifier.size(44.dp)) {
+                Icon(
+                    Icons.Outlined.DeleteOutline,
+                    contentDescription = "Discard recording",
+                    tint = AppColors.TextSecondary,
+                )
+            }
         }
 
         RecordingDot()
@@ -619,30 +774,56 @@ private fun RecordingBar(
             color = AppColors.TextPrimary,
         )
 
-        // The cap is a hard stop, so say how much room is left rather than cutting off silently.
-        Text(
-            text = "${recording.remainingSeconds}s left",
-            style = MaterialTheme.typography.bodyMedium,
-            color = if (recording.isNearlyOutOfTime) AppColors.Danger else AppColors.TextSecondary,
-            modifier = Modifier.weight(1f),
-        )
-
-        IconButton(
-            onClick = onStop,
-            modifier = Modifier
-                .size(44.dp)
-                .clip(CircleShape)
-                .background(AppColors.Accent),
-        ) {
-            Icon(
-                Icons.Outlined.Check,
-                contentDescription = "Finish recording",
-                tint = AppColors.OnAccent,
-                modifier = Modifier.size(20.dp),
+        when {
+            recording.isNearlyOutOfTime || !holding -> Text(
+                text = "${recording.remainingSeconds}s left",
+                style = MaterialTheme.typography.bodyMedium,
+                color = if (recording.isNearlyOutOfTime) AppColors.Danger else AppColors.TextSecondary,
+                modifier = Modifier.weight(1f),
+            )
+            else -> Text(
+                text = "‹ Slide to cancel",
+                style = MaterialTheme.typography.bodyMedium,
+                color = AppColors.TextSecondary,
+                textAlign = TextAlign.End,
+                modifier = Modifier
+                    .weight(1f)
+                    .padding(end = 8.dp)
+                    .offset { IntOffset((slide / 2).roundToInt(), 0) },
             )
         }
     }
 }
+
+/** Shown while the reply to a voice message is read aloud. */
+@Composable
+private fun SpeakingBar(onStop: () -> Unit) {
+    Row(
+        modifier = Modifier.fillMaxWidth().padding(start = 16.dp, end = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        Icon(
+            Icons.AutoMirrored.Outlined.VolumeUp,
+            contentDescription = null,
+            tint = AppColors.TextSecondary,
+            modifier = Modifier.size(18.dp),
+        )
+        Text(
+            "Reading the reply aloud",
+            style = MaterialTheme.typography.bodyMedium,
+            color = AppColors.TextSecondary,
+            modifier = Modifier.weight(1f),
+        )
+        TextButton(onClick = onStop) { Text("Stop") }
+    }
+}
+
+/** Shorter than this, a press on the mic is a tap: hands-free recording rather than hold-to-talk. */
+private const val TAP_MS = 400L
+
+/** How far left a held mic has to slide to throw the recording away. */
+private val SLIDE_TO_CANCEL = 96.dp
 
 @Composable
 private fun PendingAttachmentChip(

@@ -70,15 +70,24 @@ object SpeechText {
 /**
  * Cuts a reply into pieces to speak while it is still streaming, so the voice starts after the
  * first sentence instead of after the whole answer. Each [push] gets the reply so far and returns
- * the sentences completed since the last one; [finish] returns whatever is left.
+ * the pieces completed since the last one; [finish] returns whatever is left.
+ *
+ * With [clauses], a piece can also end at a comma (or ; : —) rather than the full stop: while
+ * the reply is starting, so the voice doesn't wait for a whole first sentence (the natural voice
+ * needs about half a second per second of speech before it can play one), and in a long
+ * sentence, so it keeps up. Short of [MIN_CLAUSE_WORDS] words a clause isn't worth a piece.
  */
-class SpeechChunker {
+class SpeechChunker(private val clauses: Boolean = true) {
 
     /** How much of the raw reply has been handed out. */
     private var spokenUpTo = 0
 
+    /** Words handed out so far: under [EARLY_WORDS], the reply is still starting. */
+    private var wordsOut = 0
+
     fun push(reply: String): List<String> {
-        val end = lastBoundary(reply)
+        var end = lastBoundary(reply)
+        if (clauses) end = maxOf(end, clauseBoundary(reply, end))
         if (end <= spokenUpTo) return emptyList()
         return take(reply, end)
     }
@@ -97,7 +106,9 @@ class SpeechChunker {
         val piece = reply.substring(spokenUpTo, end)
         spokenUpTo = end
         val spoken = SpeechText.clean(piece)
-        return if (spoken.isBlank() || spoken.none { it.isLetterOrDigit() }) emptyList() else listOf(spoken)
+        if (spoken.isBlank() || spoken.none { it.isLetterOrDigit() }) return emptyList()
+        wordsOut += words(spoken)
+        return listOf(spoken)
     }
 
     /**
@@ -106,8 +117,7 @@ class SpeechChunker {
      * which would be spoken as a fragment.
      */
     private fun lastBoundary(reply: String): Int {
-        val fences = FENCE.findAll(reply).count()
-        val limit = if (fences % 2 == 1) reply.lastIndexOf("```") else reply.length
+        val limit = openLimit(reply)
         var i = limit - 1
         while (i > spokenUpTo) {
             val c = reply[i]
@@ -118,7 +128,47 @@ class SpeechChunker {
         return spokenUpTo
     }
 
+    /**
+     * Where the last clause worth speaking on its own ends, after [from]: a comma, semicolon,
+     * colon or dash followed by a space ("1,000" and "8:30" have none), once there are
+     * [MIN_CLAUSE_WORDS] words to say, and only while the reply is starting or the piece has
+     * grown to [LONG_PIECE_WORDS]. [from] when there is none.
+     */
+    private fun clauseBoundary(reply: String, from: Int): Int {
+        val start = maxOf(from, spokenUpTo)
+        val limit = openLimit(reply)
+        var best = start
+        var i = start
+        while (i < limit - 1) {
+            val c = reply[i]
+            if ((c in ",;:" || c == '—' || c == '–') && reply[i + 1].isWhitespace()) {
+                val n = words(reply.substring(spokenUpTo, i + 1))
+                if (n >= MIN_CLAUSE_WORDS && (wordsOut < EARLY_WORDS || n >= LONG_PIECE_WORDS)) best = i + 1
+            }
+            i++
+        }
+        return best
+    }
+
+    /** The end of what may be spoken: before a code block that is still open. */
+    private fun openLimit(reply: String): Int {
+        val fences = FENCE.findAll(reply).count()
+        return if (fences % 2 == 1) reply.lastIndexOf("```") else reply.length
+    }
+
+    private fun words(text: String): Int = text.split(SPACE).count { word -> word.any { it.isLetterOrDigit() } }
+
     private companion object {
         val FENCE = Regex("```")
+        val SPACE = Regex("\\s+")
+
+        /** A clause shorter than this goes with what follows: "Sure," alone is too short to be worth it. */
+        const val MIN_CLAUSE_WORDS = 2
+
+        /** Until this many words have been handed out, the reply is starting and clauses go at once. */
+        const val EARLY_WORDS = 8
+
+        /** Later on, a sentence is cut at a clause only once the piece is this long. */
+        const val LONG_PIECE_WORDS = 12
     }
 }

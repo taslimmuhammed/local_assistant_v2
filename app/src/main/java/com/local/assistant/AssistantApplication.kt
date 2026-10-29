@@ -14,6 +14,7 @@ import com.local.assistant.gallery.GalleryIndex
 import com.local.assistant.gallery.GalleryModel
 import com.local.assistant.gallery.PhotoLibrary
 import com.local.assistant.gallery.PhotoThumbnails
+import com.local.assistant.gallery.PhotoReader
 import com.local.assistant.gallery.PhotoTools
 import com.local.assistant.gallery.faces.FaceFinder
 import com.local.assistant.gallery.faces.FaceIndex
@@ -31,6 +32,9 @@ import com.local.assistant.media.AttachmentStore
 import com.local.assistant.media.AudioRecorder
 import com.local.assistant.voice.AudioFocus
 import com.local.assistant.voice.Speaker
+import com.local.assistant.voice.NaturalVoices
+import com.local.assistant.voice.VoicePack
+import com.local.assistant.voice.VoicePackInstaller
 import com.local.assistant.data.prefs.SecretStore
 import com.local.assistant.device.AndroidContacts
 import com.local.assistant.device.AndroidPhone
@@ -377,6 +381,9 @@ class AppContainer(context: Context) {
         }
     }
 
+    /** A photo question answered from the found photo in a short conversation of its own. */
+    private val photoReader = PhotoReader(llmBackend, conversations)
+
     val toolExecutor = ToolExecutor(
         store = memoryRepository,
         reminders = reminderScheduler,
@@ -407,6 +414,7 @@ class AppContainer(context: Context) {
                 }
             },
             mayRead = { context.getSystemService(android.app.KeyguardManager::class.java)?.isKeyguardLocked != true },
+            reader = { path, question -> if ((llmService.capabilities.value?.visionTokensPerImage ?: 0) > 0) photoReader.answer(path, question) else null },
         ),
     )
 
@@ -515,10 +523,20 @@ class AppContainer(context: Context) {
     /** Sends messages and streams replies for the chat and the assistant overlay alike. */
     val chatSender = ChatSender(chatRepository, llmService, turnRunner, appScope)
 
-    /** The assistant's voice: the phone's text-to-speech, bound the first time it speaks. */
-    val speaker = Speaker(context, settings)
+    /** The natural voices' downloads (Settings › Voice). Once one arrives, the assistant speaks with it. */
+    val voicePacks: List<VoicePackInstaller> = VoicePack.ALL.map { pack ->
+        VoicePackInstaller(context, pack, appScope, onInstalled = { settings.naturalVoice = NaturalVoices.firstOf(pack).id })
+    }
+
+    fun voicePack(pack: VoicePack): VoicePackInstaller = voicePacks.first { it.pack == pack }
+
+    /** The assistant's voice: the chosen natural voice when it's here, else the phone's text-to-speech. */
+    val speaker = Speaker(context, settings, installed = { pack -> voicePack(pack).installed.value })
 
     val audioFocus = AudioFocus(context)
+
+    /** The chat screen's own hold on other audio, so it and the overlay never release each other's. */
+    val chatAudioFocus = AudioFocus(context)
 
     /**
      * Memory search comes with the first chat model: once one is installed (downloaded or

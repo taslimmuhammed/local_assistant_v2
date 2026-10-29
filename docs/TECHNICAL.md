@@ -568,8 +568,14 @@ upright from EXIF and scaled so the longest edge is 768 px (`MediaLimits.MAX_IMA
 camera photo would spend memory and vision tokens without showing the model more.
 
 **Voice** follows the WhatsApp convention: the button is a mic while the composer is empty and turns
-into send as soon as there is text or an attachment. Recording replaces the composer with elapsed
-time, remaining seconds, discard and finish.
+into send as soon as there is text or an attachment. Hold the mic to talk and let go to send;
+slide left to cancel; a quick tap (under 400 ms) records hands-free, with discard and send. A
+voice message always goes on its own, never with text (user's request, 2026-10-29), and the
+reply to it is read aloud sentence by sentence as it streams, through the same `Speaker` as the
+overlay (natural voice if installed), unless Answer out loud is off. A "Reading the reply aloud
+· Stop" strip shows meanwhile; recording, sending, switching chats or Stop end it. Music pauses
+while recording and speaking (the chat's own `AudioFocus`, so it and the overlay never release
+each other's).
 
 Audio format is dictated by the runtime, not chosen:
 
@@ -680,17 +686,48 @@ stops hard at the cap rather than letting the runtime reject the clip.
   them, and all six document requests go to find_photos, while "how do I renew a driving license
   in Kerala?" still goes online.
 - **Questions about a photo.** "What was my SSLC score?" needs the answer, not only the
-  certificate. When the user's message asks what something says ("what…", "which…", "when…",
-  "how much/many…", "tell me…"; not "show me…" or "where is…"), that is the question, else
-  `find_photos`' own `question` argument: the model passed it only some of the time, and once
-  reworded a plus-two question as an SSLC one. Given only a question, the search is by it. The
-  best match that isn't a video then goes to the model as an image (1,024 px) with a note: say
-  what document it is, answer from it reading numbers exactly, or say it isn't there and point
-  to the photos shown. Gemma's template has no place for an image in a tool message ("Provided
-  more images than expected"), so a result with an image goes back as a message of its own,
-  marked as tool results (`ToolLoop`). Over the lock screen, where photos stay hidden until
-  unlock, nothing is read. On the phone it read the SSLC grades, the licence and PAN numbers, and
-  said when the blood group wasn't on the photo. The photo model's vision now runs on the CPU:
+  certificate. The user's message is the question when it asks what something says ("what…",
+  "which…", "when…", "how much/many…", "tell me…") or asks for something printed on a document,
+  however it's put ("fetch my pan number", "get my sslc marks", "my DL no?"); not when it asks
+  for the document or photos ("show me my PAN card", "get my aadhaar card", "my marks card").
+  Otherwise it's `find_photos`' own `question` argument: the model passed it only some of the
+  time, never for "fetch / get / give me … number" (0 of 10 on the phone), and once reworded a
+  plus-two question as an SSLC one. Given only a question, the search is by it. Asking about a
+  document, "pan" and "dl" are searched as "PAN card" and "driving licence": "pan" alone found a
+  frying pan.
+- **Reading it** (`gallery/PhotoReader`). The best match that isn't a video (1,024 px) is read
+  in a short conversation of its own at the background sampling, not by the chat. In the chat,
+  past ~2,000 tokens of instructions and at the chat's temperature, the PAN came out differently
+  in one run of two. There, a passport number was made up ("P…") from a photo that shows none,
+  and plus-two maths marks were given as SSLC ones. Read on its own, every number came out the same
+  five times in five.
+  - An ID number asked for (PAN, Aadhaar, driving licence, passport, card) is copied on its own,
+    then checked in code before it is given. The checks are its shape (`SensitiveText`), a
+    card's Luhn digit and Aadhaar's Verhoeff one; a passport number counts only on a photo the
+    model calls a passport. One that fails isn't given: the reply says what was seen. The
+    credit card came out as 12 digits of its 16, the same way at 1,024 and 2,048 px and read
+    group by group, so the reply says "I could only make out 12 digits… so I won't guess the
+    rest". The copy prompt's wording matters: "the 12-digit Aadhaar number… Reply with only
+    that" made the Aadhaar number fail its check twice in two. Only digit counts and pass/fail
+    are logged, never the number.
+  - Other questions are answered in a sentence or two, the document named first by its printed
+    title. With an example document in the prompt ("Your SSLC mark sheet shows…"), the plus-two
+    certificate was called an SSLC mark sheet.
+  - The reply is written by the tool and ends the turn (`ActionResult.reply`, as with sums). The
+    chat's conversation was closed for the read, never two at once, so the next message in that
+    chat rebuilds it: "thanks!" after an answer got its first words 8.1–9.5 s later. Over the lock
+    screen nothing is read.
+  - Without vision, or if the reader isn't wired in, the photo goes to the chat model with a
+    note, as before. Gemma's template has no place for an image in a tool message ("Provided more
+    images than expected"), so a result with an image goes back as a message of its own, marked
+    as tool results (`ToolLoop`).
+- **Measured on the phone** (2026-10-28, `PhotoReadingEvalTest`: 18 questions twice, each in a new
+  chat, memory in an empty database so nothing came from memory or earlier chats; numbers masked
+  in the results and compared by hash). A photo was read on 36 of 36 turns, against 25 when the
+  chat read it. The PAN came out the same 6 times in 6 over three wordings, the licence number 6
+  in 6, and the Aadhaar number 2 in 2, passing its check digit. Neither the card number nor a
+  passport number was made up. The SSLC questions got the CGPA, and the maths one said its
+  photo was the plus-two certificate. Each turn took 12–22 s. The photo model's vision now runs on the CPU:
   loaded on the GPU, it broke the chat model's vision for any image ("TensorBuffer must have all
   static dimensions"), found photos and photos sent in a chat alike.
 - **Dates.** `find_photos` takes `when` in the user's words: "last December", "2023", "this
@@ -887,6 +924,49 @@ that are installed and run offline, in the phone's language or English (`voice/V
 default it is the engine's default voice; Settings → Assistant lists the others (tap one to hear
 it) and has three paces. Replies are cleaned for speech first (`voice/SpeechText`): no markdown
 marks, links, code blocks or emoji read out. Music pauses while the assistant listens and speaks.
+
+**The natural voice** (user's request, 2026-10-28: "human like audio … least RAM") is Kokoro-82M
+v1.0 with the `af_heart` voice, run on the CPU by sherpa-onnx (`voice/NaturalVoice`), and offered
+at the top of Settings → Assistant → Voice as a 334 MB download. Once it is installed the
+assistant uses it; the phone's voice stays as the fallback for anything it can't say (not
+installed, or the engine fails to load).
+
+- Chosen from seven small models compared on the Mac with sherpa-onnx (listening page:
+  claude.ai/artifact/ST4cvjDmpgiMHLjz9jtDbL): the most natural, and the only one with no word
+  slips on eight typical replies (times, rupees, Indian names). Pocket TTS added words in 5 of 8
+  ("after 6.30" for "after 6"); Supertonic 3 is lighter but flatter and no longer developed.
+- **sherpa-onnx is pinned to 1.13.8**, the static-link AAR (one 24 MB library per ABI, fetched
+  and checked by the `fetchSherpaOnnx` Gradle task, since it isn't on Maven). 2.0 removed eSpeak
+  NG, and Kokoro then silently skips every word its lexicon lacks: numbers, names, even
+  "results". eSpeak NG is GPL-3.0.
+- **The pack** (`voice/VoicePack`, `voice/VoicePackInstaller`) is the project's
+  `kokoro-multi-lang-v1_0.tar.bz2`, downloaded resumably, checked against its SHA-256, and
+  unpacked (commons-compress) beside its final folder, then moved in. Only the model, the voice
+  table, the US lexicon and eSpeak's English data are kept: 360 MB in `files/voice/`. The int8
+  build is a third the size but was 2.5× slower on the Mac and didn't get faster with threads.
+- **Pieces** (`SpeechChunker`, chat and overlay alike): a sentence, or a clause (up to a comma,
+  semicolon, colon or dash, at least 2 words) while the reply is starting (its first 8 words) or
+  once a piece reaches 12 words. Before 2026-10-29 only whole sentences went, so the voice waited
+  for the first full stop and then for that whole sentence to be made (the user heard the lag);
+  a one-sentence reply was only spoken once the text was done. `NaturalVoiceEvalTest#whileWriting`
+  compares both ways on real streaming replies.
+- **Playback**: the pieces are synthesised one after another on a
+  6-thread engine while the previous one plays through an `AudioTrack` (assistant usage, float
+  PCM at 24 kHz). The model loads as the overlay opens (`Speaker.prepare`, beside
+  `prepareFresh`) and is released after two quiet minutes or when Android trims memory.
+- **Measured on the OnePlus** (`NaturalVoiceEvalTest`, `-e eval natural-voice`; `#speed` and
+  `#firstSound`): install 178 s download plus 145 s check and unpack; loads in 0.8–1.3 s; PSS
+  +472–481 MB loaded, +604–613 MB peak. Speed over two runs, × real time: 0.85–0.90 on 2
+  threads, 1.49–1.57 on 4, 1.89–1.95 on 6; while the chat model writes, 1.38–1.39 on 4 and 1.79
+  on 6, hence 6. That is well below the Mac's 3.4× on 4. The phone's audio, run through
+  Moonshine on the Mac, had no dropped or wrong words. First sound through `NaturalVoice`: 0.68 s
+  loaded as the overlay opens and the reply starts "Sure!", 1.65 s when it starts with a long
+  sentence, 1.84 s with the voice not loaded yet. After a short first piece there is a pause
+  while the next, longer sentence is made.
+- **Trap**: sherpa-onnx's native side calls the audio callback's `invoke(float[]): Integer` by
+  name. A Kotlin 2 lambda only has the erased `invoke(Object)`, so the lookup fails and the app
+  aborts on the first sentence (`JNI DETECTED ERROR … NoSuchMethodError`). The callback is an
+  `object : (FloatArray) -> Int`. `generate()` without a callback isn't affected.
 
 ## Per-reply speed
 
