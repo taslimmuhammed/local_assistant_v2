@@ -57,6 +57,7 @@ class AssistActivity : FragmentActivity() {
         // Asking and answering take a while; on the lock screen, the screen timing out would take
         // the panel with it.
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        if (intent.getBooleanExtra(EXTRA_WAKE_WORD, false)) turnScreenOn()
         if (isLocked()) {
             // Over the lock screen either way: to talk, or to say how talking there is turned on.
             showWhenLocked()
@@ -85,10 +86,14 @@ class AssistActivity : FragmentActivity() {
         }
     }
 
-    /** Held again while open: listen again. */
+    /**
+     * Held again while open: listen again. The wake word said while it's open listens even when
+     * typing, and cuts off an answer being read out (`startListening` stops the voice).
+     */
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
-        if (!lockedOut.value && viewModel.input.value == AssistViewModel.Input.VOICE && micGranted()) viewModel.startListening()
+        val wakeWord = intent.getBooleanExtra(EXTRA_WAKE_WORD, false)
+        if (!lockedOut.value && micGranted() && (wakeWord || viewModel.input.value == AssistViewModel.Input.VOICE)) viewModel.startListening()
     }
 
     override fun onStop() {
@@ -105,6 +110,16 @@ class AssistActivity : FragmentActivity() {
         } else {
             @Suppress("DEPRECATION")
             window.addFlags(WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED)
+        }
+    }
+
+    /** Called by the wake word with the screen off (only allowed on the lock screen): light it. */
+    private fun turnScreenOn() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
+            setTurnScreenOn(true)
+        } else {
+            @Suppress("DEPRECATION")
+            window.addFlags(WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON)
         }
     }
 
@@ -169,6 +184,11 @@ class AssistActivity : FragmentActivity() {
         if (isFinishing) return
         finish()
         skipTransition(opening = false)
+    }
+
+    companion object {
+        /** Opened by the wake word (wake/WakeWatch) rather than the power button. */
+        const val EXTRA_WAKE_WORD = "com.local.assistant.extra.WAKE_WORD"
     }
 
     private fun skipTransition(opening: Boolean) {

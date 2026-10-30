@@ -76,6 +76,10 @@ import com.local.assistant.voice.NaturalVoices
 import com.local.assistant.voice.VoiceOption
 import com.local.assistant.voice.VoicePack
 import com.local.assistant.voice.VoicePackInstaller
+import com.local.assistant.wake.WakeSamples
+import com.local.assistant.wake.WakeTry
+import com.local.assistant.wake.WakeWord
+import com.local.assistant.wake.WakeWordMode
 import kotlinx.coroutines.launch
 import java.time.LocalDate
 
@@ -235,9 +239,13 @@ private fun AssistantSettings(settings: SettingsStore, speaker: Speaker, voicePa
     val context = LocalContext.current
     val lifecycle = LocalLifecycleOwner.current.lifecycle
     var isAssistant by remember { mutableStateOf(AssistantRole.isDefault(context)) }
+    var serviceActive by remember { mutableStateOf(AssistantRole.serviceActive(context)) }
     // Checked again on the way back from the system's page, where it is changed.
     LaunchedEffect(lifecycle) {
-        lifecycle.repeatOnLifecycle(Lifecycle.State.RESUMED) { isAssistant = AssistantRole.isDefault(context) }
+        lifecycle.repeatOnLifecycle(Lifecycle.State.RESUMED) {
+            isAssistant = AssistantRole.isDefault(context)
+            serviceActive = AssistantRole.serviceActive(context)
+        }
     }
     NavRow(
         "Power button",
@@ -270,13 +278,10 @@ private fun AssistantSettings(settings: SettingsStore, speaker: Speaker, voicePa
         AppSwitch(checked = keepReady, onCheckedChange = {
             keepReady = it
             settings.keepAssistantReady = it
-            if (it) {
-                KeepReadyService.start(context)
-                llmService.warmUp()
-            } else {
-                // The model goes the next time Android asks for memory back, as before.
-                KeepReadyService.stop(context)
-            }
+            // Off, the model goes the next time Android asks for memory back, as before; the
+            // service stays if it is listening for the wake word.
+            KeepReadyService.update(context)
+            if (it) llmService.warmUp()
         })
     }
 
@@ -326,6 +331,8 @@ private fun AssistantSettings(settings: SettingsStore, speaker: Speaker, voicePa
             dismissButton = { TextButton(onClick = { confirmingLockScreen = false }) { Text("Keep it off") } },
         )
     }
+
+    WakeWordSettings(settings, onLockScreen, ready = isAssistant && serviceActive)
 
     var speak by remember { mutableStateOf(settings.speakReplies) }
     Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -568,6 +575,253 @@ private fun VoicePackChoices(
 }
 
 /**
+ * "Hey Luna". Off by default; the microphone is asked for when it is first turned on. It
+ * listens in the keep-ready service (KeepReadyService), so that starts or stops with it.
+ */
+@Composable
+private fun WakeWordSettings(settings: SettingsStore, onLockScreen: Boolean, ready: Boolean) {
+    val context = LocalContext.current
+    var mode by remember { mutableStateOf(settings.wakeWord) }
+    var wanted by remember { mutableStateOf<WakeWordMode?>(null) }
+    var micRefused by remember { mutableStateOf(false) }
+    fun choose(choice: WakeWordMode) {
+        mode = choice
+        settings.wakeWord = choice
+        KeepReadyService.update(context)
+    }
+    val micPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        micRefused = !granted
+        wanted?.let { if (granted) choose(it) }
+        wanted = null
+    }
+    val scope = rememberCoroutineScope()
+    var trying by remember { mutableStateOf(false) }
+    var tried by remember { mutableStateOf<WakeTry.Result?>(null) }
+    fun tryIt() {
+        trying = true
+        tried = null
+        scope.launch {
+            tried = runCatching { WakeTry.listen(context) }.getOrNull()
+            trying = false
+        }
+    }
+    val tryPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        micRefused = !granted
+        if (granted) tryIt()
+    }
+    Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)) {
+        Text("Wake word", style = MaterialTheme.typography.bodyLarge, color = AppColors.TextPrimary)
+        Text(
+            "Say \u201c${WakeWord.PHRASE}\u201d to open the assistant, from anywhere, this app included. A small model on the phone listens for it; nothing it hears is kept or sent. " +
+                "Android shows the green microphone dot while it listens. It pauses while you're recording a question, during calls, and " +
+                if (onLockScreen) "nowhere else." else "while the phone is locked, since the assistant is off on the lock screen.",
+            style = MaterialTheme.typography.bodySmall,
+            color = AppColors.TextSecondary,
+        )
+        for ((choice, label, note) in WAKE_WORD_CHOICES) {
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .selectable(selected = choice == mode, role = Role.RadioButton) {
+                        if (choice == mode) return@selectable
+                        val granted = context.checkSelfPermission(android.Manifest.permission.RECORD_AUDIO) == android.content.pm.PackageManager.PERMISSION_GRANTED
+                        if (choice == WakeWordMode.OFF || granted) {
+                            choose(choice)
+                        } else {
+                            wanted = choice
+                            micPermission.launch(android.Manifest.permission.RECORD_AUDIO)
+                        }
+                    }
+                    .padding(vertical = 2.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                RadioButton(selected = choice == mode, onClick = null)
+                Column(Modifier.padding(start = 8.dp)) {
+                    Text(label, style = MaterialTheme.typography.bodyMedium, color = AppColors.TextPrimary)
+                    note?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = AppColors.TextSecondary) }
+                }
+            }
+        }
+        Row(Modifier.padding(top = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+            OutlinedButton(
+                enabled = !trying,
+                onClick = {
+                    val granted = context.checkSelfPermission(android.Manifest.permission.RECORD_AUDIO) == android.content.pm.PackageManager.PERMISSION_GRANTED
+                    if (granted) tryIt() else tryPermission.launch(android.Manifest.permission.RECORD_AUDIO)
+                },
+            ) { Text(if (trying) "Listening\u2026" else "Try it") }
+            val outcome = tried
+            Text(
+                when {
+                    trying -> "Say \u201c${WakeWord.PHRASE}\u201d now."
+                    outcome == null -> ""
+                    outcome.heard -> "Heard it."
+                    // A quiet try is the microphone's doing more often than the detector's.
+                    outcome.peak < QUIET_TRY -> "Didn't catch it, and it was quiet. Try a little closer."
+                    else -> "Didn't catch it. Try again, as you'd normally say it."
+                },
+                style = MaterialTheme.typography.bodySmall,
+                color = if (outcome?.heard == false && !trying) AppColors.Danger else AppColors.TextSecondary,
+                modifier = Modifier.padding(start = 12.dp),
+            )
+        }
+        if (WakeTry.keepsTries(context)) {
+            Text(
+                "This is a test build: each try is kept on the phone, so the wake word can be tuned to your voice.",
+                style = MaterialTheme.typography.bodySmall,
+                color = AppColors.TextSecondary,
+            )
+        }
+        if (WakeSamples.available(context)) WakeSampleRecorder()
+        if (mode != WakeWordMode.OFF && !ready) {
+            Text(
+                "Needs Local Assistant as the phone's digital assistant app. If it already is, pick another app there and then Local Assistant again: " +
+                    "Android only takes up the wake word when the choice is made.",
+                style = MaterialTheme.typography.bodySmall,
+                color = AppColors.Danger,
+                modifier = Modifier.clickable { AssistantRole.openSettings(context) },
+            )
+        }
+        if (micRefused) {
+            Text("The wake word needs the microphone. Allow it in the phone's settings for this app.", style = MaterialTheme.typography.bodySmall, color = AppColors.Danger)
+        }
+    }
+}
+
+/**
+ * Test builds: record "Hey Luna" over and over, or ordinary talk, to train a wake word model on
+ * the user's voice (wake/WakeSamples). The screen stays on while it records, since putting the
+ * phone down across the room is part of it.
+ */
+@Composable
+private fun WakeSampleRecorder() {
+    val context = LocalContext.current
+    val view = androidx.compose.ui.platform.LocalView.current
+    val scope = rememberCoroutineScope()
+    var kind by remember { mutableStateOf(WakeSamples.Kind.PHRASE) }
+    var place by remember { mutableStateOf(WakeSamples.Place.CLOSE) }
+    var job by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
+    var summary by remember { mutableStateOf(WakeSamples.summary(context)) }
+    var confirmDelete by remember { mutableStateOf(false) }
+    val progress by WakeSamples.progress.collectAsStateWithLifecycle()
+    val recording = job?.isActive == true
+    androidx.compose.runtime.DisposableEffect(recording) {
+        view.keepScreenOn = recording
+        onDispose { view.keepScreenOn = false }
+    }
+    fun start() {
+        job = scope.launch {
+            try {
+                WakeSamples.record(context, kind, place)
+            } finally {
+                summary = WakeSamples.summary(context)
+                job = null
+            }
+        }
+    }
+    val micPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted -> if (granted) start() }
+    @Composable
+    fun <T> Chips(options: List<T>, chosen: T, label: (T) -> String, onPick: (T) -> Unit) {
+        Row(Modifier.padding(top = 6.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            for (option in options) {
+                FilterChip(
+                    selected = option == chosen,
+                    enabled = !recording,
+                    onClick = { onPick(option) },
+                    label = { Text(label(option)) },
+                    colors = FilterChipDefaults.filterChipColors(
+                        containerColor = AppColors.Background,
+                        labelColor = AppColors.TextPrimary,
+                        selectedContainerColor = AppColors.Accent,
+                        selectedLabelColor = AppColors.OnAccent,
+                    ),
+                )
+            }
+        }
+    }
+    Column(Modifier.padding(top = 12.dp)) {
+        Text("Samples for training", style = MaterialTheme.typography.bodyMedium, color = AppColors.TextPrimary)
+        Text(
+            "To train a \u201c${WakeWord.PHRASE}\u201d model on your voice. Each session is kept in the app's files until you delete it here.",
+            style = MaterialTheme.typography.bodySmall,
+            color = AppColors.TextSecondary,
+        )
+        Chips(WakeSamples.Kind.entries, kind, { if (it == WakeSamples.Kind.PHRASE) WakeWord.PHRASE else "Normal talk" }) { kind = it }
+        Chips(WakeSamples.Place.entries, place, { it.label }) { place = it }
+        Text(
+            when (kind) {
+                WakeSamples.Kind.PHRASE -> "Say \u201c${WakeWord.PHRASE}\u201d, wait a second or two, and say it again, as many times as you like (up to 3 minutes). Vary it: fast, slow, quiet, tired, as you'd really say it."
+                WakeSamples.Kind.TALK -> "Talk as you normally would: chat, read something aloud, take a call on speaker. Don't say \u201c${WakeWord.PHRASE}\u201d."
+            },
+            style = MaterialTheme.typography.bodySmall,
+            color = AppColors.TextSecondary,
+            modifier = Modifier.padding(top = 6.dp),
+        )
+        Row(Modifier.padding(top = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+            OutlinedButton(onClick = {
+                if (recording) {
+                    job?.cancel()
+                } else {
+                    val granted = context.checkSelfPermission(android.Manifest.permission.RECORD_AUDIO) == android.content.pm.PackageManager.PERMISSION_GRANTED
+                    if (granted) start() else micPermission.launch(android.Manifest.permission.RECORD_AUDIO)
+                }
+            }) { Text(if (recording) "Stop" else "Start recording") }
+            progress?.let { p ->
+                Text(
+                    "%d:%02d".format(p.seconds / 60, p.seconds % 60) + when (kind) {
+                        WakeSamples.Kind.PHRASE -> " \u00b7 ${p.said} said \u00b7 heard ${p.heard}"
+                        WakeSamples.Kind.TALK -> " \u00b7 ${if (p.heard > 0) "woke by mistake ${p.heard}\u00d7" else "no false wakes"}"
+                    },
+                    style = MaterialTheme.typography.bodySmall,
+                    color = AppColors.TextPrimary,
+                    modifier = Modifier.padding(start = 12.dp),
+                )
+            }
+        }
+        progress?.let { p -> LinearProgressIndicator(progress = { p.level }, modifier = Modifier.fillMaxWidth().padding(top = 4.dp)) }
+        Text(
+            "Saved: ${summary.phrases} \u00d7 \u201c${WakeWord.PHRASE}\u201d in ${summary.phraseSessions} sessions, " +
+                "%d:%02d of normal talk.".format(summary.talkSeconds / 60, summary.talkSeconds % 60),
+            style = MaterialTheme.typography.bodySmall,
+            color = AppColors.TextSecondary,
+            modifier = Modifier.padding(top = 6.dp),
+        )
+        if (!recording && (summary.phraseSessions > 0 || summary.talkSeconds > 0)) {
+            TextButton(onClick = { confirmDelete = true }, contentPadding = PaddingValues(0.dp)) { Text("Delete all samples", color = AppColors.Danger) }
+        }
+    }
+    if (confirmDelete) {
+        AlertDialog(
+            onDismissRequest = { confirmDelete = false },
+            title = { Text("Delete all samples?") },
+            text = { Text("Every recording made here goes, and can't be brought back.") },
+            confirmButton = {
+                TextButton(onClick = {
+                    WakeSamples.deleteAll(context)
+                    summary = WakeSamples.summary(context)
+                    confirmDelete = false
+                }) { Text("Delete", color = AppColors.Danger) }
+            },
+            dismissButton = { TextButton(onClick = { confirmDelete = false }) { Text("Keep them") } },
+        )
+    }
+}
+
+/** Below this peak (of full scale) a try was too quiet to judge the detector by. */
+private const val QUIET_TRY = 0.05f
+
+/**
+ * What the wake word setting offers, with what each costs. "1% an hour": Android's battery
+ * estimate on the OnePlus (7,300 mAh), 5.6 mAh/h of processor plus up to 54 mAh/h it books to
+ * the microphone from the phone's power profile (docs/TECHNICAL.md, "The wake word").
+ */
+private val WAKE_WORD_CHOICES = listOf(
+    Triple(WakeWordMode.OFF, "Off (default)", null),
+    Triple(WakeWordMode.WHILE_CHARGING, "While charging", "No battery cost: listens only while the phone is plugged in."),
+    Triple(WakeWordMode.ALWAYS, "Always", "Uses battery while the phone is in use: up to about 1% an hour by Android's estimate."),
+)
+
+/**
  * What each natural voice download is like. Memory is the app's PSS growth on the OnePlus
  * (NaturalVoiceEvalTest): Kokoro +481 MB loaded, +613 MB at peak. The word slips are from
  * eight typical replies run through a speech recogniser (Mac comparison, 2026-10-28).
@@ -625,6 +879,23 @@ private fun ModelLicences() {
         listOf(
             "Apache License 2.0" to "https://www.apache.org/licenses/LICENSE-2.0",
             "eSpeak NG" to "https://github.com/espeak-ng/espeak-ng",
+        ),
+    )
+    Entry(
+        "Keyword spotter (the wake word)",
+        "Zipformer KWS zh-en 3M by k2-fsa (icefall), in ONNX format from the sherpa-onnx project, run by sherpa-onnx. Apache License 2.0.",
+        listOf("Apache License 2.0" to "https://www.apache.org/licenses/LICENSE-2.0"),
+    )
+    Entry(
+        "\u201cHey Luna\u201d model (the wake word)",
+        "Trained for this app with microWakeWord by Kevin Ahrendt (Apache License 2.0), from voices made with " +
+            "Piper's sample generator (LibriTTS-R, CC BY 4.0) and Kokoro, and from LibriSpeech (CC BY 4.0). " +
+            "Its sound features come from TensorFlow Lite Micro's audio frontend (Apache License 2.0) " +
+            "with KISS FFT by Mark Borgerding (BSD 3-Clause License).",
+        listOf(
+            "Apache License 2.0" to "https://www.apache.org/licenses/LICENSE-2.0",
+            "CC BY 4.0" to "https://creativecommons.org/licenses/by/4.0/",
+            "BSD 3-Clause License" to "https://opensource.org/license/bsd-3-clause",
         ),
     )
 }

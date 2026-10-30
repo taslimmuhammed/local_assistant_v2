@@ -38,6 +38,9 @@
          in memory so the power button answers at once. Off in Settings, and it stops. -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+    <!-- "Hey Luna": the same service listens for the wake word when that is turned on (off
+         by default). Heard on the phone, by a small model in the APK; the audio goes nowhere. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
 
     <!-- "Turn on Do Not Disturb": the user still has to allow it in Settings. -->
     <uses-permission android:name="android.permission.ACCESS_NOTIFICATION_POLICY" />
@@ -120,10 +123,34 @@
             </intent-filter>
         </activity>
 
+        <!-- The digital assistant as Android runs one: holding the power button asks it for a
+             session, which opens the overlay above, and the wake word asks for one too, which a
+             background app couldn't otherwise do. Only the system can bind these. -->
+        <service
+            android:name=".assist.AssistantInteractionService"
+            android:exported="true"
+            android:permission="android.permission.BIND_VOICE_INTERACTION">
+            <meta-data android:name="android.voice_interaction" android:resource="@xml/voice_interaction_service" />
+            <intent-filter>
+                <action android:name="android.service.voice.VoiceInteractionService" />
+            </intent-filter>
+        </service>
+        <service
+            android:name=".assist.AssistantSessionService"
+            android:exported="true"
+            android:permission="android.permission.BIND_VOICE_INTERACTION" />
+        <service
+            android:name=".assist.AssistantRecognitionService"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.speech.RecognitionService" />
+            </intent-filter>
+        </service>
+
         <service
             android:name=".assist.KeepReadyService"
             android:exported="false"
-            android:foregroundServiceType="specialUse">
+            android:foregroundServiceType="specialUse|microphone">
             <property
                 android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
                 android:value="Keeps the on-device assistant model loaded so holding the power button gets an answer at once" />

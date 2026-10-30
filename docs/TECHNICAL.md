@@ -968,6 +968,201 @@ installed, or the engine fails to load).
   aborts on the first sentence (`JNI DETECTED ERROR … NoSuchMethodError`). The callback is an
   `object : (FloatArray) -> Int`. `generate()` without a callback isn't affected.
 
+**The wake word** (user's request, 2026-10-29: "implement Optional wake word using sherpa-onnx 1.13.8 itself",
+phrase "Hey Kalyani"; then "you can change the keyword to some simple english names if the
+recognition is becoming an issue"; then, after trying Luna, Computer and Kalyani, "ok lets go
+with luna"). The phrase is **Hey Luna** (`WakeWord.PHRASE`, `assets/wake/keywords.txt`). Off by
+default; Settings → Assistant → Wake word offers **While charging** and **Always**. Two listeners
+hear the same audio, and the phrase wakes the phone when either hears it (`wake/WakeDetector`):
+the keyword spotter below, and since 2026-10-30 a small model trained on the user's voice (see
+"The second listener"). **Try it** listens for four seconds with the same two and says whether it
+heard the phrase; in a debuggable build each try is kept under `files/wake-tries/` (named for who
+heard it) to tune against real voices.
+- **The user's tries** (one each, 2026-10-29): Luna heard, Computer heard, Kalyani missed. The
+  Luna try (peak 0.53 of full scale) was still heard at threshold 0.3 and missed at 0.4.
+- **Tuned on the user's voice.** Luna still didn't wake the phone in daily use ("I still don't see
+  the assistant waking up by hey luna"), so the user recorded three "hey luna"s with the phone's
+  Recorder app. Straight into the spotter, all three were heard at threshold 0.2, one only just.
+  Played from the Mac's speakers to the phone (`#live`, twelve plays) the setting then (0.2, boost
+  2) heard 7 and 2 of 12 in two runs; 0.05 with boost 3 heard 10 and 8 of the same recordings, 18
+  of 24 against 9. Extra spellings (`L UW1 N AA1`, `L Y UW1 N AH0`) matched the recordings but
+  added nothing through the air. The user's clips made quieter by 12 and 18 dB: 4/9 and 1/9
+  before, 7/9 and 8/9 after. Synthetic clips 97%; false wakes over all 10.75 hours of LibriSpeech
+  test speech: one ("but I shall tell only one story"), the same for 0.1 with boost 2. Through
+  the background listener (the app out of sight), 3 of 6 plays opened the overlay; with the app in
+  front, 8 of 12, so no sign the background thread misses audio. Both room recordings were deleted
+  after scoring.
+- **Mandarin spellings** (2026-10-29: "need to make it little bit more better", seven more
+  recordings "in more difficult scenarios"; "it's okay to have wrong wakes to an extend … most
+  important thing is that it should wake when the word is said"). The setting then heard 2 of the
+  7, though all were loud and clean (about 30 dB over the background). Run as a plain recogniser
+  (`OnlineRecognizer.from_transducer` on the same files), the bilingual model reads the user's
+  "Hey Luna" as Mandarin: "hēi lóng ne", "hēi lóng nǎ", "hēi lóng le", "hēi lóng ma", once "xiè
+  lóng ne". Pinyin initials and toned finals are tokens like the ARPAbet phones, so
+  `keywords.txt` now has, beside `HH EY1 L UW1 N AH0`: `h ēi l óng l e`, `h ēi l óng m a`,
+  `x iè l óng n e`, `h ēi l óng n ǎ` (16 spellings tried one by one, then 10 files whole: a
+  spelling can steal another's matches, so files are scored as files). All 13 recordings heard
+  (before: 8); the 152 synthetic clips 96% (97%); false wakes over 10.75 h of LibriSpeech 5 (3);
+  168 new "hey long…"-type sound-alikes ("Hey Lorna", "Hey, long time no see", "Hey Lona") woke
+  23 (14). Bare `h ēi l óng` heard no more and woke 16 times in the 10.75 h. Through the air
+  (the 13 played twice from the Mac): 16 of 26 against 11; the 7 hard ones played twice again on
+  another day, 7 of 14 against 1, the phone's own live count agreeing with the Mac's. "Hard 3"
+  was never heard through the air.
+- **Tried and not kept**: a wider search (`max_active_paths` 4 → 64) heard 23 of 26 through the
+  air but woke on almost everything (170 false wakes an hour, 330 of 434 sound-alikes); 8–16 with
+  a higher threshold traded 1–2 more plays for 2–15 false wakes an hour. A second check (the same
+  model transcribing the last 2.5 s, kept only if it reads "lóng", "lú", "liú", `LUW N`…)
+  removed nearly all false wakes but also some real ones: 15 of 26 at width 16. The full-precision
+  encoder, the chunk-8 model, trailing blanks, a higher boost and loudness levelling did no
+  better. A long-running stream doesn't lose hearing (7 of 14 fresh, 6 after 30 minutes of
+  speech).
+- **The phone's log drops lines**: OxygenOS lost the app's own `WakeWatch` lines for most wakes
+  that the system's `ActivityTaskManager: START … AssistActivity` lines show; count those.
+
+- **Why not "Hey Google"'s chip.** Phones listen for their own assistant on a low-power DSP, but
+  only preinstalled assistants may load a phrase there (AOSP limits hotword detection to
+  preinstalled apps). So the app listens on the main processor, with a small model.
+- **The spotter** (`wake/WakeSpotter`) is sherpa-onnx's keyword spotter with k2-fsa's
+  `kws-zipformer-zh-en-3M-2025-12-20` (int8 encoder and joiner, 5.4 MB in `assets/wake/`). It
+  takes phrases as ARPAbet phones, so no training. The other English model,
+  `kws-zipformer-gigaspeech-3.3M` (BPE pieces), woke on 2% of the clips: "Kalyani" splits into
+  pieces it doesn't hear well. Its `-mobile` build fails in sherpa-onnx 1.13.8 (a Reshape error).
+- **Spellings (Kalyani, since dropped).** People and voices say "Kalyani" differently, and one
+  spelling heard about a third of the clips. Six were used, picked on the Mac from 392 tried in
+  one pass (every spelling loaded, each tagged) and then scored on their own: boost 2.0,
+  threshold 0.20 (0.10 scored the same). The test set: the phrase said four ways by 32 Kokoro
+  voices (American, British, Hindi) and six macOS voices (152 clips); 16 near-misses ("Hey
+  Kalyan", "Hey Kelly", "Kalyani is my cousin", "Hey Kali", "Hey, can you hear me?") by 14 voices
+  (224 clips); 3 hours of LibriSpeech test speech for false wakes. Result: 97% of the phrase
+  clips, 44% with other speech mixed in at 5 dB below; 8 of 224 near-misses ("Hey Kelly" ×5,
+  "Hey Kalyan" ×2, "Hey Kalyanam"); no false wake in the 3 hours. On the OnePlus
+  (`WakeWordEvalTest#clips`, `-e eval wake-word`, the clips pushed to `files/wake/`): the same 148
+  of 152 and 8 of 224, at 2.8% of one core. Synthetic voices aren't people: the user's own voice
+  is the real test, and it failed it ("I tried the wake word several times it isn't
+  responding"), though the same build opened the overlay for a clip played from the Mac.
+- **Simple names** (the dictionary's spelling, one line each), same test set and settings:
+
+  | Phrase | Clean | Speech behind | Own sound-alikes | Shared 224 | False, 3 h |
+  |---|---|---|---|---|---|
+  | Hey Computer | 100% | 70% | 4/42 ("Hey, compute the total") | 0 | 0 |
+  | Hey Robin | 99% | 63% | 17/42 ("Hey Robert") | 0 | 0 |
+  | Hey Jasper | 96% | 43% | 8/42 | 0 | 0 |
+  | Hey Nova | 95% | 50% | 0/42 | 0 | 0 |
+  | Hey Luna | 95% | 50% | 9/42 ("Hey, lunar eclipse") | 0 | 0 |
+  | Hey Jasmine | 93% | 45% | 0/42 | 0 | 0 |
+  | Hey Sophia | 65% | 30% | 5/42 | 0 | 0 |
+  | Hey Olivia | 0% | 0% | 0/42 | 0 | 0 |
+
+  On the phone (`#clips`, `-e phrase`): Nova 144/152 and 0/42, Computer 152/152 and 6/42.
+- **Through the air** (`WakeWordEvalTest#live`): the Mac played each phrase twelve times (six
+  voices including the Mac's Indian English and two of Kokoro's Hindi voices, two ways each) from
+  its speakers at 80% volume while the phone recorded, and every phrase's spotter scored the same
+  recording. Heard: Kalyani 12, Luna 12, Robin 11 (and both "Hey Robert"s), Computer 10, Nova 9
+  (missed the Indian voice both times), Jasper 8, Jasmine 7 of 12; no other sound-alike woke one.
+  Hence Luna. The recording was deleted after scoring. On the phone, the Luna-only build's
+  spotter (`#clips`) heard 144 of 152 clips and woke on 10 of 42 sound-alikes, every one of them
+  "Hey, lunar eclipse tonight".
+- **The listener's log**: `WakeWatch` says when it starts listening and why it stops ("Not
+  listening: the phone is locked", "the app is in front", …); `WakeListener` logs the loudest
+  sample every 10 s, so a microphone silenced by another app's recording shows as 0.00.
+- **The user's next three recordings** ("hey luna 4–6", a little quieter than the first three):
+  the old setting (0.2, boost 2) missed all three; the new one heard all six, and so did 0.01–0.05
+  with boost 3 or 4.
+- **Test runs stop the listener**: `am instrument` ends by killing the app's process, the
+  listening service with it, and it starts again only when the app or the overlay is next opened.
+- **Listening** (`wake/WakeListener`): `AudioRecord` at 16 kHz (`VOICE_RECOGNITION`), 100 ms at a
+  time into both listeners, on its own thread; nothing is written down or sent. It logs which
+  listener heard each wake ("Heard by model"). It runs inside
+  `KeepReadyService`, which becomes a `specialUse|microphone` foreground service while the wake
+  word is on (Android only lets a background app use the microphone that way, and only if the
+  service was started while the app was in front: after a reboot it listens again once the app
+  or the overlay has been opened). Its notification says it's listening, with **Stop listening**.
+- **Battery**, on the OnePlus (7,300 mAh), listening with the screen on and the app in the
+  background for 18 minutes: the listening thread took 10% of one core (1,185 ticks in 120 s),
+  on the small cores (the clip test's 2.8% ran on fast ones). Android's estimate for the app:
+  1.66 mAh of processor, 5.6 mAh an hour. It also booked 16 mAh to "audio" for the same
+  minutes, 54 mAh an hour, from the phone's power profile rather than a measurement: taken at
+  face value, the two make 0.8% of the battery an hour, which is what Settings says ("up to
+  about 1%"). Not measured with the screen off.
+- **When it listens** (`WakeConditions`, `wake/WakeWatch`): everywhere, the app and the overlay
+  included (the user: "it's not working when app or pop up is up, it should work always"; at
+  first it paused whenever one of the app's screens was in front, and while the assistant spoke).
+  It pauses only while the app's recorder is recording (the shared `AudioRecorder`: a question in
+  the overlay, a voice message in the chat), while Settings' **Try it** listens, and during a
+  call; with **While charging**, off the charger; and on a locked phone unless **Use on the lock
+  screen** is on (screen off counts as locked, since the lock follows with no broadcast). For 3 s
+  after it hears the phrase it stays quiet, so the overlay gets the microphone. Said over the
+  app, it opens the overlay on top; said with the overlay open, `AssistActivity.onNewIntent`
+  starts a new question, even from typing, and cuts off an answer being read out. On the phone
+  (2026-10-29), with the chat open: "Hey Luna" opened the overlay over it; once the overlay's own
+  listening ended the listener was back; "Hey Luna" again started a new recording in the same
+  overlay (`dumpsys audio`: the listener's capture stops, the overlay's starts); after closing it
+  the listener re-armed 3.7 s after the next wake.
+- **Two ways it stopped for good, fixed**: the quiet after a wake ended with one delayed
+  `update()`, which could land a millisecond early, find it still quiet, and never run again
+  (hidden while the app going to the background triggered another look; once the app no longer
+  paused it, the listener stayed off after a wake). Now every `update()` inside the quiet
+  reschedules the look. And a microphone that fails to open makes the listener look again 5 s
+  later instead of staying off.
+- **Opening the overlay.** Android 16 blocked the service's `startActivity` ("Background
+  activity launch blocked"), assistant role or not. A digital assistant may open itself through
+  its `VoiceInteractionService`, so the app has one (`assist/AssistantInteractionService`): the
+  power button now asks it for a session, which opens the same `AssistActivity`, and the wake
+  word calls `showSession`. Android also requires a `RecognitionService`; the app's declines
+  every request. Android reads an app's assistant service only when the app is picked as the
+  digital assistant, so a phone that picked it before has to pick it again (Settings says so,
+  through `VoiceInteractionService.isActiveService`).
+- **The second listener: a model trained on the user's voice** (the user, 2026-10-30: "look into
+  training a dedicated Hey Luna wake word model on my voice", then "go ahead with the
+  microWakeWord plan", then "build v3 into the app alongside today's spotter, waking when either
+  hears Hey Luna, at cut-off 0.9"). `wake/WakeModel` runs microWakeWord's streaming MixedNet
+  (Apache-2.0; 60 KB, int8, `assets/wake/hey_luna.tflite`) on the app's LiteRT. It listens to
+  TensorFlow Lite Micro's audio frontend (40 channels, 30 ms windows every 10 ms), built from
+  source (`src/main/cpp/microfrontend`, called through `wake/MicroFrontend`) from the same files
+  and flags as pymicro-features 2.0.2, which computed the training features. Every 30 ms the model
+  scores the last three frames; the phrase is heard when the mean of the last five scores reaches
+  0.9 (`WakeWord.MODEL_CUTOFF`), as on the Mac. It keeps its own state between calls, and a reset
+  starts a fresh interpreter. Training is in `tools/wakeword` (README there).
+  - **Synthetic voices weren't enough.** Trained on 13.5k Piper and Kokoro clips, 6.25k
+    sound-alikes and 10.75 h of LibriSpeech, the first model heard 10 of the user's 13 Recorder
+    clips at 0.9 and woke 7 times an hour on dev-other. With 100 h more speech it woke 1.8 times
+    an hour but heard 4: it grew stricter about what "Hey Luna" sounds like, and no synthetic
+    voice says it the way the user does.
+  - **The user's recordings** (Settings › Wake word › Samples for training, test builds only; the
+    user: "I have created 53 x hey luna as of now please proceed with that"): 53 phrases (28
+    close, 25 with noise, none yet across the room) and 161 s of talk. Every fourth phrase was held
+    back, 40 trained, at 50 varied copies each (room echo, noise, gain), sampled twice as often as
+    all the synthetic phrases together; the talk counts as speech not to wake on. 31 minutes on
+    the M2. The recordings stay on the Mac, not in the repository.
+  - **Results**, cut-off 0.9: the 13 held-back phrases 11 (spotter 10); the 13 older Recorder
+    clips 11 (spotter 13); unseen macOS voices 18 of 24 (spotter 24); sound-alikes 10 of 434
+    (spotter 33); dev-other 1.2 false wakes an hour (spotter 0). At 0.8 it heard both
+    near-misses among the Recorder clips (0.82, 0.86) but woke 3.1 times an hour. The two miss
+    different phrases: the model's misses (scores 0.45 and 0.46) were heard by the spotter, and
+    the spotter's three misses scored 1.00 with the model, so together they heard all 26. The
+    held-back phrases come from the same sessions as the training ones, so the Recorder clips
+    from earlier days are the fairer test.
+  - **On the phone** (OnePlus, 2026-10-30): `WakeModelTest` feeds a Kokoro "Hey Luna" in light
+    noise (`androidTest/assets/wake/golden.*`, from `tools/wakeword/make_golden.py`) and gets
+    Python's features value for value (257 frames) and its 85 scores exactly. The scores are the
+    same whether the audio comes whole or 100 ms at a time; it hears the phrase and stays quiet on
+    silence. `#clips` on the phone: the user's 26 recordings, spotter 24, model 22, either 26;
+    sound-alikes, spotter 33, model 10, either 39 of 434. Processor time: the model 1.8 ms per
+    second of audio (0.18% of one core), the spotter 28.1 ms, so listening costs about 6% more.
+    The user's clips were deleted from the phone after the run.
+  - **Through the air** (`#live`, the 13 held-back phrases played from the Mac at its 19% volume,
+    twice): wherever the room was quiet, the model woke on 7 of 7 plays and then 7 of 8, the
+    spotter on 2–3 of them. While other sound filled the room (peaks of 0.4–0.5, mostly under
+    1 kHz, there with nothing playing too), neither heard the phrase over it: 1 of 5 plays. Through
+    the background listener, a phrase the spotter never hears was heard ("Not listening: just
+    heard it").
+  - **A test run leaves the overlay shut**: `am instrument` force-stops the app, which also
+    unbinds its assistant service, and Android doesn't bind it again when the app is reopened. A
+    wake then falls back to `startActivity`, which Android blocks (`START … AssistActivity … BAL_BLOCK
+    result code=102`). After tests, use the power-button assistant once, which should have Android
+    bind the service again (not yet confirmed on the phone), before checking that a wake opens the
+    overlay.
+
 ## Per-reply speed
 
 Each model reply carries a small footnote: `19.4 tok/s · 0.5s to first token`.

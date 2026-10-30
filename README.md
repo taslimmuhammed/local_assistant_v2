@@ -68,6 +68,12 @@ In the same place:
 - **Voice** and **Answer out loud** set how it speaks. At the top of Voice is a natural voice that
   sounds like a person: a 334 MB download that uses about 600 MB of memory while it talks.
   Without it, the assistant uses your phone's own voices.
+- **Wake word** (off by default): say "Hey Luna" to open the assistant, from anywhere, this app
+  included, either only while charging or always. **Try it** checks that it hears you. Two small
+  models in the app listen on the phone, one of them trained for this phrase, and the assistant
+  opens when either hears it. Nothing they hear is kept or sent. It needs the app to be your
+  digital assistant app, and it doesn't listen while the phone is locked unless **Use on the lock
+  screen** is on.
 
 ### Optional extras
 

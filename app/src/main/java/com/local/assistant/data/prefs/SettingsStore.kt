@@ -169,6 +169,13 @@ class SettingsStore(context: Context) {
         get() = prefs.getBoolean(KEY_ON_LOCK_SCREEN, false)
         set(value) = prefs.edit { putBoolean(KEY_ON_LOCK_SCREEN, value) }
 
+    /** When the wake word opens the assistant (wake/WakeWord). Off until the user turns it on. */
+    var wakeWord: com.local.assistant.wake.WakeWordMode
+        get() = prefs.getString(KEY_WAKE_WORD, null)
+            ?.let { saved -> com.local.assistant.wake.WakeWordMode.entries.firstOrNull { it.name == saved } }
+            ?: com.local.assistant.wake.WakeWordMode.OFF
+        set(value) = prefs.edit { putString(KEY_WAKE_WORD, value.name) }
+
     /** The assistant overlay reads its answer aloud when it was asked by voice. */
     var speakReplies: Boolean
         get() = prefs.getBoolean(KEY_SPEAK_REPLIES, true)
@@ -234,6 +241,8 @@ class SettingsStore(context: Context) {
         private val RETIRED_KEYS = listOf(
             "manual_context_tokens", "calibrated_context_tokens", "calibration_key", "generation_in_flight_tokens",
             "generation_crash_streak", "context_ceiling_tokens", "init_crash_streak",
+            // The wake phrase was a choice for a day (Luna, Computer, Kalyani) before Luna stayed.
+            "wake_phrase",
         )
         private const val KEY_MAX_OUTPUT = "max_output_tokens"
         private const val KEY_TOKEN_RATE = "latin_chars_per_token"
@@ -245,6 +254,7 @@ class SettingsStore(context: Context) {
         private const val KEY_SPEAK_REPLIES = "speak_replies"
         private const val KEY_KEEP_READY = "keep_assistant_ready"
         private const val KEY_ON_LOCK_SCREEN = "assistant_on_lock_screen"
+        private const val KEY_WAKE_WORD = "wake_word"
         private const val KEY_ASSISTANT_VOICE = "assistant_voice"
         private const val KEY_SPEECH_RATE = "speech_rate"
         private const val KEY_NATURAL_VOICE = "natural_voice"

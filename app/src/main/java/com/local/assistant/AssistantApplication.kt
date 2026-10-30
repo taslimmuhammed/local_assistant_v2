@@ -118,7 +118,7 @@ class AppContainer(context: Context) {
             if (settings.modelPath != null) llmService.warmUp()
             embeddingQueue.kick()
             // Started while visible, as Android requires; from then on it keeps the app alive.
-            if (settings.keepAssistantReady && settings.modelPath != null) KeepReadyService.start(appContext)
+            if (KeepReadyService.wanted(settings)) KeepReadyService.start(appContext)
         },
         onBackground = {
             backgroundJobs.onBackground()
@@ -508,7 +508,7 @@ class AppContainer(context: Context) {
     suspend fun prepareFirstChat() {
         // Kept ready from the first model on: the service only starts in the foreground, which
         // the app was in, with no model yet, when this launch began.
-        if (settings.keepAssistantReady) KeepReadyService.start(appContext)
+        if (KeepReadyService.wanted(settings)) KeepReadyService.start(appContext)
         withTimeoutOrNull(FIRST_CHAT_READY_MS) {
             // Loads the engine, or tries again if an earlier attempt failed; false if it can't.
             if (llmBackend.ensureReady()) conversations.prepareFresh().join()

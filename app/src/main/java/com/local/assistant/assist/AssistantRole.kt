@@ -2,10 +2,12 @@ package com.local.assistant.assist
 
 import android.app.role.RoleManager
 import android.content.ActivityNotFoundException
+import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.os.Build
 import android.provider.Settings
+import android.service.voice.VoiceInteractionService
 
 /**
  * Whether this app is the phone's digital assistant — the one holding the power button (or the
@@ -28,6 +30,14 @@ object AssistantRole {
         val assistant = runCatching { Settings.Secure.getString(context.contentResolver, "assistant") }.getOrNull()
         return assistant?.substringBefore('/') == context.packageName
     }
+
+    /**
+     * The system runs the app's [AssistantInteractionService], which the wake word needs. An app
+     * picked as the assistant before it had that service keeps being opened the old way until
+     * it is picked again: Android reads the service only when the choice is made.
+     */
+    fun serviceActive(context: Context): Boolean =
+        VoiceInteractionService.isActiveService(context, ComponentName(context, AssistantInteractionService::class.java))
 
     /**
      * Opens the "Digital assistant app" setting: on most phones that is the voice input screen;

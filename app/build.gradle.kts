@@ -67,7 +67,8 @@ val fetchSherpaOnnx = tasks.register<FetchVerifiedFile>("fetchSherpaOnnx") {
 android {
     namespace = "com.local.assistant"
     compileSdk = 36
-    // r28 links 16 KB-aligned by default; sqlite-vec is the app's only own native code.
+    // r28 links 16 KB-aligned by default; sqlite-vec and the wake word spectrogram are the app's
+    // own native code.
     ndkVersion = "28.2.13676358"
 
     defaultConfig {
@@ -84,7 +85,8 @@ android {
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
-    // sqlite-vec, loaded into the bundled SQLite as an extension (see VecExtension).
+    // sqlite-vec, loaded into the bundled SQLite as an extension (see VecExtension), and the wake
+    // word model's spectrogram (see wake/MicroFrontend).
     externalNativeBuild {
         cmake {
             path = file("src/main/cpp/CMakeLists.txt")
