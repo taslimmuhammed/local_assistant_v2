@@ -15,6 +15,8 @@ import androidx.activity.viewModels
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.lifecycle.lifecycleScope
+import kotlinx.coroutines.launch
 import com.local.assistant.MainActivity
 import com.local.assistant.appContainer
 import com.local.assistant.ui.gallery.LocalPhotoAccess
@@ -30,12 +32,18 @@ import com.local.assistant.ui.theme.LocalAssistantTheme
  * opening the dialer closes it, and a reply still coming finishes in its chat.
  *
  * On the lock screen it works without unlocking only when the user has turned that on (Settings →
- * Assistant, off by default, since whoever holds the phone then gets the assistant's memory and
- * its calls and messages). Otherwise it says how to turn it on, and leaves a notification.
+ * Assistant, off by default), and then only partly: it sees none of the user's memory, photos or
+ * chats, and can only set reminders, events, alarms and timers, change phone settings, work out
+ * sums and look things up online. Anything more asks for an unlock first and then carries on
+ * ([AssistViewModel.unlockFor]). With it off, it says how to turn it on, and leaves a notification.
  */
 class AssistActivity : FragmentActivity() {
 
-    private val viewModel: AssistViewModel by viewModels { AssistViewModel.factory(appContainer) }
+    private val viewModel: AssistViewModel by viewModels {
+        // The application's, so the view model doesn't hold on to this activity.
+        val keyguard = applicationContext.getSystemService(KeyguardManager::class.java)
+        AssistViewModel.factory(appContainer) { keyguard?.isKeyguardLocked == true }
+    }
 
     /** Opened on the lock screen with talking there turned off: it only says how to turn it on. */
     private val lockedOut = mutableStateOf(false)
@@ -64,6 +72,13 @@ class AssistActivity : FragmentActivity() {
             if (!appContainer.settings.assistantOnLockScreen) {
                 lockedOut.value = true
                 LockScreenNotice.post(this)
+            }
+        }
+
+        // A lock-screen question that needs more: unlock, then it carries on here.
+        lifecycleScope.launch {
+            viewModel.unlockFor.collect { asked ->
+                if (asked != null) afterUnlock(cancelled = viewModel::unlockCancelled) { viewModel.continueAfterUnlock() }
             }
         }
 
@@ -151,7 +166,7 @@ class AssistActivity : FragmentActivity() {
      * from a tap, with the panel in view: asked for while the panel was still being created, the
      * prompt never came on the test phone and the panel sat there.
      */
-    private fun afterUnlock(then: () -> Unit) {
+    private fun afterUnlock(cancelled: () -> Unit = { openCancelled.intValue++ }, then: () -> Unit) {
         val keyguard = getSystemService(KeyguardManager::class.java)
         if (keyguard == null || !keyguard.isKeyguardLocked) {
             then()
@@ -168,7 +183,7 @@ class AssistActivity : FragmentActivity() {
 
                 override fun onDismissCancelled() {
                     awaitingUnlock = false
-                    openCancelled.intValue++
+                    cancelled()
                 }
 
                 // No prompt to be had: open anyway, and the app waits behind the lock screen.

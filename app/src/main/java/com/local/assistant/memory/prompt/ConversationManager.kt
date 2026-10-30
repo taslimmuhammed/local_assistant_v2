@@ -115,6 +115,8 @@ class ConversationManager(
         var tokensBeforeTurn: Int? = null,
         /** Stored turns this conversation left out that no summary covers yet. */
         val unsummarizedDropped: Int = 0,
+        /** Built for the lock screen: none of the user's memory in it. */
+        val locked: Boolean = false,
         /**
          * Saved images already attached to a turn of this conversation. Stored history does not
          * carry them, so a rebuild starts empty; until then, attaching one again only muddles the
@@ -130,6 +132,12 @@ class ConversationManager(
 
     private val mutex = Mutex()
     private var live: Live? = null
+
+    /**
+     * Chats whose last turn was asked on the lock screen: their prefix has none of the user's
+     * memory ([prefixInputs]), and every rebuild of them, maintenance included, keeps it that way.
+     */
+    private val lockedChats = mutableSetOf<Long>()
 
     /** The sampler seed conversations are built with; changes only to retry an unreadable answer. */
     private var seed = 0
@@ -164,7 +172,9 @@ class ConversationManager(
      * Readies the conversation for [chatId] and builds this turn's envelope. [userMessageId] is
      * the user's message, already stored; everything before it is history.
      */
-    suspend fun prepareTurn(chatId: Long, userMessageId: Long, userText: String): PreparedTurn = mutex.withLock {
+    suspend fun prepareTurn(chatId: Long, userMessageId: Long, userText: String, locked: Boolean = false): PreparedTurn = mutex.withLock {
+        // Changing mode changes the prefix, so the conversation below won't match and is rebuilt.
+        if (locked) lockedChats += chatId else lockedChats -= chatId
         val userMessage = chats.message(userMessageId)
         // A rebuild still waiting for a quiet spell is moot now; one already running has finished
         // by the time we hold the lock.
@@ -179,6 +189,7 @@ class ConversationManager(
 
         val reusable = live?.takeIf {
             it.chatId == chatId &&
+                it.locked == locked &&
                 it.lastMessageId == (history.lastOrNull()?.id ?: 0L) &&
                 it.budget == budget &&
                 it.session.isAlive
@@ -188,7 +199,7 @@ class ConversationManager(
             rebuild(chatId, history, budget, capabilities)
         }
 
-        val recall = recall(chatId, userText, current.windowStartId, budget)
+        val recall = if (locked) Recall.NONE else recall(chatId, userText, current.windowStartId, budget)
         // One attachment per message: a recalled image only goes with a message that has none.
         val userAttached = userMessage?.attachmentKind != null
         val image = recall.image?.takeIf { !userAttached }
@@ -578,6 +589,7 @@ class ConversationManager(
             // With nothing kept verbatim, the window starts at the next message.
             windowStartId = plan.history.messages.firstOrNull()?.id ?: (lastId + 1),
             unsummarizedDropped = plan.history.droppedCount,
+            locked = chatId in lockedChats,
         ).also { live = it }
     }
 
@@ -599,22 +611,35 @@ class ConversationManager(
 
     private suspend fun prefixInputs(chatId: Long, budget: MemoryBudget): PrefixInputs {
         val chat = chats.chat(chatId)
+        if (chatId in lockedChats) {
+            // On the lock screen: the instructions and this chat's own summary, none of the user's
+            // profile, agenda or other chats.
+            return PrefixInputs(
+                instructions = instructions(),
+                coreFacts = emptyList(),
+                summary = chat?.rollingSummary?.let { SummaryBlock(SummaryBlock.Kind.EARLIER_IN_CHAT, it) },
+                agendaDate = now().toLocalDate(),
+                agenda = emptyList(),
+            )
+        }
         val summary = chat?.rollingSummary
             ?.let { SummaryBlock(SummaryBlock.Kind.EARLIER_IN_CHAT, it) }
             ?: memory.latestSessionSummary()?.let { SummaryBlock(SummaryBlock.Kind.LAST_SESSION, it) }
         return PrefixInputs(
-            instructions = Instructions.render(
-                settings.systemPrompt,
-                withTools = tools().isNotEmpty() && backend.capabilities?.tools == true,
-                webSearch = webSearch(),
-                photoSearch = photoSearch(),
-            ),
+            instructions = instructions(),
             coreFacts = memory.coreFacts(),
             summary = summary,
             agendaDate = now().toLocalDate(),
             agenda = memory.agenda(clock(), budget.agendaItems),
         )
     }
+
+    private fun instructions() = Instructions.render(
+        settings.systemPrompt,
+        withTools = tools().isNotEmpty() && backend.capabilities?.tools == true,
+        webSearch = webSearch(),
+        photoSearch = photoSearch(),
+    )
 
     /** Stored turns before [beforeId], minus any that a rolling summary already covers. */
     private suspend fun historyFor(chatId: Long, beforeId: Long): List<MessageEntity> {

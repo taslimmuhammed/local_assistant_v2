@@ -40,6 +40,14 @@ object ToolCatalog {
     /** Device tools with an effect a repeat would duplicate: a second dialer, a second timer. */
     val DEVICE_ACTIONS = DEVICE - CALCULATE
 
+    /**
+     * What runs on the lock screen (the user, 2026-10-30: "on lock-screen it'll have no access any
+     * memory including photos, but it can set reminders, alarms, etc, if user asks to do something
+     * else or remember something ask for unlocking the phone first"). These add something or act
+     * on the phone without reading anything of the user's back; any other call asks for an unlock.
+     */
+    val LOCKED = setOf(ADD_TASK, ADD_EVENT, SET_ALARM, SET_TIMER, PHONE_SETTING, CALCULATE, WEB_SEARCH)
+
     /** Tools that don't touch memory, run outside its transaction: they wait on apps, dialogs, the network or the photo model. */
     val OUTSIDE_MEMORY = DEVICE + WEB_SEARCH + FIND_PHOTOS
 

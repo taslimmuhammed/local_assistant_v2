@@ -21,6 +21,9 @@ sealed interface TurnEvent {
     data class Memory(val recordId: Long, val chip: MemoryChip) : TurnEvent
 
     data class Done(val stats: GenStats?) : TurnEvent
+
+    /** On the lock screen, the request needs more than is allowed there: unlock, then ask again. */
+    data object NeedsUnlock : TurnEvent
 }
 
 /**
@@ -46,12 +49,17 @@ class TurnRunner(
      * If the runtime refuses the turn as too long before anything was said, the conversation is
      * replanned conservatively and the turn sent once more. If the model's first answer is a tool
      * call the runtime can't read, the turn is sent once more with a fresh seed.
+     *
+     * [locked]: asked on the lock screen. The model sees none of the user's memory, and only the
+     * lock screen's tools run ([ToolCatalog.LOCKED]); a request for anything else ends in
+     * [TurnEvent.NeedsUnlock].
      */
     fun run(
         chatId: Long,
         userMessageId: Long,
         userText: String,
         attachment: PromptAttachment? = null,
+        locked: Boolean = false,
     ): Flow<TurnEvent> = flow {
         // A message that is nothing but a sum is answered here: the model would only misread its
         // digits (see NumberGrounding). The live conversation never saw the exchange, so it goes;
@@ -68,13 +76,13 @@ class TurnRunner(
             var retried = false
             var reseeded = false
             while (true) {
-                val turn = conversations.prepareTurn(chatId, userMessageId, userText)
+                val turn = conversations.prepareTurn(chatId, userMessageId, userText, locked)
                 var overflowed = false
                 var unreadable = false
                 val reply = StringBuilder()
                 // A saved image the message is about is looked at again, as if sent with it.
                 val sent = attachment ?: turn.recalledImage?.let { PromptAttachment(it, AttachmentKind.IMAGE) }
-                tools.run(turn.session, turn.envelope.text, sent, ToolContext(chatId, userMessageId, userText), sources = listOf(turn.prefix)).collect { event ->
+                tools.run(turn.session, turn.envelope.text, sent, ToolContext(chatId, userMessageId, userText, locked), sources = listOf(turn.prefix)).collect { event ->
                     when (event) {
                         is LoopEvent.Text -> {
                             reply.append(event.delta)
@@ -103,6 +111,7 @@ class TurnRunner(
                             if (reseeded) error("The model's answer couldn't be read. Please try again.")
                             unreadable = true
                         }
+                        LoopEvent.NeedsUnlock -> emit(TurnEvent.NeedsUnlock)
                     }
                 }
                 when {

@@ -121,6 +121,19 @@ snapshot dated to the day. Anything that changes per turn — the current time, 
 this message — goes in front of the user's words in the user turn, as `[Now: …]` and
 `[Memory: …]` lines. Only the user's own words are stored.
 
+The instructions open with who the model is: "You are Luna, a helpful assistant running entirely
+on the user's device." Luna is the wake word's name (`WakeWord.NAME`). The user asked on
+2026-10-30: "since the model is now named as luna, it should be aware of it … also tell it to
+behave as an assistant if it's not present". The persona is a setting (`systemPrompt`) with that
+sentence as its default. If a persona never says "assistant", `Instructions.identity` puts "You
+are a helpful assistant running entirely on the user's device." before it, and if it never says
+"Luna", "Your name is Luna." after. In `RoutingEvalTest` on the phone at temperature 1.0, the
+change cost 2 tokens (instructions 901 → 903) and left routing where it was: 88 of 94 right
+before and after, with 78/79 tool requests either way. "I live in Bengaluru" now calls
+`save_fact`, and "what's my dentist's name?" now goes to `find_photos` (it has gone both ways
+before). "What's your name?" and "hey Luna, who are you?" get "I am Luna, a helpful assistant
+running entirely on your device."
+
 Every token limit lives in `memory/prompt/MemoryBudget.kt`, with a 16K profile and an 8K one,
 chosen from the window the engine runs with (8K unless changed in Settings). The prompt is planned to stay well under the window
 (12,000 of 16,384 at most) and shed in a fixed order when it would not: recalled snippets, then
@@ -850,10 +863,28 @@ tool still gets no recall.
 
 **On the lock screen** the assistant works without unlocking only if **Use on the lock screen**
 is on (Settings → Assistant; off by default, and turning it on first shows a warning). Then it
-opens over the lock screen with all its memory and tools, and keeps the screen awake while open.
-Whoever holds the phone gets the same: what it remembers (saved cards and PINs included) and its
-calls and messages. Calls, messages and apps it opens appear only after an unlock, since those
-apps don't show over the lock screen. With the setting off, the panel says so, and a notification
+opens over the lock screen and keeps the screen awake while open, but with none of the user's
+memory (the user, 2026-10-30: "on lock-screen it'll have no access any memory including photos,
+but it can set reminders, alarms, etc, if user asks to do something else or remember something
+ask for unlocking the phone first"). A question asked while the phone is locked is a locked turn
+(`ChatSender.send(locked = true)` → `TurnRunner` → `ConversationManager.prepareTurn`):
+- **The prompt** has the instructions and that chat's own earlier turns, and no profile ("About
+  the user"), agenda, last session's summary or recalled memory. The chat is kept apart
+  (`lockedChats`) so a rebuild after a reply can't bring them back. The overlay doesn't prepare
+  its usual fresh conversation, and one prepared in the background isn't taken over, since its
+  prefix doesn't match.
+- **The tools** are declared as usual, so the model routes as it always does (the routing eval
+  measures exactly this prompt: it has no profile either). Only `ToolCatalog.LOCKED` run:
+  reminders, events, alarms, timers, phone settings, sums and web lookups. These add something or
+  act on the phone without reading anything back. Any other call ends the turn before anything
+  runs (`LoopEvent.NeedsUnlock`): remembering or forgetting, memory search, the agenda, photos,
+  calls, messages, apps, changing a reminder.
+- **Then the unlock.** The overlay shows and says "Unlock your phone to do that." and asks for
+  the unlock. Nothing is stored as a reply. Once unlocked, the same stored question runs again,
+  with everything, in the same overlay (`ChatSender.resume`). If the unlock is cancelled, it says
+  nothing was done.
+
+The wake word listens on the lock screen only with this setting on. With the setting off, the panel says so, and a notification
 (`assist/LockScreenNotice`, readable on the lock screen) explains how to turn it on and what that
 exposes. It opens Settings, which needs an unlock; there is deliberately no "Turn on" button on
 it. "Open in app" on the lock screen asks for the unlock first, from the tap: asked for as the
@@ -1077,6 +1108,17 @@ heard it) to tune against real voices.
   word is on (Android only lets a background app use the microphone that way, and only if the
   service was started while the app was in front: after a reboot it listens again once the app
   or the overlay has been opened). Its notification says it's listening, with **Stop listening**.
+- **Swiped out of the recent apps** (the user, 2026-10-30: it didn't wake "if I have closed the
+  app and removed it from the recent apps"): OxygenOS kills the app's process on that swipe
+  (`am_kill … o-kill … with swipe up`), and the service, then not sticky, stayed down until the
+  app or the overlay was opened. Now it is sticky while the wake word is on (not otherwise, so the
+  model kept ready isn't fought back after a memory kill; a restart loads only the wake word's
+  models), and the assistant service starts it whenever Android binds it (`onReady`). Android
+  lets the assistant app take the microphone from the background ("The service starts by an app
+  which provides the VoiceInteractionService", the FGS while-in-use exemptions). On the phone:
+  after a reinstall the service started by itself with the microphone type and listened; after
+  the process was killed it was back in 1 s and listening in 2, and a wake 4 s after the kill
+  opened the overlay through the assistant service (`START … result code=0`).
 - **Battery**, on the OnePlus (7,300 mAh), listening with the screen on and the app in the
   background for 18 minutes: the listening thread took 10% of one core (1,185 ticks in 120 s),
   on the small cores (the clip test's 2.8% ran on fast ones). Android's estimate for the app:

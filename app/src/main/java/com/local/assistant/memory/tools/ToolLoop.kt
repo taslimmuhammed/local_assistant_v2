@@ -34,6 +34,13 @@ sealed interface LoopEvent {
 
     /** The model's first answer was a tool call the runtime couldn't read, before anything was said. */
     data object Unreadable : LoopEvent
+
+    /**
+     * On the lock screen, the model called a tool that isn't allowed there ([ToolCatalog.LOCKED]):
+     * nothing ran, and the turn ends here so the user can unlock and ask again with everything.
+     * [Done] follows, with a stale conversation.
+     */
+    data object NeedsUnlock : LoopEvent
 }
 
 /**
@@ -154,6 +161,11 @@ class ToolLoop(
                 // something up, is carried out as meant and confirmed without the model. What the
                 // model should have said next is not needed: the chip shows what was done.
                 val fixed = repair(cause)?.takeIf { it.name in ToolCatalog.WRITES || it.name in ToolCatalog.DEVICE_ACTIONS }
+                if (fixed != null && context.locked && fixed.name !in ToolCatalog.LOCKED) {
+                    emit(LoopEvent.NeedsUnlock)
+                    emit(LoopEvent.Done(null, changedPrefix = false, toolRounds = 0, staleConversation = true))
+                    return@flow
+                }
                 val outcome = fixed?.let { executor.execute(it, context) }
                 if (outcome == null || !outcome.ok) {
                     emit(LoopEvent.Unreadable)
@@ -186,6 +198,14 @@ class ToolLoop(
             release()
             if (calls.isEmpty() || rounds > maxRounds) {
                 emit(LoopEvent.Done(stats, changedPrefix, rounds, staleConversation = checked))
+                return@flow
+            }
+
+            // On the lock screen, one call that needs more than the lock screen allows stops the
+            // turn before anything runs: what the user asked goes again once they unlock.
+            if (context.locked && calls.any { it.name !in ToolCatalog.LOCKED }) {
+                emit(LoopEvent.NeedsUnlock)
+                emit(LoopEvent.Done(stats, changedPrefix, rounds, staleConversation = true))
                 return@flow
             }
 

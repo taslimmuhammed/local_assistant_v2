@@ -97,9 +97,13 @@ class KeepReadyService : Service() {
             return START_NOT_STICKY
         }
         if (listening) startWake() else stopWake()
-        // Not sticky: if the system still kills the app for memory, it doesn't fight back by
+        // Listening, sticky: OxygenOS kills the app when it is swiped out of the recent apps, and
+        // the wake word should still answer afterwards (the user, 2026-10-30). Android restarts
+        // the service, and as the phone's assistant app the app may still use the microphone from
+        // the background. A restart doesn't load the chat model, only the wake word's few MB.
+        // Otherwise not sticky: if the system kills the app for memory, it doesn't fight back by
         // restarting it; the next time the app or the overlay opens, this starts again.
-        return START_NOT_STICKY
+        return if (listening) START_STICKY else START_NOT_STICKY
     }
 
     override fun onDestroy() {
@@ -158,7 +162,11 @@ class KeepReadyService : Service() {
             if (wanted(context.appContainer.settings)) start(context) else stop(context)
         }
 
-        /** Only works while the app is in the foreground, which is when it is called. */
+        /**
+         * Works while the app is in the foreground, which is when it is mostly called, and from
+         * the assistant service (Android lets the assistant app start the microphone from the
+         * background).
+         */
         fun start(context: Context) {
             runCatching { ContextCompat.startForegroundService(context, Intent(context, KeepReadyService::class.java)) }
                 .onFailure { Log.w(TAG, "Could not start keeping the assistant ready", it) }

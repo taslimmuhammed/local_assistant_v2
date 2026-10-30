@@ -24,9 +24,10 @@ object LockScreenNotice {
     private const val NOTIFICATION_ID = 7002
 
     const val TITLE = "Talk to the assistant on the lock screen?"
+    /** What anyone holding the locked phone gets with the setting on ([com.local.assistant.memory.tools.ToolCatalog.LOCKED]). */
     const val RISK =
-        "Anyone holding your phone could then ask it what it remembers about you, saved cards and PINs included, " +
-            "and have it call or message your contacts, all without unlocking."
+        "Anyone holding your phone could then set reminders, events, alarms and timers, change phone settings and look things up. " +
+            "It shows nothing it knows about you there: your memory, photos and chats, calls and messages need an unlock first."
 
     fun post(context: Context) {
         val manager = context.getSystemService(NotificationManager::class.java) ?: return

@@ -88,6 +88,9 @@ class RoutingEvalTest {
         Case("my friend thinks Python is better than Java", setOf(null)),
         Case("oh great, another Monday", setOf(null)),
         Case("write a haiku about rain", setOf(null)),
+        // Its name, from the instructions; the reply in the results should say Luna.
+        Case("what's your name?", setOf(null)),
+        Case("hey Luna, who are you?", setOf(null)),
         Case("should I call the CA tomorrow?", setOf(null)),
         // Everyday tools.
         Case("call amma", setOf("phone_call")) { args -> args["who"].toString().contains("amma", ignoreCase = true) },
@@ -350,6 +353,6 @@ class RoutingEvalTest {
 
     private companion object {
         const val TAG = "RoutingEval"
-        const val PERSONA = "You are a helpful assistant running entirely on the user's device."
+        const val PERSONA = com.local.assistant.data.prefs.SettingsStore.DEFAULT_SYSTEM_PROMPT
     }
 }

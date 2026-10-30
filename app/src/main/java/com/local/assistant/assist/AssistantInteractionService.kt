@@ -24,6 +24,9 @@ class AssistantInteractionService : VoiceInteractionService() {
     override fun onReady() {
         super.onReady()
         running = this
+        // Android binds this after the app's process was killed (swiped out of the recent apps,
+        // say): start listening for the wake word again without waiting for the app to be opened.
+        KeepReadyService.update(this)
     }
 
     override fun onShutdown() {

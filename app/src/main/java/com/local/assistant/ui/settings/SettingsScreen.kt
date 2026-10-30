@@ -285,7 +285,7 @@ private fun AssistantSettings(settings: SettingsStore, speaker: Speaker, voicePa
         })
     }
 
-    // Off by default: whoever holds the locked phone would get the assistant, memory and all.
+    // Off by default: whoever holds the locked phone could set reminders and alarms with it.
     var onLockScreen by remember { mutableStateOf(settings.assistantOnLockScreen) }
     var confirmingLockScreen by remember { mutableStateOf(false) }
     Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -293,12 +293,12 @@ private fun AssistantSettings(settings: SettingsStore, speaker: Speaker, voicePa
             Text("Use on the lock screen", style = MaterialTheme.typography.bodyLarge, color = AppColors.TextPrimary)
             Text(
                 if (onLockScreen) {
-                    "On: the power button opens the assistant without unlocking. ${LockScreenNotice.RISK}"
+                    "On: the power button and the wake word open the assistant without unlocking, for reminders, alarms, timers and the like. ${LockScreenNotice.RISK}"
                 } else {
                     "Off: on the lock screen the assistant asks you to unlock first."
                 },
                 style = MaterialTheme.typography.bodySmall,
-                color = if (onLockScreen) AppColors.Danger else AppColors.TextSecondary,
+                color = AppColors.TextSecondary,
             )
         }
         AppSwitch(checked = onLockScreen, onCheckedChange = { on ->
@@ -316,9 +316,8 @@ private fun AssistantSettings(settings: SettingsStore, speaker: Speaker, voicePa
             title = { Text("Use the assistant without unlocking?") },
             text = {
                 Text(
-                    "Holding the power button on the lock screen will open the assistant with everything it has in the app. " +
-                        "${LockScreenNotice.RISK} It can also set alarms, reminders and phone settings. " +
-                        "Calls, messages and apps it opens still show only after you unlock.",
+                    "Holding the power button or saying \u201c${WakeWord.PHRASE}\u201d on the lock screen will open the assistant without unlocking. " +
+                        LockScreenNotice.RISK,
                 )
             },
             confirmButton = {

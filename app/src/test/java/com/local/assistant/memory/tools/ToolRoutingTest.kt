@@ -81,6 +81,57 @@ class ToolRoutingTest {
     private fun result(session: ScriptedSession, index: Int = 0): Map<*, *> =
         Gson().fromJson(session.sentResults.first()[index].json, Map::class.java)
 
+    /** As [turn], asked on the lock screen. */
+    private fun lockedTurn(vararg calls: ToolCall, reply: String = "Done."): Pair<ScriptedSession, List<LoopEvent>> {
+        val session = ScriptedSession(ArrayDeque(listOf(ScriptedSession.calls(*calls), ScriptedSession.says(reply))))
+        val events = runBlocking { loop.run(session, "envelope", null, context.copy(locked = true)).toList() }
+        return session to events
+    }
+
+    // ---- The lock screen ----
+
+    @Test
+    fun `on the lock screen a reminder is set as usual`() {
+        val (session, events) = lockedTurn(call("add_task", "title" to "Call the CA", "when" to "tomorrow at 11"))
+
+        assertEquals(at(9, 22, 11), store.tasks.values.single().dueAt)
+        assertEquals(true, result(session)["ok"])
+        assertTrue(events.none { it == LoopEvent.NeedsUnlock })
+        assertEquals(LoopEvent.Text("Done."), events.filterIsInstance<LoopEvent.Text>().single())
+    }
+
+    @Test
+    fun `on the lock screen remembering something asks for an unlock and saves nothing`() {
+        val (session, events) = lockedTurn(call("save_fact", "attribute" to "dentist", "value" to "Dr. Rao"))
+
+        assertTrue(store.facts.isEmpty())
+        assertTrue(session.sentResults.isEmpty())
+        assertTrue(log.records.isEmpty())
+        assertEquals(LoopEvent.NeedsUnlock, events[events.size - 2])
+        assertTrue((events.last() as LoopEvent.Done).staleConversation)
+    }
+
+    @Test
+    fun `on the lock screen memory, photos, calls and messages ask for an unlock`() {
+        for (name in listOf("search_memory", "get_upcoming", "find_photos", "phone_call", "send_message", "open_app", "forget", "update_task")) {
+            val (_, events) = lockedTurn(call(name, "query" to "x"))
+            assertTrue(name, LoopEvent.NeedsUnlock in events)
+        }
+        assertTrue(log.records.isEmpty())
+        assertTrue(phone.done.isEmpty())
+    }
+
+    @Test
+    fun `on the lock screen one call it can't make stops the others too`() {
+        val (_, events) = lockedTurn(
+            call("add_task", "title" to "Buy milk", "when" to "tomorrow at 9"),
+            call("save_fact", "attribute" to "milk brand", "value" to "Milma"),
+        )
+
+        assertTrue(store.tasks.isEmpty())
+        assertTrue(LoopEvent.NeedsUnlock in events)
+    }
+
     // ---- The brief's three cases ----
 
     @Test

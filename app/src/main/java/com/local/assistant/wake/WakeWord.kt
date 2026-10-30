@@ -21,12 +21,18 @@ enum class WakeWordMode {
 object WakeWord {
 
     /**
+     * The assistant's name, which the phrase calls it by; the model is told it too
+     * (memory/prompt/Instructions). Changing it means new keyword spellings and a retrained model.
+     */
+    const val NAME = "Luna"
+
+    /**
      * What the user says (the user's pick, 2026-10-29). Played to the phone through the air it was
      * heard 12 times in 12, Indian voices too, and woke on no sound-alike; "Hey Kalyani" had
      * needed six spellings and still missed the user's own voice (docs/TECHNICAL.md, "The wake
      * word").
      */
-    const val PHRASE = "Hey Luna"
+    const val PHRASE = "Hey $NAME"
 
     /** Under assets/. */
     const val ASSET_DIR = "wake"

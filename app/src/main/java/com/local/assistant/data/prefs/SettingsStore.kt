@@ -3,6 +3,7 @@ package com.local.assistant.data.prefs
 import android.content.Context
 import androidx.core.content.edit
 import com.local.assistant.memory.prompt.TokenRateStore
+import com.local.assistant.wake.WakeWord
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.callbackFlow
@@ -162,8 +163,10 @@ class SettingsStore(context: Context) {
         set(value) = prefs.edit { putBoolean(KEY_KEEP_READY, value) }
 
     /**
-     * The assistant works on the lock screen without unlocking, with all its memory and tools.
-     * Off by default (the user's decision): whoever holds the phone would get both.
+     * The assistant works on the lock screen without unlocking, but sees none of the user's memory
+     * there and has only the lock screen's tools (reminders, alarms, timers …; anything more asks
+     * for an unlock: the user, 2026-10-30). Off by default (the user's decision): whoever holds
+     * the phone could still set reminders and alarms.
      */
     var assistantOnLockScreen: Boolean
         get() = prefs.getBoolean(KEY_ON_LOCK_SCREEN, false)
@@ -278,7 +281,8 @@ class SettingsStore(context: Context) {
         const val DEFAULT_REPETITION_PENALTY = 1.1f
         const val DEFAULT_REPETITION_WINDOW = 256
 
+        /** The persona; Instructions adds the role or the name if a persona leaves either out. */
         const val DEFAULT_SYSTEM_PROMPT =
-            "You are a helpful assistant running entirely on the user's device."
+            "You are ${WakeWord.NAME}, a helpful assistant running entirely on the user's device."
     }
 }

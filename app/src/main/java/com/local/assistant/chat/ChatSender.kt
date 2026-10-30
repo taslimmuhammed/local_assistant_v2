@@ -59,6 +59,12 @@ class ChatSender(
 
         /** The turn is over. [reply] is all of it, as stored; [failure] says what went wrong, if anything. */
         fun onFinished(reply: String, failure: String?) {}
+
+        /**
+         * Asked on the lock screen for something that needs an unlock: nothing was done or stored
+         * as a reply. [resume] with [userMessageId] once the phone is unlocked. Before [onFinished].
+         */
+        fun onNeedsUnlock(chatId: Long, userMessageId: Long) {}
     }
 
     private val _live = MutableStateFlow<Live?>(null)
@@ -73,8 +79,9 @@ class ChatSender(
      * Stores [text] and [attachment] in [chatId] — a new chat when null — and streams the reply.
      * Whichever screen sends it, the model gets the same turn: the same instructions, memory and
      * tools. [hidden]: a new chat is left out of the chat list (the assistant overlay's), though
-     * stored and learned from like any other. Returns false, storing nothing, when there is
-     * nothing to send or another turn is still in flight.
+     * stored and learned from like any other. [locked]: asked on the lock screen
+     * ([TurnRunner.run]). Returns false, storing nothing, when there is nothing to send or another
+     * turn is still in flight.
      */
     fun send(
         chatId: Long?,
@@ -83,20 +90,43 @@ class ChatSender(
         owner: Any,
         listener: Listener,
         hidden: Boolean = false,
+        locked: Boolean = false,
     ): Boolean {
         val prompt = text.trim()
         if ((prompt.isEmpty() && attachment == null) || isBusy) return false
+        return start(chatId, prompt, attachment, owner, listener, hidden, locked, storedUserMessageId = null)
+    }
 
+    /**
+     * Runs the turn for a message already stored, with everything this time: what was asked on
+     * the lock screen, once the phone has been unlocked ([Listener.onNeedsUnlock]).
+     */
+    fun resume(chatId: Long, userMessageId: Long, owner: Any, listener: Listener): Boolean {
+        if (isBusy) return false
+        return start(chatId, prompt = "", attachment = null, owner, listener, hidden = false, locked = false, storedUserMessageId = userMessageId)
+    }
+
+    private fun start(
+        chatId: Long?,
+        prompt: String,
+        attachment: Attachment?,
+        owner: Any,
+        listener: Listener,
+        hidden: Boolean,
+        locked: Boolean,
+        storedUserMessageId: Long?,
+    ): Boolean {
         stopRequested = false
         _live.value = Live(chatId, "", owner)
 
         // Main, as when each screen ran its own turns: the listeners update screen state.
         job = scope.launch(Dispatchers.Main.immediate) {
             var chat = chatId
-            var userMessageId: Long? = null
+            var userMessageId: Long? = storedUserMessageId
             val reply = StringBuilder()
             var failure: String? = null
             var completed = false
+            var needsUnlock = false
             try {
                 if (chat == null) {
                     chat = repository.createChat(hidden = hidden)
@@ -107,27 +137,36 @@ class ChatSender(
                 }
 
                 // Stored first, so nothing the user wrote is lost whatever happens next.
-                userMessageId = repository.addMessage(
+                val asked = userMessageId ?: repository.addMessage(
                     chatId = chat,
                     role = Role.USER,
                     text = prompt,
                     attachmentPath = attachment?.path,
                     attachmentKind = attachment?.kind,
                     attachmentDurationMs = attachment?.durationMs,
-                )
-                listener.onUserMessageStored(userMessageId)
-                repository.titleFromFirstMessage(
-                    chatId = chat,
-                    firstMessage = prompt,
-                    fallback = when (attachment?.kind) {
-                        AttachmentKind.IMAGE -> "Image"
-                        AttachmentKind.AUDIO -> "Voice message"
-                        null -> ChatRepository.DEFAULT_TITLE
-                    },
-                )
+                ).also { stored ->
+                    userMessageId = stored
+                    listener.onUserMessageStored(stored)
+                    repository.titleFromFirstMessage(
+                        chatId = chat,
+                        firstMessage = prompt,
+                        fallback = when (attachment?.kind) {
+                            AttachmentKind.IMAGE -> "Image"
+                            AttachmentKind.AUDIO -> "Voice message"
+                            null -> ChatRepository.DEFAULT_TITLE
+                        },
+                    )
+                }
 
-                val promptAttachment = attachment?.let { PromptAttachment(it.path, it.kind) }
-                turns.run(chat, userMessageId, prompt, promptAttachment).collect { event ->
+                // Resumed: the message as it was stored.
+                val stored = storedUserMessageId?.let { repository.message(it) }
+                val text = stored?.text ?: prompt
+                val promptAttachment = if (stored != null) {
+                    stored.attachmentPath?.let { path -> stored.attachmentKind?.let { PromptAttachment(path, it) } }
+                } else {
+                    attachment?.let { PromptAttachment(it.path, it.kind) }
+                }
+                turns.run(chat, asked, text, promptAttachment, locked).collect { event ->
                     when (event) {
                         is TurnEvent.Text -> {
                             reply.append(event.delta)
@@ -135,6 +174,7 @@ class ChatSender(
                         }
                         is TurnEvent.Memory -> listener.onMemory(event.chip)
                         is TurnEvent.Done -> completed = true
+                        TurnEvent.NeedsUnlock -> needsUnlock = true
                     }
                 }
             } catch (e: CancellationException) {
@@ -149,8 +189,10 @@ class ChatSender(
                     val asked = userMessageId
                     // Null only if stopped before the message was stored: then there is no turn.
                     if (chat != null && asked != null) {
-                        val incomplete = stopRequested || failure != null
+                        val incomplete = stopRequested || failure != null || needsUnlock
                         var assistantMessageId: Long? = null
+                        // Stopped for an unlock: whatever the model began to say isn't the answer.
+                        if (needsUnlock) reply.clear()
                         if (reply.isNotEmpty()) {
                             val stats = llm.lastGenerationStats.value
                             assistantMessageId = repository.addMessage(
@@ -166,6 +208,7 @@ class ChatSender(
                     }
                     if (failure == null && reply.isEmpty() && !stopRequested) Log.w(TAG, "Turn in chat $chat ended with no reply (completed: $completed)")
                     _live.value = null
+                    if (needsUnlock && chat != null && asked != null) listener.onNeedsUnlock(chat, asked)
                     listener.onFinished(reply.toString(), failure)
                 }
             }

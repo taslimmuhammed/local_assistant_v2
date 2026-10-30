@@ -71,6 +71,11 @@ class AssistViewModel(
     permissions: PermissionBroker,
     /** Card numbers, PINs and the like are read out only while shown on screen ([SensitiveText.spoken]). */
     private val sensitive: com.local.assistant.privacy.SensitiveLock? = null,
+    /**
+     * The phone is locked: what is asked now gets none of the user's memory and only the lock
+     * screen's tools ([ChatSender.send]'s locked); anything more asks for an unlock first.
+     */
+    private val onLockScreen: () -> Boolean = { false },
 ) : ViewModel() {
 
     /** Says [sentence], with its sensitive details said as how they end, unless they're being shown. */
@@ -146,6 +151,17 @@ class AssistViewModel(
     /** A timed reminder was set and notifications have never been asked for. */
     val askForNotifications: StateFlow<Boolean> = _askForNotifications.asStateFlow()
 
+    private val _unlockFor = MutableStateFlow<Long?>(null)
+
+    /**
+     * A question asked on the lock screen that needs the phone unlocked (its stored message): the
+     * overlay asks for the unlock, then [continueAfterUnlock].
+     */
+    val unlockFor: StateFlow<Long?> = _unlockFor.asStateFlow()
+
+    /** Whether the question waiting for the unlock was asked aloud, and so is answered aloud. */
+    private var unlockForVoice = false
+
     /** Cuts the streaming reply into sentences to speak; null when this reply isn't spoken. */
     private var chunker: SpeechChunker? = null
 
@@ -165,8 +181,9 @@ class AssistViewModel(
         llm.warmUp()
         // The first message here always starts a new chat, whose conversation has to read the
         // whole system prompt first (3.4 s on the phone, 6 s just after the model loads). Do it
-        // now, while the user is still talking; the first message then takes it over.
-        conversations.prepareFresh()
+        // now, while the user is still talking; the first message then takes it over. Not on the
+        // lock screen, whose conversation is built without the user's memory.
+        if (!onLockScreen()) conversations.prepareFresh()
         // The natural voice takes about a second to load: likewise while the user talks.
         if (!_muted.value) speaker.prepare()
 
@@ -355,7 +372,10 @@ class AssistViewModel(
                 sender.live.first { it == null }
                 chunker = if (speak) SpeechChunker() else null
                 // Not in the chat list; stored, and learned from, like any other chat.
-                started = sender.send(_chatId.value, text, attachment, owner = this@AssistViewModel, listener = listener, hidden = true)
+                unlockForVoice = speak
+                started = sender.send(
+                    _chatId.value, text, attachment, owner = this@AssistViewModel, listener = listener, hidden = true, locked = onLockScreen(),
+                )
             } finally {
                 if (!started) {
                     attachment?.let { attachments.delete(it.path) }
@@ -381,6 +401,13 @@ class AssistViewModel(
             }
         }
 
+        override fun onNeedsUnlock(chatId: Long, userMessageId: Long) {
+            if (closed) return
+            _notice.value = UNLOCK_NOTICE
+            if (unlockForVoice) say(UNLOCK_NOTICE)
+            _unlockFor.value = userMessageId
+        }
+
         override fun onFinished(reply: String, failure: String?) {
             if (closed) return
             chunker?.finish(reply)?.forEach(::say)
@@ -389,6 +416,30 @@ class AssistViewModel(
             failure?.let { _notice.value = it }
             if (_pending.value?.storedId == null) _pending.value = null
         }
+    }
+
+    /** The phone was unlocked for the question in [unlockFor]: answer it now, with everything. */
+    fun continueAfterUnlock() {
+        val asked = _unlockFor.value ?: return
+        val chat = _chatId.value ?: return
+        _unlockFor.value = null
+        _notice.value = null
+        viewModelScope.launch {
+            sender.live.first { it == null }
+            val speak = unlockForVoice && !_muted.value
+            chunker = if (speak) SpeechChunker() else null
+            _awaitingSpeech.value = speak
+            if (!sender.resume(chat, asked, owner = this@AssistViewModel, listener = listener)) {
+                chunker = null
+                _awaitingSpeech.value = false
+            }
+        }
+    }
+
+    /** The unlock was cancelled: the question stays unanswered. */
+    fun unlockCancelled() {
+        _unlockFor.value = null
+        _notice.value = "Still locked, so that wasn't done. Unlock your phone and ask again."
     }
 
     override fun onCleared() {
@@ -404,7 +455,10 @@ class AssistViewModel(
         /** How long other audio stays paused after the assistant falls quiet. */
         private const val FOCUS_GRACE_MS = 800L
 
-        fun factory(container: AppContainer): ViewModelProvider.Factory = viewModelFactory {
+        /** Said and shown when a lock-screen question needs more than the lock screen allows. */
+        const val UNLOCK_NOTICE = "Unlock your phone to do that."
+
+        fun factory(container: AppContainer, onLockScreen: () -> Boolean = { false }): ViewModelProvider.Factory = viewModelFactory {
             initializer {
                 AssistViewModel(
                     sender = container.chatSender,
@@ -420,6 +474,7 @@ class AssistViewModel(
                     focus = container.audioFocus,
                     permissions = container.permissions,
                     sensitive = container.sensitiveLock,
+                    onLockScreen = onLockScreen,
                 )
             }
         }

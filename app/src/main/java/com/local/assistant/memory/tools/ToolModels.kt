@@ -82,7 +82,8 @@ data class ToolRecord(
  * Where a tool call happens: which chat, and the user message that asked for it. [userText] is
  * that message as typed, which numbers in the call's arguments are checked against.
  */
-data class ToolContext(val chatId: Long, val userMessageId: Long, val userText: String = "")
+/** [locked]: the phone is locked, so only [ToolCatalog.LOCKED] tools run (see [ToolLoop]). */
+data class ToolContext(val chatId: Long, val userMessageId: Long, val userText: String = "", val locked: Boolean = false)
 
 /** Persists tool calls as TOOL rows in the chat. */
 interface ToolLog {
