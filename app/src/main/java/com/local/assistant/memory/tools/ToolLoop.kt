@@ -95,6 +95,10 @@ class ToolLoop(
         // The model was asked again after saying it did something no tool did.
         var checked = false
         val grounding = ReplyGrounding(sources + envelope)
+        // Saying photos were found counts as a claim only with none in front of the model: with a
+        // recalled photo sent along, "I found a photo of your certificate" is true.
+        val seesPhotos = attachments.any { it.kind == com.local.assistant.data.db.AttachmentKind.IMAGE }
+        fun claimed(text: CharSequence) = ActionClaims.claims(text) || (!seesPhotos && ActionClaims.foundPhotos(text))
         val text = if (groundNumbers()) GroundedReply(grounding, onNumberFixed) else null
 
         /** Reply text the user may see now. */
@@ -132,7 +136,7 @@ class ToolLoop(
                             val end = if (suspect) null else ActionClaims.openingEnd(opening)
                             when {
                                 end == null -> Unit
-                                ActionClaims.claims(opening.substring(0, end)) -> suspect = true
+                                claimed(opening.substring(0, end)) -> suspect = true
                                 // Says it wrote a message: held until the message shows up.
                                 ActionClaims.unshownDraft(opening) -> Unit
                                 else -> {
@@ -179,7 +183,7 @@ class ToolLoop(
             }
             val opening = held
             if (opening != null) {
-                if (calls.isEmpty() && (suspect || ActionClaims.claims(opening) || ActionClaims.unshownDraft(opening))) {
+                if (calls.isEmpty() && (suspect || claimed(opening) || ActionClaims.unshownDraft(opening))) {
                     // Said it did something no tool did: not shown, and the model asked again,
                     // once. The live conversation now holds a reply nobody saw, so it is
                     // rebuilt from what is stored next turn.

@@ -8,6 +8,27 @@ import org.junit.Test
 class ActionClaimsTest {
 
     @Test
+    fun `saying photos were found or are here is a photo claim`() {
+        for (text in listOf(
+            "I found 3 photos of your B.Tech certificate.",
+            "I found 5 photos of you watching the sunset.",
+            "I've pulled up your beach pictures.",
+            "Here are your sunset photos.",
+            "Here are 4 videos from the wedding.",
+        )) {
+            assertTrue(text, ActionClaims.foundPhotos(text))
+        }
+        for (text in listOf(
+            "I can look for your certificate in your photos.",
+            "Would you like me to find photos of the beach?",
+            "A good photo of the moon needs a tripod.",
+            "Here is how to take a good selfie.",
+        )) {
+            assertTrue(text, !ActionClaims.foundPhotos(text))
+        }
+    }
+
+    @Test
     fun `replies that say something was done are claims`() {
         val claims = listOf(
             // From the user's chats: the first two had no tool call behind them.

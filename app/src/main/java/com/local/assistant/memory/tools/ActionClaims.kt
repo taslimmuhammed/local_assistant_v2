@@ -16,6 +16,15 @@ object ActionClaims {
     fun claims(text: CharSequence): Boolean = CLAIMS.any { it.containsMatchIn(text) }
 
     /**
+     * Whether [text] says photos were found or are shown: "I found 3 photos of your B.Tech
+     * certificate.", "Here are your sunset photos." Only find_photos finds and shows them, so with
+     * no photo in front of the model either, that is a claim. On follow-ups the model repeated an
+     * earlier search's answer instead of searching, and "I found 5 photos of you watching the
+     * sunset" came with no search at all (1 Nov 2026), so nothing appeared under it.
+     */
+    fun foundPhotos(text: CharSequence): Boolean = FOUND_PHOTOS.any { it.containsMatchIn(text) }
+
+    /**
      * Whether [text] says a message was written without showing it: "I've drafted the email for
      * you. Would you like me to send it now?" (the power-button panel, 27 Oct 2026), with no tool
      * run, means no draft exists anywhere. A draft the reply goes on to show ("…for you:", in
@@ -83,6 +92,13 @@ object ActionClaims {
         "\\b(?:$SCHEDULED)\\s+(?:has|have|is|are)\\s+(?:been\\s+|now\\s+)?(?:set|added|saved|created|scheduled|updated|deleted|cancell?ed)\\b",
         "(?:^|[.!?]\\s+)(?:your\\s+)?(?:email|e-mail|mail|message|text|sms|whatsapp)\\s+(?:was\\s+|is\\s+|has\\s+been\\s+)?(?:successfully\\s+)?sent\\b",
         "^\\s*(?:sent|done|all done|all set)\\b",
+    ).map { Regex(it, RegexOption.IGNORE_CASE) }
+
+    private const val PHOTOS = "photos?|pictures?|pics?|images?|videos?|selfies?|screenshots?|snaps?"
+
+    private val FOUND_PHOTOS = listOf(
+        near("found|located|pulled up|got|retrieved|fetched", PHOTOS, words = 4),
+        "\\bhere\\s+(?:are|is)\\b(?:$GAP[\\w'’-]+){0,4}?$GAP(?:$PHOTOS)\\b",
     ).map { Regex(it, RegexOption.IGNORE_CASE) }
 
     private val DRAFT = Regex(

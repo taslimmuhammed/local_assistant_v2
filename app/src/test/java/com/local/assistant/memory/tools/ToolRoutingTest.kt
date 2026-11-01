@@ -756,6 +756,26 @@ class ToolRoutingTest {
         assertTrue((events.last() as LoopEvent.Done).staleConversation)
     }
 
+    /** As it went in the user's chat on 1 Nov 2026: a follow-up answered with the last search's count, and no search. */
+    @Test
+    fun `saying photos were found with no search and no photo sent is asked again`() {
+        val (session, events) = replies(
+            ScriptedSession.says("I found 3 photos of your B.Tech certificate."),
+            ScriptedSession.says("Let me look."),
+        )
+        assertEquals(listOf("envelope", ToolLoop.UNBACKED_CLAIM), session.sentEnvelopes)
+        assertEquals("Let me look.", shown(events))
+    }
+
+    @Test
+    fun `with a recalled photo sent along, saying it was found is no claim`() {
+        val session = ScriptedSession(ArrayDeque(listOf(ScriptedSession.says("I found a photo of your certificate: it was issued in 2019."))))
+        val photo = com.local.assistant.llm.PromptAttachment("/tmp/recalled-photo-0.jpg", com.local.assistant.data.db.AttachmentKind.IMAGE)
+        val events = runBlocking { loop.run(session, "envelope", listOf(photo), context).toList() }
+        assertEquals(listOf("envelope"), session.sentEnvelopes)
+        assertEquals("I found a photo of your certificate: it was issued in 2019.", shown(events))
+    }
+
     @Test
     fun `asked again, the model can call the tool it should have, and that is what happens`() {
         val (_, events) = replies(

@@ -529,6 +529,14 @@ typed calls `send_message`, spoken it got "The email has been sent." And after e
 have called", though the app had only opened WhatsApp or the dialer. Four things keep replies to
 what happened:
 
+**Photos it says it found.** On follow-ups in a photo chat, the model answered with the last
+search's count instead of searching: "I found 3 photos of your B.Tech certificate.", then "I found
+5 photos of you watching the sunset.", with no `find_photos` call (1 Nov 2026), so no photos
+appeared under either reply. `ActionClaims.foundPhotos` ("I found … photos", "Here are your …
+photos") now counts as a claim when no photo went with the message, and is checked like the
+others: held back, the model asked again, and it searches. With a recalled photo sent along, the
+same words are true and pass.
+
 - **The opening is checked before it is shown** (`ToolLoop`, `ActionClaims`). Until a tool has
   run in a turn, a reply's first sentence (or more, while that is under 30 characters, at most
   200) is held back. If it says something was done (sent, called, booked, paid, an alarm or
