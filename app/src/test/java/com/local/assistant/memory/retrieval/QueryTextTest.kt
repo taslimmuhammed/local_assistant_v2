@@ -55,4 +55,29 @@ class QueryTextTest {
         val terms = QueryText.terms("मेरा डॉक्टर कौन है")
         assertTrue(terms.contains("डॉक्टर"))
     }
+
+    @Test
+    fun commandsAreToldFromQuestions() {
+        for (command in listOf(
+            "set an alarm for 6 am", "Hey Luna, set a timer for 10 minutes", "remind me to call amma at 7",
+            "can you please remind me to pay the electricity bill tomorrow", "wake me up at 5:30",
+            "call shiyas", "text priya I'm running late", "WhatsApp Sandra hi", "email hitesh the report",
+            "send the address to rahul", "open youtube", "turn on the flashlight", "turn the wifi off",
+            "increase the volume", "add milk to my shopping list", "schedule a meeting with Rahul tomorrow at 3",
+            "cancel my 6 am alarm", "delete the reminder about the gym", "play some music",
+            "navigate to the airport", "remember that my locker code is in the drawer", "forget my old address",
+            "could you create a reminder for my passport renewal",
+        )) {
+            assertTrue(command, QueryText.isCommand(command))
+        }
+        for (question in listOf(
+            "did I ever participate in push to prod hackathon?", "when is corniche resto's anniversary celebration",
+            "remind me what I said about Goa", "remind me about our trip plan", "send me my PAN number",
+            "what time is my alarm set for?", "do you remember my wife's birthday?", "show me my driving licence",
+            "how do I set an alarm on this phone?", "who should I call about the leak?", "what's on my shopping list?",
+            "tell me a joke", "is the flashlight on?", "when is my next meeting?",
+        )) {
+            assertFalse(question, QueryText.isCommand(question))
+        }
+    }
 }

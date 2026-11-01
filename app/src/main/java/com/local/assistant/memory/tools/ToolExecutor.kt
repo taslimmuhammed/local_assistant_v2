@@ -103,6 +103,17 @@ class ToolExecutor(
     /** Recent successful calls: when each stops counting as a repeat, and what it returned. */
     private val recent = LinkedHashMap<String, Pair<Long, Outcome>>()
 
+    /**
+     * Photos found for the message itself ([mediaIds], best first), kept in a TOOL row of their
+     * own ([ToolCatalog.RELATED_PHOTOS]) so they show under the reply like a photo search's. The
+     * row's id and its chip.
+     */
+    suspend fun showRelatedPhotos(chatId: Long, mediaIds: List<Long>): Pair<Long, MemoryChip> {
+        val chip = MemoryChip(MemoryChip.Kind.PHOTOS, "Photos", RELATED_TITLE, photos = PhotoSet(RELATED_TITLE, mediaIds))
+        val id = log.record(chatId, ToolRecord(ToolCatalog.RELATED_PHOTOS, emptyMap(), gson.toJson(ok("shown" to mediaIds.size)), chip))
+        return id to chip
+    }
+
     suspend fun execute(model: ToolCall, context: ToolContext): Outcome {
         val call = grounded(model, context.userText)
         if (call != model) Log.i(TAG, "Numbers in ${model.name} taken from the user's words: ${model.arguments} -> ${call.arguments}")
@@ -798,6 +809,9 @@ class ToolExecutor(
         private val NOTE_DATE = DateTimeFormatter.ofPattern("d MMM yyyy", Locale.ENGLISH)
 
         private val gson = Gson()
+
+        /** The heading of photos shown because the message was searched for. */
+        const val RELATED_TITLE = "Related photos"
         private val MODEL_TIME = DateTimeFormatter.ofPattern("EEE d MMM HH:mm", Locale.ENGLISH)
         private val MODEL_DATE = DateTimeFormatter.ofPattern("EEE d MMM", Locale.ENGLISH)
         private val ID_REFERENCE = Regex("(?:#|task\\s*#?\\s*)?(\\d+)")

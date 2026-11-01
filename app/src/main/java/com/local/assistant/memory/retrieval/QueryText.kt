@@ -27,6 +27,51 @@ object QueryText {
         return words.all { it in ACKNOWLEDGEMENTS }
     }
 
+    /**
+     * A command to act on rather than a question: an alarm, a timer, a reminder, a call, a message,
+     * an app, a setting, a list. Nothing is recalled for one (the user, 30 Oct 2026: recall only
+     * slows commands down). Only what is plainly put as a command counts: a question taken for a
+     * command would lose its memory, while a command taken for a question only runs as before.
+     * So "remind me what I said about Goa" is a question, and "send me my PAN number" is too.
+     */
+    fun isCommand(text: String): Boolean {
+        var said = text.trim().lowercase(Locale.ROOT).replace('’', '\'')
+        // "Hey Luna, can you please…" down to what is asked.
+        while (true) {
+            val shorter = said.replace(LEAD_IN, "").trimStart(' ', ',', '.', '!')
+            if (shorter == said) break
+            said = shorter
+        }
+        return COMMANDS.any { it.containsMatchIn(said) }
+    }
+
+    /** Wake words, politeness and "can you" before a request. */
+    private val LEAD_IN = Regex(
+        "^(hey luna|luna|ok|okay|please|pls|plz|kindly|just|now|quickly|" +
+            "(can|could|would|will) (you|u)( please)?|i (want|need) you to)\\b",
+    )
+
+    private const val THINGS = "alarms?|timers?|reminders?|tasks?|to-?dos?|events?|meetings?|appointments?"
+
+    /** At the start of what is asked, after [LEAD_IN]. */
+    private val COMMANDS = listOf(
+        // Not "remind me what…": that asks to be told something.
+        Regex("^remind me\\b(?!\\s+(what|who|when|where|why|how|which|whether|if|of|about)\\b)"),
+        Regex("^wake me\\b"),
+        Regex("^(set|start|create|add|make|schedule|put|book)\\b.{0,40}\\b($THINGS)\\b"),
+        Regex("^(cancel|delete|remove|clear|dismiss|snooze|stop|mark|complete|finish|reschedule|postpone|move|change|update|edit|turn off)\\b.{0,40}\\b($THINGS)\\b"),
+        Regex("^(add|put) .{1,60}\\b(to|on|in|into) (my |the )?(\\w+ )?(list|tasks|to-?do list|calendar)\\b"),
+        Regex("^(call|ring|dial|video call|facetime)\\s+\\S"),
+        Regex("^(text|message|msg|sms|whatsapp|email|e-mail|mail)\\s+\\S"),
+        Regex("^send\\b(?!\\s+me\\b)"),
+        Regex("^(open|launch)\\s+\\S"),
+        Regex("^(turn|switch) (on|off)\\b|^(turn|switch) (the |my )?\\S+( \\S+)? (on|off)\\b|^(enable|disable|mute|unmute)\\b"),
+        Regex("^(increase|decrease|raise|lower|reduce|set|turn up|turn down) (the )?(volume|brightness)\\b|^(volume|brightness) (up|down)\\b"),
+        Regex("^(play|pause|resume|skip)\\b|^(next|previous) (song|track)\\b|^stop (the )?(music|song|playback)\\b"),
+        Regex("^(navigate|directions|take me|drive me) to\\b"),
+        Regex("^(remember|note|save) (that|this|my)\\b|^forget\\b"),
+    )
+
     /** Lower-cased words worth searching for, in order, without repeats. */
     fun terms(text: String): List<String> =
         words(text).map { it.lowercase(Locale.ROOT).replace('’', '\'').substringBefore('\'') }

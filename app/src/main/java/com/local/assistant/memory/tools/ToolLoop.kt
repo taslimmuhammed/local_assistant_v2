@@ -83,11 +83,12 @@ class ToolLoop(
     fun run(
         session: ChatSession,
         envelope: String,
-        attachment: PromptAttachment?,
+        /** Files that go with the message: the user's own, or a saved image and photos recalled for it. */
+        attachments: List<PromptAttachment>,
         context: ToolContext,
         sources: List<String> = emptyList(),
     ): Flow<LoopEvent> = flow {
-        var reply = session.send(envelope, attachment)
+        var reply = session.send(envelope, attachments)
         var rounds = 0
         var spoke = false
         var changedPrefix = false
@@ -250,6 +251,9 @@ class ToolLoop(
             }
         }
     }
+
+    /** See [ToolExecutor.showRelatedPhotos]. */
+    suspend fun showRelatedPhotos(chatId: Long, mediaIds: List<Long>): Pair<Long, MemoryChip> = executor.showRelatedPhotos(chatId, mediaIds)
 
     /** The results as text, for the message that carries a result's picture. */
     private fun toolResultsWithImage(results: List<ToolResult>): String = buildString {

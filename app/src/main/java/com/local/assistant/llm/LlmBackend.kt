@@ -103,6 +103,9 @@ interface ChatSession : AutoCloseable {
     /** Streams the reply to one user turn. [envelope] is the full user message, E–G. */
     fun send(envelope: String, attachment: PromptAttachment? = null): Flow<GenEvent>
 
+    /** [send] with several files: photos recalled for a question go two at a time. */
+    fun send(envelope: String, attachments: List<PromptAttachment>): Flow<GenEvent> = send(envelope, attachments.firstOrNull())
+
     /** Answers the model's tool calls and streams whatever it says next. */
     fun sendToolResults(results: List<ToolResult>): Flow<GenEvent>
 

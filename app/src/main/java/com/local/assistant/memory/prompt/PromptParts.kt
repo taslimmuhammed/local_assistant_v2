@@ -54,6 +54,33 @@ data class Snippet(val text: String, val at: Long)
  */
 data class SavedImageLine(val title: String, val details: String, val at: Long, val attached: Boolean = true)
 
+/**
+ * A photo from the user's gallery that may be about this message (`gallery/PhotoRecall`), found by
+ * what the message says. [attached]: it goes with this message; otherwise it was attached earlier
+ * in this conversation, where the model can still see it (a second copy garbled numbers).
+ */
+data class PhotoLine(val mediaId: Long, val path: String, val takenAt: Long?, val attached: Boolean = true)
+
+/**
+ * Photos from the gallery for a message: [sent] go to the model with it, only when one clearly
+ * matches; [related] (media ids, best first) are shown under the reply whatever they score, so the
+ * user can look for the answer there too.
+ */
+data class RecalledPhotos(val sent: List<PhotoLine> = emptyList(), val related: List<Long> = emptyList()) {
+    companion object {
+        val NONE = RecalledPhotos()
+    }
+}
+
+/** Photos from the gallery a message may be about. */
+fun interface PhotoSource {
+    /**
+     * Up to [max] photos to send for [text], best first, and those to show. A photo in
+     * [inConversation] comes back with [PhotoLine.attached] false and no file written for it.
+     */
+    suspend fun photosFor(text: String, max: Int, inConversation: Set<Long>): RecalledPhotos
+}
+
 /** Everything the per-turn user message (sections E–G) is built from. */
 data class EnvelopeInputs(
     val now: ZonedDateTime,
@@ -64,6 +91,8 @@ data class EnvelopeInputs(
     val snippets: List<Snippet> = emptyList(),
     /** A saved image this message is about, attached to it. */
     val savedImage: SavedImageLine? = null,
+    /** Photos from the user's gallery that may be about this message, best first. */
+    val photos: List<PhotoLine> = emptyList(),
     /** What files sent with the message cost: the user's own, and a recalled image. */
     val attachmentTokens: Int = 0,
     val userText: String,
@@ -77,6 +106,8 @@ data class Envelope(
     val showedNow: Boolean,
     /** Whether the recalled image made it in; if not, it must not be attached either. */
     val savedImage: SavedImageLine? = null,
+    /** The photos that made it in; the others must not be attached either. */
+    val photos: List<PhotoLine> = emptyList(),
 )
 
 data class HistorySelection(
@@ -87,7 +118,7 @@ data class HistorySelection(
 )
 
 /** Budget-shedding steps, in the order they are applied. */
-enum class ShedStep { SNIPPETS, FACTS, IMAGE, SUMMARY, HISTORY, CORE }
+enum class ShedStep { SNIPPETS, PHOTOS, FACTS, IMAGE, SUMMARY, HISTORY, CORE }
 
 /** A complete prompt that fits the budget, and what was given up to make it fit. */
 data class PromptPlan(

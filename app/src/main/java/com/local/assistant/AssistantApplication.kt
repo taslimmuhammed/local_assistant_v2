@@ -15,6 +15,7 @@ import com.local.assistant.gallery.GalleryModel
 import com.local.assistant.gallery.PhotoLibrary
 import com.local.assistant.gallery.PhotoThumbnails
 import com.local.assistant.gallery.PhotoReader
+import com.local.assistant.gallery.PhotoRecall
 import com.local.assistant.gallery.PhotoTools
 import com.local.assistant.gallery.faces.FaceFinder
 import com.local.assistant.gallery.faces.FaceIndex
@@ -286,6 +287,7 @@ class AppContainer(context: Context) {
         webSearch = { webSearch.enabled },
         photoSearch = ::photoSearchReady,
         retriever = retriever,
+        photos = PhotoRecall(galleryIndex, photoLibrary, ready = ::photoSearchReady, cacheDir = context.cacheDir),
         summarizer = summarizer,
         // A background summary or extraction closed it: make it ready again.
         onModelFreed = { if (settings.keepAssistantReady && !appForeground.isForeground) prepareForNextAsk(AFTER_MODEL_WORK_MS) },

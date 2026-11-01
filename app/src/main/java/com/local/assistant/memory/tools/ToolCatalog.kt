@@ -31,6 +31,13 @@ object ToolCatalog {
     /** Not "search_photos", for the same reason. */
     const val FIND_PHOTOS = "find_photos"
 
+    /**
+     * Not a tool the model calls: the TOOL row that keeps the photos shown under a reply because
+     * the message itself was searched for (`gallery/PhotoRecall`), so the chat draws them as it
+     * draws find_photos'. Left out of what a turn is judged by (`ChunkPolicy.isUtility`).
+     */
+    const val RELATED_PHOTOS = "related_photos"
+
     /** Tools that change something, as opposed to reading it. */
     val WRITES = setOf(ADD_TASK, UPDATE_TASK, ADD_EVENT, SAVE_FACT, FORGET, SET_ALARM, REMEMBER_IMAGE)
 
@@ -75,7 +82,7 @@ object ToolCatalog {
     )
 
     private const val PHOTOS_RULE =
-        "- Seeing their own photos or videos of something or someone → find_photos, with person: me for photos of the user. Getting, finding or showing one of their own documents or cards (licence, passport, Aadhaar, PAN, insurance, tickets, bills, certificates) → find_photos with its name as query: they keep them as photos on this phone; not web_lookup or search_memory. Asking what one of them says (their SSLC score, licence number, passport expiry) → the same, plus question, what they asked: \"what's my passport number\" is query passport, question passport number. Call it for every such request, even one like an earlier one: only the call shows the photos, and you can't know a count without it. The app shows the photos under your reply: say in one short sentence how many it found, and don't describe them; if they asked something in them, answer it from the photo it gives you."
+        "- Seeing their own photos or videos of something or someone → find_photos, with person: me for photos of the user. Getting, finding or showing one of their own documents or cards (licence, passport, Aadhaar, PAN, insurance, tickets, bills, certificates) → find_photos with its name as query: they keep them as photos on this phone; not web_lookup or search_memory. Asking what one of them says (their SSLC score, licence number, passport expiry) → the same, plus question, what they asked: \"what's my passport number\" is query passport, question passport number. Call it for every such request, even one like an earlier one: only the call shows the photos, and you can't know a count without it. The app shows the photos under your reply: say in one short sentence how many it found, and don't describe them; if they asked something in them, answer it from the photo it gives you. Photos already found for a question come attached to their message, with a note: if those answer it, answer from them without calling find_photos, unless they ask to see photos."
     private const val PHOTOS_SLOT = "{photos}\n"
 
     private val WEB_DECLARATION = function(

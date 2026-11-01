@@ -11,7 +11,7 @@ import com.local.assistant.wake.WakeWord
  */
 object Instructions {
 
-    const val VERSION = 7
+    const val VERSION = 8
 
     /**
      * What the model is told it is when the persona doesn't say: an assistant, named after the wake

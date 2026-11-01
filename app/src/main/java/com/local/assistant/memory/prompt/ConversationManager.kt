@@ -14,6 +14,7 @@ import com.local.assistant.llm.ContextWindow
 import com.local.assistant.llm.LlmService
 import com.local.assistant.llm.Sampling
 import com.local.assistant.memory.db.MemoryRepository
+import com.local.assistant.memory.retrieval.QueryText
 import com.local.assistant.memory.retrieval.Recall
 import com.local.assistant.memory.retrieval.Retriever
 import com.local.assistant.memory.summary.Summarizer
@@ -21,6 +22,8 @@ import com.local.assistant.memory.work.ModelAccess
 import com.local.assistant.memory.work.ModelScheduler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -72,6 +75,8 @@ class ConversationManager(
     private val photoSearch: () -> Boolean = { false },
     /** Per-turn recall of facts and archived exchanges; none when null. */
     private val retriever: Retriever? = null,
+    /** Per-turn photos from the gallery a question may be about; none when null. */
+    private val photos: PhotoSource? = null,
     /** Folds older turns into the chat's rolling summary; without it they are simply dropped. */
     private val summarizer: Summarizer? = null,
     private val zone: () -> ZoneId = ZoneId::systemDefault,
@@ -81,14 +86,16 @@ class ConversationManager(
 ) : ModelAccess {
 
     /**
-     * A turn ready to send. [recalledImage] is a saved image the message is about, to go with it
-     * when the user attached nothing themselves.
+     * A turn ready to send. [recalledImages] go with it when the user attached nothing themselves:
+     * a saved image the message is about, and photos from the gallery it may be about.
      */
     data class PreparedTurn(
         val session: ChatSession,
         val envelope: Envelope,
         val budget: MemoryBudget,
-        val recalledImage: String? = null,
+        val recalledImages: List<String> = emptyList(),
+        /** Photos to show under the reply, best first (media ids), unless a photo search shows its own. */
+        val relatedPhotos: List<Long> = emptyList(),
         /** The system prefix the conversation holds: what the reply may read numbers out of. */
         val prefix: String = "",
     )
@@ -123,6 +130,8 @@ class ConversationManager(
          * model's reading of it (a second copy garbled long numbers on the phone).
          */
         val attachedNotes: MutableSet<Long> = mutableSetOf(),
+        /** Gallery photos already attached to a turn of this conversation, likewise. */
+        val attachedPhotos: MutableSet<Long> = mutableSetOf(),
     )
 
     /** Plain turns' text and real cost, gathered until there is enough to learn from. */
@@ -199,10 +208,25 @@ class ConversationManager(
             rebuild(chatId, history, budget, capabilities)
         }
 
-        val recall = if (locked) Recall.NONE else recall(chatId, userText, current.windowStartId, budget)
-        // One attachment per message: a recalled image only goes with a message that has none.
+        // A command (an alarm, a reminder, a call) is acted on, not answered from memory: nothing
+        // is recalled for it, which only slowed it down. Over the lock screen, nothing either.
+        val command = QueryText.isCommand(userText)
+        // The user's own attachment goes alone: nothing recalled is attached beside it.
         val userAttached = userMessage?.attachmentKind != null
+        val (recall, photos) = if (locked || command) {
+            Recall.NONE to RecalledPhotos.NONE
+        } else {
+            // The photo search runs beside memory's: its own model, on the CPU.
+            coroutineScope {
+                val search = async { photosFor(userText, current) }
+                recall(chatId, userText, current.windowStartId, budget) to search.await()
+            }
+        }
+        // Shown whatever is attached; sent only beside nothing of the user's own.
+        val found = if (userAttached) emptyList() else photos.sent
         val image = recall.image?.takeIf { !userAttached }
+        // Two pictures at most: a saved image the user asked to keep comes first.
+        val photoLines = found.take(MAX_RECALLED_IMAGES - if (image != null && image.noteId !in current.attachedNotes) 1 else 0)
         fun line(attach: Boolean) = image?.let { SavedImageLine(it.title, it.details, it.at, attached = attach) }
         var inputs = EnvelopeInputs(
             now = now,
@@ -212,6 +236,7 @@ class ConversationManager(
             // Once in the conversation, the image is not attached again: a second copy garbled
             // long numbers on the phone. The line still points the model back at it.
             savedImage = line(attach = image != null && image.noteId !in current.attachedNotes),
+            photos = photoLines,
             attachmentTokens = userMessage?.let { ContextWindow.attachmentTokens(it, capabilities.visionTokensPerImage) } ?: 0,
             userText = userText,
         )
@@ -228,8 +253,9 @@ class ConversationManager(
             } finally {
                 _tidying.value = false
             }
-            // The new conversation holds no saved image, so it goes with this message after all.
-            inputs = inputs.copy(savedImage = line(attach = true))
+            // The new conversation holds no saved image, so it goes with this message after all. A
+            // photo it held has no file now; it goes, and those found for this message stay.
+            inputs = inputs.copy(savedImage = line(attach = true), photos = photoLines.filter { it.attached })
             current = rebuild(chatId, history, budget, capabilities, next = inputs)
             envelope = assembler.buildEnvelope(inputs.copy(showNow = true))
         }
@@ -243,11 +269,36 @@ class ConversationManager(
                 else -> "Saved image ${it.noteId} shed to fit"
             })
         }
+        val photosSent = envelope.photos.filter { it.attached }
+        current.attachedPhotos += photosSent.map { it.mediaId }
+        if (found.isNotEmpty()) {
+            Log.i(TAG, "Photos for this message: ${envelope.photos.size} of ${found.size} kept, ${photosSent.size} attached")
+        }
         current.tokensBeforeTurn = current.session.tokenCount()
-        PreparedTurn(current.session, envelope, budget, recalledImage = attached?.path, prefix = current.acknowledgedPrefix)
+        PreparedTurn(
+            current.session,
+            envelope,
+            budget,
+            recalledImages = listOfNotNull(attached?.path) + photosSent.map { it.path },
+            relatedPhotos = photos.related,
+            prefix = current.acknowledgedPrefix,
+        )
     }
 
     /** Recall is best-effort: a failure costs this turn its memory lines, never the turn. */
+    /** The gallery's photos for [userText]; none when the search fails, which mustn't fail the turn. */
+    private suspend fun photosFor(userText: String, current: Live): RecalledPhotos {
+        val source = photos ?: return RecalledPhotos.NONE
+        return try {
+            source.photosFor(userText, MAX_RECALLED_IMAGES, current.attachedPhotos.toSet())
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Log.w(TAG, "Photo recall failed; sending without it", e)
+            RecalledPhotos.NONE
+        }
+    }
+
     private suspend fun recall(chatId: Long, userText: String, windowStartId: Long, budget: MemoryBudget): Recall {
         val retriever = retriever ?: return Recall.NONE
         return try {
@@ -682,5 +733,8 @@ class ConversationManager(
 
         /** After a failed compaction, how long before trying that chat again. */
         const val COMPACTION_RETRY_MS = 10 * 60_000L
+
+        /** Pictures recalled for one message at most, a saved image and photos together (the user's limit). */
+        const val MAX_RECALLED_IMAGES = 2
     }
 }

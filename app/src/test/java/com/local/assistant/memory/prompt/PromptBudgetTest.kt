@@ -321,6 +321,49 @@ class PromptBudgetTest {
         assertNull(live.savedImage)
     }
 
+    // ---- Photos from the gallery ----
+
+    private val photos = listOf(
+        PhotoLine(11, "/cache/recalled-photo-0.jpg", now.minusDays(400).toInstant().toEpochMilli()),
+        PhotoLine(12, "/cache/recalled-photo-1.jpg", null),
+    )
+
+    @Test
+    fun `recalled photos are described above the user's words and cost an image each`() {
+        val with = assembler.buildEnvelope(EnvelopeInputs(now, showNow = false, photos = photos, userText = "did I go to the hackathon?"))
+        assertEquals(
+            "[Photos from the user's own gallery, already found for this message: 1. taken 17 Aug 2025 (attached); 2. (attached). " +
+                "If they show the answer, answer from them directly, saying it's from their photos; no need to search the photos again. " +
+                "If they don't, don't mention them.]\n" +
+                "did I go to the hackathon?",
+            with.text,
+        )
+        assertEquals(photos, with.photos)
+        val without = assembler.buildEnvelope(EnvelopeInputs(now, showNow = false, userText = "did I go to the hackathon?"))
+        assertTrue(with.tokens - without.tokens >= 2 * PromptAssembler.DEFAULT_VISION_TOKENS)
+        // One the conversation holds is pointed to, not paid for again.
+        val held = assembler.buildEnvelope(EnvelopeInputs(now, showNow = false, photos = photos.take(1).map { it.copy(attached = false) }, userText = "and the date?"))
+        assertTrue(held.text.contains("1. taken 17 Aug 2025 (attached earlier in this chat; look at it again)"))
+        assertTrue(held.tokens < without.tokens + PromptAssembler.DEFAULT_VISION_TOKENS)
+    }
+
+    @Test
+    fun `photos go after snippets, before facts, the least likely first`() {
+        val envelope = richEnvelope.copy(photos = photos)
+        val bare = assembler.buildEnvelope(envelope.copy(snippets = emptyList(), photos = photos.take(1)))
+        // Room for everything but the snippets and the second photo.
+        val live = assembler.fitEnvelope(budget.promptCeiling - bare.tokens, envelope)!!
+        assertEquals(emptyList<Snippet>(), live.snippets)
+        assertEquals(photos.take(1), live.photos)
+        assertEquals(richEnvelope.facts, live.facts)
+
+        val beforePhotos = assembler.buildEnvelope(envelope).tokens -
+            assembler.buildEnvelope(envelope.copy(snippets = emptyList(), photos = emptyList())).tokens
+        val plan = planOverBy(spare = beforePhotos - 3, history = conversation(5, 10), envelope = envelope, summary = summary)
+        assertEquals(listOf(ShedStep.SNIPPETS, ShedStep.PHOTOS), plan.shed)
+        assertEquals(emptyList<PhotoLine>(), plan.envelope.photos)
+    }
+
     // ---- History and live turns ----
 
     @Test

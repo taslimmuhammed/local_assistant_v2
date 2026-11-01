@@ -121,7 +121,7 @@ class LiteRtLmBackend(
     private fun Sampling.toConfig() = SamplerConfig(topK = topK, topP = topP, temperature = temperature, seed = seed)
 
     private fun MessageEntity.toLiteRtMessage(): Message? = when (role) {
-        Role.USER -> Message.user(contentsOf(text, attachmentPath, attachmentKind))
+        Role.USER -> Message.user(contentsOf(text, listOfNotNull(attachmentPath?.let { path -> attachmentKind?.let { PromptAttachment(path, it) } })))
         Role.ASSISTANT -> Message.model(text)
         // What a tool changed is already in the rebuilt prefix; replaying the call would only
         // spend tokens.
@@ -144,8 +144,10 @@ private class LiteRtChatSession(
 
     override val isAlive: Boolean get() = runCatching { conversation.isAlive }.getOrDefault(false)
 
-    override fun send(envelope: String, attachment: PromptAttachment?): Flow<GenEvent> =
-        stream(Message.user(contentsOf(envelope, attachment?.path, attachment?.kind)))
+    override fun send(envelope: String, attachment: PromptAttachment?): Flow<GenEvent> = send(envelope, listOfNotNull(attachment))
+
+    override fun send(envelope: String, attachments: List<PromptAttachment>): Flow<GenEvent> =
+        stream(Message.user(contentsOf(envelope, attachments)))
 
     override fun sendToolResults(results: List<ToolResult>): Flow<GenEvent> =
         stream(
@@ -209,17 +211,14 @@ private class LiteRtChatSession(
  * A missing attachment file degrades to text rather than failing the whole turn: the chat is
  * still readable, and the alternative is a chat that can never be reopened.
  */
-private fun contentsOf(text: String, attachmentPath: String?, kind: AttachmentKind?): Contents {
-    val file = attachmentPath?.let(::File)?.takeIf { it.isFile }
-    if (file == null || kind == null) return Contents.of(text)
-
-    val media = when (kind) {
-        AttachmentKind.IMAGE -> Content.ImageFile(file.absolutePath)
-        AttachmentKind.AUDIO -> Content.AudioFile(file.absolutePath)
+private fun contentsOf(text: String, attachments: List<PromptAttachment>): Contents {
+    val media = attachments.mapNotNull { attachment ->
+        val file = File(attachment.path).takeIf { it.isFile } ?: return@mapNotNull null
+        when (attachment.kind) {
+            AttachmentKind.IMAGE -> Content.ImageFile(file.absolutePath)
+            AttachmentKind.AUDIO -> Content.AudioFile(file.absolutePath)
+        }
     }
-    return if (text.isBlank()) {
-        Contents.of(media)
-    } else {
-        Contents.of(media, Content.Text(text))
-    }
+    if (media.isEmpty()) return Contents.of(text)
+    return Contents.of(if (text.isBlank()) media else media + Content.Text(text))
 }

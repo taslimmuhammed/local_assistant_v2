@@ -155,7 +155,13 @@ photo questions then searched 8 times in 8 (4 in 8 before).
 
 Before each turn, `Retriever` recalls, across all chats:
 
-1. nothing at all for trivial messages (fewer than three words, acknowledgements);
+1. nothing at all for trivial messages (fewer than three words, acknowledgements), nor for
+   commands (`QueryText.isCommand`: an alarm, a timer, a reminder, a call, a message, an app, a
+   setting, a list), which are acted on rather than answered (the user's call, 30 Oct 2026). Only
+   what is plainly put as a command counts: "remind me what I said about Goa" and "send me my PAN
+   number" are questions, since a question taken for a command would lose its memory. On the
+   phone a command's recall took 0–87 ms and brought at most one snippet (about 40 tokens);
+   commands get no photos either (below);
 2. non-core facts whose subject, alias or text matches the message (`[Memory: …]`);
 3. archived exchanges: the keyword top 20 (BM25 from FTS4's `matchinfo`) and the vector top 20,
    leaving out exchanges already in the conversation, fused by reciprocal rank (k = 60, newer wins
@@ -195,6 +201,45 @@ related pairs recalled at 95% precision. Measured on the target phone:
 | Embedding an archived exchange | 38 ms |
 | Recall without vectors (FTS, fusion, facts) | 44 ms |
 | KNN over 55,000 chunks, k = 40 | 18–31 ms sqlite-vec, 30–51 ms Kotlin |
+
+**Photos with a question** (`gallery/PhotoRecall`). Asked "did I ever participate in push to prod
+hackathon?", the model searched memory and said it had no record, and "when is corniche resto's
+anniversary celebration" went to the web, while Photos found both for "push to prod" (30 Oct
+2026). So each question is also run against the photo index, whole, beside memory's recall, and
+up to two photos go with the message, as attachments, with a line saying they were found for it
+and to leave them unmentioned if they aren't about it (`PromptAssembler.renderPhotos`).
+
+- **The closest photos are shown either way.** Under the reply, as a "Related photos" card drawn
+  like find_photos' (a TOOL row of its own, `ToolCatalog.RELATED_PHOTOS`, which the archive
+  ignores): those within 0.04 of the best of the 10 closest, whatever they score, so the user can
+  find the answer in one the model wasn't sent (the user's call, 1 Nov 2026). Not when a photo
+  search in the turn showed its own, nor for commands or over the lock screen.
+- **Only a clear match goes to the model.** A whole question scores differently from a short search: of 30
+  general questions on the test phone's 2,685 photos ("what is the capital of France?", "tell me a
+  joke") the best photo scored up to 0.777, so the search's own floor (0.72) would have sent
+  photos with 6 of them. A photo goes when the best scores 0.80 or more, or stands 0.065 above the
+  10th best (`PhotoRecall.passes`): 7 of 16 questions the photos answer passed, the user's two
+  among them (0.809 and 0.840), and none of the 30 general ones (`PhotoRecallCalibrationTest`,
+  `-e eval photorecall`; the model was shown each best photo and said yes or no to "does it help",
+  so nobody looked at the photos). The second photo goes only within 0.04 of the first.
+- **Not for commands, ID numbers or a message with its own attachment.** An ID number (PAN, card,
+  licence…) is left to find_photos, whose reader copies and checks it: read inside the chat the
+  PAN came out wrong in one run of two. A saved image the message is about counts towards the two.
+- **A photo isn't sent twice in one conversation** (a second copy garbled numbers); the line points
+  back at it instead. When the window is full, photos go after snippets, before facts.
+- **The rules say to answer from them.** Told only that they "may be about this message", the
+  model searched the photos again every time (4 of 4), and the find_photos rule then has it say
+  only how many it found ("I found one photo related to…"). The line now says they were found for
+  this message, and the find_photos rule says attached photos that answer a question are answered
+  from without searching again, unless they ask to see photos (instructions v8). Yes/no questions
+  about the user ("did I…", "have I…", "is my…") count as questions to read a found photo for.
+- **Measured on the phone** (`-e eval photoanswers`, through the app's own chat sender and the
+  user's memory): "when is corniche resto's anniversary celebration" was answered from the
+  attached poster in 11.3 s and "what tests did the doctor advise?" in 17.4 s, neither searching
+  again; "did I ever participate in push to prod hackathon?" searched and its reader answered from
+  a chat screenshot (22.6 s); general questions got no photos and took 8 s as before. The search
+  itself takes 75–160 ms (0.6 s when the photo model loads); each photo sent adds roughly 3 s of
+  reading for the model.
 
 ### Summaries, compaction and the nightly job
 

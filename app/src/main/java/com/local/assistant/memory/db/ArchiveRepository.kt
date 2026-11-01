@@ -68,10 +68,14 @@ class ArchiveRepository(
         marker == null
     }
 
-    /** The tools the turn after [userId] called, by name. */
+    /**
+     * The tools the turn after [userId] called, by name. Not the photos shown for the message
+     * itself: every question has them, and they say nothing about what the turn was.
+     */
     private suspend fun toolsOf(chatId: Long, userId: Long, replyId: Long?): List<String> =
         chunks.toolRecordsBetween(chatId, userId, replyId ?: Long.MAX_VALUE)
             .mapNotNull { TOOL_NAME.find(it)?.groupValues?.get(1) }
+            .filter { it != com.local.assistant.memory.tools.ToolCatalog.RELATED_PHOTOS }
 
     /** An empty, never-embedded chunk: marks the exchange as seen, so the backfill leaves it be. */
     private suspend fun skip(existing: ChunkEntity?, messageId: Long, chatId: Long, sessionId: Long?, createdAt: Long) {

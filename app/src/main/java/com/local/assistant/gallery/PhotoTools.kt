@@ -233,8 +233,18 @@ class PhotoTools(
          */
         fun questionIn(userText: String): String? {
             val text = userText.trim()
-            return text.takeIf { QUESTION.containsMatchIn(it) || DETAIL.containsMatchIn(it) || NUMBER_NO.containsMatchIn(it) }?.take(MAX_QUERY)
+            val yesOrNo = YES_OR_NO.containsMatchIn(text) && !ABOUT_PHOTOS.containsMatchIn(text)
+            return text.takeIf { QUESTION.containsMatchIn(it) || yesOrNo || DETAIL.containsMatchIn(it) || NUMBER_NO.containsMatchIn(it) }?.take(MAX_QUERY)
         }
+
+        /**
+         * "did I ever participate in push to prod hackathon?": answered "I found one photo related
+         * to…" when nothing was read (30 Oct 2026), as the rules say for a plain search.
+         */
+        private val YES_OR_NO = Regex("^(did|do|does|have|has|had|was|were|is|are|am) (i|we|my|our)\\b", RegexOption.IGNORE_CASE)
+
+        /** "do I have any photos of the beach?" asks for photos, not for something in one. */
+        private val ABOUT_PHOTOS = Regex("\\b(photos?|pictures?|pics?|images?|videos?|selfies?|clips?)\\b", RegexOption.IGNORE_CASE)
 
         private val QUESTION = Regex("^(what|what's|whats|which|when|how much|how many|tell me)\\b", RegexOption.IGNORE_CASE)
 

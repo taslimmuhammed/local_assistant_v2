@@ -74,7 +74,7 @@ class ToolRoutingTest {
     /** Runs one turn in which the model makes [calls] and then says [reply]. */
     private fun turn(vararg calls: ToolCall, reply: String = "Done."): Pair<ScriptedSession, List<LoopEvent>> {
         val session = ScriptedSession(ArrayDeque(listOf(ScriptedSession.calls(*calls), ScriptedSession.says(reply))))
-        val events = runBlocking { loop.run(session, "envelope", null, context).toList() }
+        val events = runBlocking { loop.run(session, "envelope", emptyList(), context).toList() }
         return session to events
     }
 
@@ -84,7 +84,7 @@ class ToolRoutingTest {
     /** As [turn], asked on the lock screen. */
     private fun lockedTurn(vararg calls: ToolCall, reply: String = "Done."): Pair<ScriptedSession, List<LoopEvent>> {
         val session = ScriptedSession(ArrayDeque(listOf(ScriptedSession.calls(*calls), ScriptedSession.says(reply))))
-        val events = runBlocking { loop.run(session, "envelope", null, context.copy(locked = true)).toList() }
+        val events = runBlocking { loop.run(session, "envelope", emptyList(), context.copy(locked = true)).toList() }
         return session to events
     }
 
@@ -432,7 +432,7 @@ class ToolRoutingTest {
     fun `a model that will not stop calling tools is cut off after three rounds`() {
         val looping = call("get_upcoming")
         val session = ScriptedSession(ArrayDeque(List(6) { ScriptedSession.calls(looping) }))
-        val events = runBlocking { loop.run(session, "envelope", null, context).toList() }
+        val events = runBlocking { loop.run(session, "envelope", emptyList(), context).toList() }
         assertEquals(4, session.sentResults.size)
         assertEquals(ToolLoop.LIMIT_REACHED, session.sentResults.last().single().json)
         assertEquals(4, (events.last() as LoopEvent.Done).toolRounds)
@@ -441,7 +441,7 @@ class ToolRoutingTest {
     @Test
     fun `a first send refused as too long is reported, not thrown`() {
         val session = ScriptedSession(ArrayDeque(listOf(listOf(GenEvent.Error(IllegalStateException("Input token ids are too long"))))))
-        val events = runBlocking { loop.run(session, "envelope", null, context).toList() }
+        val events = runBlocking { loop.run(session, "envelope", emptyList(), context).toList() }
         assertEquals(listOf(LoopEvent.Overflow), events)
     }
 
@@ -449,18 +449,18 @@ class ToolRoutingTest {
     fun `an unreadable first tool call is reported for a retry, one after a tool round is not`() {
         val unreadable = listOf(GenEvent.Error(IllegalStateException("Status Code: 3. Message: Failed to parse tool calls")))
         val first = ScriptedSession(ArrayDeque(listOf(unreadable)))
-        assertEquals(listOf(LoopEvent.Unreadable), runBlocking { loop.run(first, "envelope", null, context).toList() })
+        assertEquals(listOf(LoopEvent.Unreadable), runBlocking { loop.run(first, "envelope", emptyList(), context).toList() })
 
         // The first round already ran a tool: trying the whole turn again would run it twice.
         val later = ScriptedSession(ArrayDeque(listOf(ScriptedSession.calls(call("get_upcoming", "days" to 7)), unreadable)))
-        val thrown = runCatching { runBlocking { loop.run(later, "envelope", null, context).toList() } }.exceptionOrNull()
+        val thrown = runCatching { runBlocking { loop.run(later, "envelope", emptyList(), context).toList() } }.exceptionOrNull()
         assertTrue(thrown?.message.orEmpty().contains("Failed to parse"))
     }
 
     @Test
     fun `a call that only slipped in its format is carried out and confirmed, and the conversation rebuilt`() {
         val slipped = listOf(GenEvent.Error(IllegalStateException("Failed to parse tool calls from code block: call:add_task{title:<|\"|>Renew passport<|\"|>, next month<|\"|>}")))
-        val events = runBlocking { loop.run(ScriptedSession(ArrayDeque(listOf(slipped))), "envelope", null, context).toList() }
+        val events = runBlocking { loop.run(ScriptedSession(ArrayDeque(listOf(slipped))), "envelope", emptyList(), context).toList() }
         val task = store.tasks.values.single()
         assertEquals("Renew passport", task.title)
         assertEquals(LoopEvent.Text("Done."), events.filterIsInstance<LoopEvent.Text>().single())
@@ -471,9 +471,9 @@ class ToolRoutingTest {
     @Test
     fun `a slipped call that only looks something up, or that fails, is retried instead`() {
         val lookup = listOf(GenEvent.Error(IllegalStateException("Failed to parse tool calls from code block: call:calculate{<|\"|>2+2<|\"|>}")))
-        assertEquals(listOf(LoopEvent.Unreadable), runBlocking { loop.run(ScriptedSession(ArrayDeque(listOf(lookup))), "envelope", null, context).toList() })
+        assertEquals(listOf(LoopEvent.Unreadable), runBlocking { loop.run(ScriptedSession(ArrayDeque(listOf(lookup))), "envelope", emptyList(), context).toList() })
         val badTime = listOf(GenEvent.Error(IllegalStateException("Failed to parse tool calls from code block: call:add_task{title:<|\"|>Call mom<|\"|>, more often}")))
-        assertEquals(listOf(LoopEvent.Unreadable), runBlocking { loop.run(ScriptedSession(ArrayDeque(listOf(badTime))), "envelope", null, context).toList() })
+        assertEquals(listOf(LoopEvent.Unreadable), runBlocking { loop.run(ScriptedSession(ArrayDeque(listOf(badTime))), "envelope", emptyList(), context).toList() })
         assertTrue(store.tasks.isEmpty())
     }
 
@@ -660,16 +660,16 @@ class ToolRoutingTest {
     fun `numbers the model mis-copied are taken from the user's own words`() {
         val said = ToolContext(chatId = 1, userMessageId = 10, userText = "what is 25+25")
         val sum = ScriptedSession(ArrayDeque(listOf(ScriptedSession.calls(call("calculate", "expression" to "5+5+2")))))
-        val events = runBlocking { loop.run(sum, "envelope", null, said).toList() }
+        val events = runBlocking { loop.run(sum, "envelope", emptyList(), said).toList() }
         assertEquals(LoopEvent.Text("25 + 25 = 50"), events.filterIsInstance<LoopEvent.Text>().single())
 
         val alarm = ScriptedSession(ArrayDeque(listOf(ScriptedSession.calls(call("set_alarm", "when" to "6:5")), ScriptedSession.says("Done."))))
-        runBlocking { loop.run(alarm, "envelope", null, ToolContext(1, 11, "set an alarm for 6:35")).toList() }
+        runBlocking { loop.run(alarm, "envelope", emptyList(), ToolContext(1, 11, "set an alarm for 6:35")).toList() }
         // 6:35 said at 10:00 is this evening's; what matters is the 35 the model dropped.
         assertEquals(FakeSystemAlarms.Set(18, 35, emptySet(), null), clock.set.single())
 
         val dial = ScriptedSession(ArrayDeque(listOf(ScriptedSession.calls(call("phone_call", "who" to "94501235")), ScriptedSession.says("Opening."))))
-        runBlocking { loop.run(dial, "envelope", null, ToolContext(1, 12, "call 98450 12345")).toList() }
+        runBlocking { loop.run(dial, "envelope", emptyList(), ToolContext(1, 12, "call 98450 12345")).toList() }
         assertEquals(listOf("dial 98450 12345"), phone.done)
     }
 
@@ -738,7 +738,7 @@ class ToolRoutingTest {
 
     private fun replies(vararg script: List<GenEvent>): Pair<ScriptedSession, List<LoopEvent>> {
         val session = ScriptedSession(ArrayDeque(script.toList()))
-        return session to runBlocking { loop.run(session, "envelope", null, context).toList() }
+        return session to runBlocking { loop.run(session, "envelope", emptyList(), context).toList() }
     }
 
     private fun shown(events: List<LoopEvent>) = events.filterIsInstance<LoopEvent.Text>().joinToString("") { it.delta }

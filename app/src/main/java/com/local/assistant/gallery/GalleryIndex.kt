@@ -387,6 +387,26 @@ class GalleryIndex(
         return com.local.assistant.memory.tools.PhotoSet.of(query, hits)
     }
 
+    /**
+     * The [limit] photos most like [query], best first, however they score; videos left out. For
+     * [PhotoRecall], which sets its own bar. Null when the model isn't installed or won't load.
+     */
+    suspend fun bestPhotos(query: String, limit: Int): List<PhotoHit>? {
+        if (query.isBlank()) return emptyList()
+        val vector = embedder.embedQuery(query)?.let(Int8Vectors::quantize) ?: return null
+        unloadWhenIdle()
+        return vectorsLock.withLock {
+            withContext(Dispatchers.Default) {
+                if (vectorsStale) loadVectors()
+                val scores = PhotoRanking.scores(vector, vectors, norms, ids.size) ?: return@withContext emptyList()
+                ids.indices.filter { moments[it] < 0 }
+                    .sortedByDescending { scores[it] }
+                    .take(limit)
+                    .map { PhotoHit(ids[it], scores[it]) }
+            }
+        }
+    }
+
     /** Every indexed photo and its similarity to [query], best first: for calibrating [PhotoRanking]. */
     internal suspend fun scoreAll(query: String): List<PhotoHit>? {
         val vector = embedder.embedQuery(query)?.let(Int8Vectors::quantize) ?: return null

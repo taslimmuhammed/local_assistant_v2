@@ -55,13 +55,15 @@ class PhotoToolsTest {
         for (asked in listOf(
             "fetch my pan number", "give me my PAN card number", "get my sslc marks", "fetch my 10th marks", "my DL number?",
             "my dl no", "send me my aadhaar no", "fetch my credit card expiry", "my blood group?", "get my CGPA",
+            "did I ever participate in push to prod hackathon?", "have I been to munnar?", "is my passport still valid?",
         )) {
             assertEquals(asked, asked, PhotoTools.questionIn(asked))
         }
         // The document itself, or photos of something: shown, not read.
         for (asked in listOf(
             "show me my marks card", "get my aadhaar card", "photos of my car's number plate", "show me photos of Mark",
-            "photos with no people in them", "find my sslc mark sheet",
+            "photos with no people in them", "find my sslc mark sheet", "do I have any photos of the beach?",
+            "did we take pictures at the wedding?",
         )) {
             assertNull(asked, PhotoTools.questionIn(asked))
         }

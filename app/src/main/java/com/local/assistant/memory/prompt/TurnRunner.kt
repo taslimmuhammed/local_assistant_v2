@@ -79,16 +79,21 @@ class TurnRunner(
                 val turn = conversations.prepareTurn(chatId, userMessageId, userText, locked)
                 var overflowed = false
                 var unreadable = false
+                var photosShown = false
                 val reply = StringBuilder()
-                // A saved image the message is about is looked at again, as if sent with it.
-                val sent = attachment ?: turn.recalledImage?.let { PromptAttachment(it, AttachmentKind.IMAGE) }
+                // A saved image the message is about is looked at again, as if sent with it, and so
+                // are photos from the gallery a question may be about.
+                val sent = attachment?.let(::listOf) ?: turn.recalledImages.map { PromptAttachment(it, AttachmentKind.IMAGE) }
                 tools.run(turn.session, turn.envelope.text, sent, ToolContext(chatId, userMessageId, userText, locked), sources = listOf(turn.prefix)).collect { event ->
                     when (event) {
                         is LoopEvent.Text -> {
                             reply.append(event.delta)
                             emit(TurnEvent.Text(event.delta))
                         }
-                        is LoopEvent.Memory -> emit(TurnEvent.Memory(event.recordId, event.chip))
+                        is LoopEvent.Memory -> {
+                            if (event.chip.kind == MemoryChip.Kind.PHOTOS) photosShown = true
+                            emit(TurnEvent.Memory(event.recordId, event.chip))
+                        }
                         is LoopEvent.Done -> {
                             if (event.staleConversation) {
                                 // Finished without the runtime: rebuild from what is stored.
@@ -98,8 +103,14 @@ class TurnRunner(
                                 conversations.acknowledgePrefixChange(chatId)
                             }
                             // A plain text turn is a clean sample of what text costs.
-                            if (event.toolRounds == 0 && sent == null) {
+                            if (event.toolRounds == 0 && sent.isEmpty()) {
                                 conversations.learnFromTurn(chatId, turn.envelope.text, reply.toString())
+                            }
+                            // Photos the message itself matched, under the reply, unless a photo
+                            // search already put its own there.
+                            if (!photosShown && turn.relatedPhotos.isNotEmpty()) {
+                                val (recordId, chip) = tools.showRelatedPhotos(chatId, turn.relatedPhotos)
+                                emit(TurnEvent.Memory(recordId, chip))
                             }
                             emit(TurnEvent.Done(event.stats))
                         }

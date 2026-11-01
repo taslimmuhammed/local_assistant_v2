@@ -124,6 +124,7 @@ class PromptAssembler(
             keptSnippets += snippet
         }
         val imageLine = inputs.savedImage?.let(::renderSavedImage)
+        val photosLine = renderPhotos(inputs.photos)
 
         // Hold the app-added part to its cap: snippets go before facts. The image line has its
         // own allowance ([MemoryBudget.savedImageTokens]) on top: the user asked for it to be kept.
@@ -140,8 +141,10 @@ class PromptAssembler(
             }
         }
 
-        val text = (header() + listOfNotNull(imageLine) + inputs.userText).joinToString("\n")
-        val attachments = inputs.attachmentTokens + if (imageLine != null && inputs.savedImage.attached) visionTokensPerImage else 0
+        val text = (header() + listOfNotNull(imageLine, photosLine) + inputs.userText).joinToString("\n")
+        val attachments = inputs.attachmentTokens +
+            (if (imageLine != null && inputs.savedImage.attached) visionTokensPerImage else 0) +
+            inputs.photos.count { it.attached } * visionTokensPerImage
         return Envelope(
             text = text,
             tokens = estimator.estimate(text) + attachments + ContextWindow.TURN_OVERHEAD_TOKENS,
@@ -149,7 +152,26 @@ class PromptAssembler(
             snippets = keptSnippets,
             showedNow = nowLine != null,
             savedImage = inputs.savedImage.takeIf { imageLine != null },
+            photos = inputs.photos,
         )
+    }
+
+    /**
+     * What the model is told about [photos]: that they're the user's own, already found for this
+     * message, and to leave them unmentioned when they aren't about it (they're found for every
+     * question). Told only "may be about this message", it searched the photos again every time
+     * (4 of 4 on the phone), and once answered only "I found one photo related to…".
+     */
+    private fun renderPhotos(photos: List<PhotoLine>): String? {
+        if (photos.isEmpty()) return null
+        val each = photos.mapIndexed { i, photo ->
+            val taken = photo.takenAt?.let { " taken ${SNIPPET_DATE.format(Instant.ofEpochMilli(it).atZone(zone))}" }.orEmpty()
+            val where = if (photo.attached) "attached" else "attached earlier in this chat; look at it again"
+            "${i + 1}.$taken ($where)"
+        }
+        return "[Photos from the user's own gallery, already found for this message: ${each.joinToString("; ")}. " +
+            "If they show the answer, answer from them directly, saying it's from their photos; no need to search the photos again. " +
+            "If they don't, don't mention them.]"
     }
 
     /** "[Saved image (21 Sep 2026) “Dr. Mehta's card”: … It is attached to this message.]" */
@@ -234,12 +256,13 @@ class PromptAssembler(
         var snippets = envelopeInputs.snippets
         var facts = envelopeInputs.facts
         var image = envelopeInputs.savedImage
+        var photos = envelopeInputs.photos
         var summaryCap = summaryCapFor(prefixInputs.summary)
         var maxTurns = budget.maxVerbatimTurns
         var coreCap = budget.coreCap
 
         while (true) {
-            val envelope = buildEnvelope(envelopeInputs.copy(facts = facts, snippets = snippets, savedImage = image))
+            val envelope = buildEnvelope(envelopeInputs.copy(facts = facts, snippets = snippets, savedImage = image, photos = photos))
             // Shedding inside buildEnvelope already applied; carry its result forward.
             snippets = envelope.snippets
             facts = envelope.facts
@@ -255,6 +278,10 @@ class PromptAssembler(
                 snippets.isNotEmpty() -> {
                     snippets = snippets.dropLast(1)
                     shed.addOnce(ShedStep.SNIPPETS)
+                }
+                photos.isNotEmpty() -> {
+                    photos = photos.dropLast(1)
+                    shed.addOnce(ShedStep.PHOTOS)
                 }
                 facts.isNotEmpty() -> {
                     facts = facts.dropLast(1)
@@ -292,13 +319,16 @@ class PromptAssembler(
         var snippets = inputs.snippets
         var facts = inputs.facts
         var image = inputs.savedImage
+        var photos = inputs.photos
         while (true) {
-            val envelope = buildEnvelope(inputs.copy(facts = facts, snippets = snippets, savedImage = image))
+            val envelope = buildEnvelope(inputs.copy(facts = facts, snippets = snippets, savedImage = image, photos = photos))
             if (liveTokens + envelope.tokens <= budget.promptCeiling) return envelope
             snippets = envelope.snippets
             facts = envelope.facts
             when {
                 snippets.isNotEmpty() -> snippets = snippets.dropLast(1)
+                // A photo costs as much as several snippets; the least likely goes first.
+                photos.isNotEmpty() -> photos = photos.dropLast(1)
                 facts.isNotEmpty() -> facts = facts.dropLast(1)
                 image != null -> image = null
                 else -> return null
