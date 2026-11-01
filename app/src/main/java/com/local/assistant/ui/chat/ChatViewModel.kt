@@ -20,6 +20,7 @@ import com.local.assistant.media.AttachmentStore
 import com.local.assistant.media.AudioRecorder
 import com.local.assistant.media.Recording
 import com.local.assistant.media.RecordingState
+import com.local.assistant.voice.Transcriber
 import com.local.assistant.memory.prompt.ConversationManager
 import com.local.assistant.memory.prompt.TurnRunner
 import com.local.assistant.memory.tools.ChatToolLog
@@ -60,6 +61,8 @@ class ChatViewModel(
     private val speaker: Speaker,
     private val focus: AudioFocus,
     permissions: PermissionBroker,
+    /** Writes voice messages down as they're recorded; nothing when the phone can't. */
+    private val transcriber: Transcriber? = null,
     /** Card numbers, PINs and the like are read out only while shown on screen ([SensitiveText.spoken]). */
     private val sensitive: SensitiveLock? = null,
 ) : ViewModel() {
@@ -292,8 +295,10 @@ class ChatViewModel(
         stopSpeaking()
         if (settings.speakReplies) speaker.prepare()
         val destination = attachments.newAudioFile()
-        recorder.start(destination) { recording ->
-            if (recording != null) viewModelScope.launch { sendVoice(recording) }
+        // Written down as it's said, so the words are ready about when the user stops.
+        val words = transcriber?.start()
+        recorder.start(destination, onAudio = words?.let { it::feed }) { recording ->
+            if (recording != null) viewModelScope.launch { sendVoice(recording, words?.finish()) } else words?.cancel()
         }
     }
 
@@ -316,14 +321,18 @@ class ChatViewModel(
         if (started) _pendingAttachment.value = null
     }
 
-    /** A finished recording goes straight out, and its reply is read aloud (Settings: Answer out loud). */
-    private fun sendVoice(recording: Recording) {
+    /**
+     * A finished recording goes straight out, and its reply is read aloud (Settings: Answer out
+     * loud). With [transcript], the words are the message's text: the model reads them, and the
+     * recording stays for playing back.
+     */
+    private fun sendVoice(recording: Recording, transcript: String?) {
         val speak = settings.speakReplies
         chunker = if (speak) SpeechChunker() else null
         awaitingSpeech.value = speak
         val started = sender.send(
             chatId = _activeChatId.value,
-            text = "",
+            text = transcript.orEmpty(),
             attachment = ChatSender.Attachment(recording.file.absolutePath, AttachmentKind.AUDIO, recording.durationMs),
             owner = this,
             listener = listener,
@@ -425,6 +434,7 @@ class ChatViewModel(
                     focus = container.chatAudioFocus,
                     permissions = container.permissions,
                     sensitive = container.sensitiveLock,
+                    transcriber = container.transcriber,
                 )
             }
         }

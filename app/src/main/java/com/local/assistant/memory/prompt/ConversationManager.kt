@@ -212,7 +212,7 @@ class ConversationManager(
         // is recalled for it, which only slowed it down. Over the lock screen, nothing either.
         val command = QueryText.isCommand(userText)
         // The user's own attachment goes alone: nothing recalled is attached beside it.
-        val userAttached = userMessage?.attachmentKind != null
+        val userAttached = userMessage?.let { ContextWindow.sentAttachment(it.attachmentKind, it.text) } != null
         val (recall, photos) = if (locked || command) {
             Recall.NONE to RecalledPhotos.NONE
         } else {

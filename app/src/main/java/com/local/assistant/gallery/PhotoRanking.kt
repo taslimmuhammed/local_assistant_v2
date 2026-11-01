@@ -28,7 +28,7 @@ data class PhotoHit(val mediaId: Long, val similarity: Float, val atMs: Long? = 
 object PhotoRanking {
 
     /** How far below the best photo a photo may score and still be listed. */
-    const val MATCH_MARGIN = 0.04f
+    const val MATCH_MARGIN = 0.03f
 
     /** The best photo must reach this, or nothing matches. */
     const val MIN_BEST = 0.72f

@@ -5,6 +5,7 @@ import com.local.assistant.data.db.AttachmentKind
 import com.local.assistant.data.db.Role
 import com.local.assistant.data.repo.ChatRepository
 import com.local.assistant.llm.LlmService
+import com.local.assistant.llm.ContextWindow
 import com.local.assistant.llm.PromptAttachment
 import com.local.assistant.memory.prompt.TurnEvent
 import com.local.assistant.memory.prompt.TurnRunner
@@ -152,7 +153,7 @@ class ChatSender(
                         firstMessage = prompt,
                         fallback = when (attachment?.kind) {
                             AttachmentKind.IMAGE -> "Image"
-                            AttachmentKind.AUDIO -> "Voice message"
+                            AttachmentKind.AUDIO -> ChatRepository.VOICE_TITLE
                             null -> ChatRepository.DEFAULT_TITLE
                         },
                     )
@@ -161,10 +162,11 @@ class ChatSender(
                 // Resumed: the message as it was stored.
                 val stored = storedUserMessageId?.let { repository.message(it) }
                 val text = stored?.text ?: prompt
+                // A voice message written down goes as its words; the recording is for playing back.
                 val promptAttachment = if (stored != null) {
-                    stored.attachmentPath?.let { path -> stored.attachmentKind?.let { PromptAttachment(path, it) } }
+                    stored.attachmentPath?.let { path -> ContextWindow.sentAttachment(stored.attachmentKind, text)?.let { PromptAttachment(path, it) } }
                 } else {
-                    attachment?.let { PromptAttachment(it.path, it.kind) }
+                    attachment?.let { ContextWindow.sentAttachment(it.kind, text)?.let { kind -> PromptAttachment(it.path, kind) } }
                 }
                 turns.run(chat, asked, text, promptAttachment, locked).collect { event ->
                     when (event) {

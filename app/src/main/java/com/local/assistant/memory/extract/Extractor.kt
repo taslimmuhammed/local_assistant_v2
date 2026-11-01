@@ -1,7 +1,6 @@
 package com.local.assistant.memory.extract
 
 import android.util.Log
-import com.local.assistant.data.db.AttachmentKind
 import com.local.assistant.data.db.MessageEntity
 import com.local.assistant.data.db.Role
 import com.local.assistant.llm.LlmBackend
@@ -77,9 +76,9 @@ class Extractor(
     /** Pushes the watermark past everything written so far: "Forget everything" never re-reads the past. */
     suspend fun skipToEnd(lastMessageId: Long) = setWatermark(lastMessageId)
 
+    /** A voice message counts by its words, when it was written down; one without has none. */
     private suspend fun worthReading(message: MessageEntity): Boolean =
-        message.attachmentKind != AttachmentKind.AUDIO &&
-            message.text.isNotBlank() &&
+        message.text.isNotBlank() &&
             !QueryText.isTrivial(message.text) &&
             !maintenance.turnUsedTools(message.chatId, message.id)
 

@@ -121,7 +121,9 @@ class LiteRtLmBackend(
     private fun Sampling.toConfig() = SamplerConfig(topK = topK, topP = topP, temperature = temperature, seed = seed)
 
     private fun MessageEntity.toLiteRtMessage(): Message? = when (role) {
-        Role.USER -> Message.user(contentsOf(text, listOfNotNull(attachmentPath?.let { path -> attachmentKind?.let { PromptAttachment(path, it) } })))
+        Role.USER -> Message.user(
+            contentsOf(text, listOfNotNull(attachmentPath?.let { path -> ContextWindow.sentAttachment(attachmentKind, text)?.let { PromptAttachment(path, it) } })),
+        )
         Role.ASSISTANT -> Message.model(text)
         // What a tool changed is already in the rebuilt prefix; replaying the call would only
         // spend tokens.

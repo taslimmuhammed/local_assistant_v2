@@ -634,28 +634,37 @@ private fun Transcript(
     }
 }
 
-/** What the user asked: their words, or their voice message, in the app's grey bubble. */
+/**
+ * What the user asked: their words, or their voice message, in the app's grey bubble. A voice
+ * message written down has its words under it, in the same bubble.
+ */
 @Composable
 private fun Question(text: String, voice: Boolean, durationMs: Long?) {
     Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp), horizontalAlignment = Alignment.End) {
         if (voice) {
-            Row(
+            Column(
                 Modifier
+                    .widthIn(max = 280.dp)
                     .clip(RoundedCornerShape(20.dp))
                     .background(AppColors.SurfaceMuted)
                     .padding(horizontal = 14.dp, vertical = 8.dp),
-                verticalAlignment = Alignment.CenterVertically,
             ) {
-                Icon(Icons.Outlined.Mic, contentDescription = null, tint = AppColors.TextPrimary, modifier = Modifier.size(16.dp))
-                Spacer(Modifier.width(6.dp))
-                Text(
-                    listOfNotNull("Voice message", durationMs?.let(::formatSeconds)).joinToString(" · "),
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = AppColors.TextPrimary,
-                )
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(Icons.Outlined.Mic, contentDescription = null, tint = AppColors.TextPrimary, modifier = Modifier.size(16.dp))
+                    Spacer(Modifier.width(6.dp))
+                    Text(
+                        listOfNotNull("Voice message", durationMs?.let(::formatSeconds)).joinToString(" · "),
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = AppColors.TextPrimary,
+                    )
+                }
+                if (text.isNotBlank()) {
+                    Spacer(Modifier.height(4.dp))
+                    com.local.assistant.ui.chat.TranscribedWords(text)
+                }
             }
         }
-        if (text.isNotBlank()) {
+        if (text.isNotBlank() && !voice) {
             val shown = rememberShown(text)
             SelectionContainer {
                 Text(

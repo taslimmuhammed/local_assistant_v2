@@ -6,6 +6,7 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
@@ -59,7 +60,13 @@ fun AttachedImage(path: String, modifier: Modifier = Modifier, maxHeight: Int = 
 
 /** A voice note with inline playback, so a recorded message is not write-only. */
 @Composable
-fun AudioAttachment(path: String, durationMs: Long?, modifier: Modifier = Modifier) {
+fun AudioAttachment(
+    path: String,
+    durationMs: Long?,
+    modifier: Modifier = Modifier,
+    /** Drawn under the player in the same box: what was said, when it was written down. */
+    below: (@Composable () -> Unit)? = null,
+) {
     if (!remember(path) { File(path).isFile }) {
         MissingAttachment("Voice message unavailable", modifier)
         return
@@ -75,11 +82,14 @@ fun AudioAttachment(path: String, durationMs: Long?, modifier: Modifier = Modifi
         }
     }
 
-    Row(
+    Column(
         modifier = modifier
+            .widthIn(max = 300.dp)
             .clip(RoundedCornerShape(20.dp))
-            .background(AppColors.SurfaceMuted)
-            .padding(start = 4.dp, end = 14.dp, top = 4.dp, bottom = 4.dp),
+            .background(AppColors.SurfaceMuted),
+    ) {
+    Row(
+        modifier = Modifier.padding(start = 4.dp, end = 14.dp, top = 4.dp, bottom = 4.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(2.dp),
     ) {
@@ -128,6 +138,10 @@ fun AudioAttachment(path: String, durationMs: Long?, modifier: Modifier = Modifi
             color = AppColors.TextSecondary,
             modifier = Modifier.padding(start = 8.dp),
         )
+    }
+    below?.let { content ->
+        Box(Modifier.padding(start = 16.dp, end = 16.dp, bottom = 10.dp)) { content() }
+    }
     }
 }
 

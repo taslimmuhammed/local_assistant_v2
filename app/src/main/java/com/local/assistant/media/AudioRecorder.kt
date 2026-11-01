@@ -53,10 +53,12 @@ class AudioRecorder(private val scope: CoroutineScope) {
 
     /**
      * Starts recording into [destination]. [onFinished] receives the completed recording, or null
-     * if it was cancelled or produced nothing. Caller must already hold RECORD_AUDIO permission.
+     * if it was cancelled or produced nothing. [onAudio] gets each chunk of PCM as it is written,
+     * on the recording thread (to write it down as it's said). Caller must already hold
+     * RECORD_AUDIO permission.
      */
     @SuppressLint("MissingPermission")
-    fun start(destination: File, onFinished: (Recording?) -> Unit) {
+    fun start(destination: File, onAudio: ((ByteArray, Int) -> Unit)? = null, onFinished: (Recording?) -> Unit) {
         if (isRecording) return
         discardRequested = false
 
@@ -99,6 +101,7 @@ class AudioRecorder(private val scope: CoroutineScope) {
                             MediaLimits.MAX_RECORDING_BYTES - totalPcmBytes,
                         ).toInt()
                         out.write(buffer, 0, allowed)
+                        onAudio?.invoke(buffer, allowed)
                         totalPcmBytes += allowed
 
                         _state.value = RecordingState(

@@ -30,7 +30,8 @@ class ChunkPolicyTest {
     @Test
     fun voiceNotesAndWordlessPicturesAreNotArchived() {
         assertNull(ChunkPolicy.text("", AttachmentKind.AUDIO, "Sure."))
-        assertNull(ChunkPolicy.text("what did I say", AttachmentKind.AUDIO, "Sure."))
+        // Written down, a voice note is remembered by its words.
+        assertEquals("User: what did I say\nAssistant: Sure.", ChunkPolicy.text("what did I say", AttachmentKind.AUDIO, "Sure."))
         assertNull(ChunkPolicy.text("  ", AttachmentKind.IMAGE, "A cat."))
         assertEquals("User: what breed is this dog", ChunkPolicy.text("what breed is this dog", AttachmentKind.IMAGE, null))
     }

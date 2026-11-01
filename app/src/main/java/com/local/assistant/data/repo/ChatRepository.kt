@@ -106,7 +106,9 @@ class ChatRepository(
      * No-op once the chat has a real title.
      */
     suspend fun titleFromFirstMessage(chatId: Long, firstMessage: String, fallback: String = DEFAULT_TITLE) {
-        if (dao.chat(chatId)?.title != DEFAULT_TITLE) return
+        val current = dao.chat(chatId)?.title
+        // A chat begun with a voice message nothing was written down for is named by the first words it gets.
+        if (current != DEFAULT_TITLE && !(current == VOICE_TITLE && firstMessage.isNotBlank())) return
         if (firstMessage.isBlank()) {
             dao.renameChat(chatId, fallback)
             return
@@ -120,6 +122,9 @@ class ChatRepository(
 
     companion object {
         const val DEFAULT_TITLE = "New chat"
+
+        /** A chat begun with a voice message with no words written down. */
+        const val VOICE_TITLE = "Voice message"
         private const val TITLE_MAX_CHARS = 40
     }
 }

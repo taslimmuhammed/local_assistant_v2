@@ -76,6 +76,8 @@ class AssistViewModel(
      * screen's tools ([ChatSender.send]'s locked); anything more asks for an unlock first.
      */
     private val onLockScreen: () -> Boolean = { false },
+    /** Writes what is said down as it's said; nothing when the phone can't. */
+    private val transcriber: com.local.assistant.voice.Transcriber? = null,
 ) : ViewModel() {
 
     /** Says [sentence], with its sensitive details said as how they end, unless they're being shown. */
@@ -237,12 +239,15 @@ class AssistViewModel(
         val detector = EndOfSpeech()
         _listening.value = true
         _level.value = 0f
-        recorder.start(attachments.newAudioFile()) { recording ->
+        val words = transcriber?.start()
+        recorder.start(attachments.newAudioFile(), onAudio = words?.let { it::feed }) { recording ->
             // On the recorder's thread, possibly after the overlay closed.
-            if (closed) {
+            if (closed || recording == null) {
+                words?.cancel()
                 recording?.let { attachments.delete(it.file.absolutePath) }
+                if (!closed) viewModelScope.launch(Dispatchers.Main) { onRecorded(null, null) }
             } else {
-                viewModelScope.launch(Dispatchers.Main) { onRecorded(recording) }
+                viewModelScope.launch(Dispatchers.Main) { onRecorded(recording, words?.finish()) }
             }
         }
         endOfSpeech?.cancel()
@@ -340,7 +345,8 @@ class AssistViewModel(
 
     fun openClock() = clockAlarms.openClock()
 
-    private fun onRecorded(recording: Recording?) {
+    /** [transcript]: what was said, which goes as the message's words, the recording with it for playing back. */
+    private fun onRecorded(recording: Recording?, transcript: String?) {
         endOfSpeech?.cancel()
         _listening.value = false
         _level.value = 0f
@@ -350,7 +356,7 @@ class AssistViewModel(
             return
         }
         send(
-            text = "",
+            text = transcript.orEmpty(),
             attachment = ChatSender.Attachment(recording.file.absolutePath, AttachmentKind.AUDIO, recording.durationMs),
             voice = true,
         )
@@ -475,6 +481,7 @@ class AssistViewModel(
                     permissions = container.permissions,
                     sensitive = container.sensitiveLock,
                     onLockScreen = onLockScreen,
+                    transcriber = container.transcriber,
                 )
             }
         }

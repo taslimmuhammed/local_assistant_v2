@@ -8,10 +8,10 @@ import org.junit.Test
 
 class ContextWindowTest {
 
-    private fun message(kind: AttachmentKind? = null, durationMs: Long? = null) = MessageEntity(
+    private fun message(kind: AttachmentKind? = null, durationMs: Long? = null, text: String = if (kind == AttachmentKind.AUDIO) "" else "hello") = MessageEntity(
         chatId = 1,
         role = Role.USER,
-        text = "hello",
+        text = text,
         createdAt = 0,
         attachmentPath = if (kind == null) null else "/tmp/file",
         attachmentKind = kind,
@@ -34,6 +34,15 @@ class ContextWindowTest {
             4 * ContextWindow.AUDIO_TOKENS_PER_SECOND,
             ContextWindow.attachmentTokens(message(AttachmentKind.AUDIO, durationMs = 3_200), 256),
         )
+    }
+
+    @Test
+    fun `a voice message written down goes as its words, its audio unsent and uncharged`() {
+        val transcribed = message(AttachmentKind.AUDIO, durationMs = 3_200, text = "set an alarm for six")
+        assertEquals(0, ContextWindow.attachmentTokens(transcribed, 256))
+        org.junit.Assert.assertNull(ContextWindow.sentAttachment(AttachmentKind.AUDIO, "set an alarm for six"))
+        assertEquals(AttachmentKind.AUDIO, ContextWindow.sentAttachment(AttachmentKind.AUDIO, " "))
+        assertEquals(AttachmentKind.IMAGE, ContextWindow.sentAttachment(AttachmentKind.IMAGE, "what breed is this dog"))
     }
 
     @Test

@@ -30,13 +30,14 @@ class PhotoRecall(
         if (!ready() || QueryText.isTrivial(text)) return RecalledPhotos.NONE
         val best = index.bestPhotos(text.take(MAX_QUERY), COMPARED) ?: return RecalledPhotos.NONE
         val top = best.firstOrNull()?.similarity ?: return RecalledPhotos.NONE
-        // Shown whatever they score (the user, 1 Nov 2026): the answer may be in one the model
-        // wasn't sent, or one the user recognises. As close to the best as search lists them.
+        // Shown more readily than sent ([SHOWN_FROM]): the answer may be in one the model wasn't
+        // sent, or one the user recognises. As close to the best as search lists them.
         val close = best.filter { it.similarity >= top - PhotoRanking.MATCH_MARGIN }
-        val related = close.map { it.mediaId }
+        val sends = passes(best.map { it.similarity })
+        val related = if (sends || top >= SHOWN_FROM) close.map { it.mediaId } else emptyList()
         // An ID number is left to find_photos, whose reader copies it on its own and checks it:
         // read off a photo inside the chat, the PAN came out wrong in one run of two (`PhotoReader`).
-        if (max <= 0 || PhotoReader.Field.of(text) != null || !passes(best.map { it.similarity })) return RecalledPhotos(related = related)
+        if (max <= 0 || PhotoReader.Field.of(text) != null || !sends) return RecalledPhotos(related = related)
         val chosen = close.take(max)
         Log.i(TAG, "${chosen.size} for a message: best %.3f, 10th %.3f".format(top, best.getOrNull(COMPARED - 1)?.similarity ?: 0f))
         val taken = withContext(Dispatchers.IO) { library.datesTaken(chosen.map { it.mediaId }) }
@@ -57,6 +58,15 @@ class PhotoRecall(
 
         /** How many photos the best is measured against: the 10th is the [STANDS_OUT] reference. */
         const val COMPARED = 10
+
+        /**
+         * The best photo's score from which the closest photos are shown under the reply (the
+         * "Related photos" card): lower than what sends them to the model ([CLOSE]), so they show
+         * more often. Raise it for fewer cards, lower it for more. On the phone's photos (30 Oct
+         * 2026), at 0.75 the card showed for 11 of 16 questions the photos answer and 2 of 30
+         * general ones; at 0.74 for 12 and 4; at 0.72 (the search's own floor) for 15 and 6.
+         */
+        const val SHOWN_FROM = 0.75f
 
         /** A best photo this close to the question goes, however close the next ones are. */
         const val CLOSE = 0.80f

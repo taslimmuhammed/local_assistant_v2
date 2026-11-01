@@ -144,7 +144,8 @@ user's response preferences.
 
 Every exchange — the user's message and the first 300 characters of the reply — is stored as a
 chunk in `chunks`, keyword-indexed (FTS4) at once and embedded later by `EmbeddingQueue`, only
-while the user is neither generating nor typing. Voice notes are never archived; greetings and
+while the user is neither generating nor typing. Voice notes are archived by their words when they
+were written down (see "Writing voice messages down"), never otherwise; greetings and
 "ok thanks" are stored and keyword-searchable but not embedded. Existing chats are archived on the
 first start (`ArchiveRepository.backfill`). Sums, working the phone and photo searches are left
 out (`ChunkPolicy.isUtility`), with or without their tool: recalled, an old sum's digits got mixed
@@ -211,8 +212,11 @@ and to leave them unmentioned if they aren't about it (`PromptAssembler.renderPh
 
 - **The closest photos are shown either way.** Under the reply, as a "Related photos" card drawn
   like find_photos' (a TOOL row of its own, `ToolCatalog.RELATED_PHOTOS`, which the archive
-  ignores): those within 0.04 of the best of the 10 closest, whatever they score, so the user can
-  find the answer in one the model wasn't sent (the user's call, 1 Nov 2026). Not when a photo
+  ignores): those within 0.04 of the best of the 10 closest, when the best scores at least 0.75
+  (`PhotoRecall.SHOWN_FROM`), below the bar for sending them, so the user can find the answer in
+  one the model wasn't sent. At first shown whatever they scored (the user's call, 1 Nov 2026),
+  then given that lower bar: on the phone's photos it shows for 11 of 16 questions the photos
+  answer and 2 of 30 general ones. Not when a photo
   search in the turn showed its own, nor for commands or over the lock screen.
 - **Only a clear match goes to the model.** A whole question scores differently from a short search: of 30
   general questions on the test phone's 2,685 photos ("what is the capital of France?", "tell me a
@@ -673,6 +677,32 @@ field there fails silently at decode time).
 the library, so it cannot be read ahead of time. 30 s is the conservative side of it. The recorder
 stops hard at the cap rather than letting the runtime reject the clip.
 
+### Writing voice messages down
+
+A voice message is written down as it is recorded (`voice/Transcriber`), by the phone's own
+on-device recogniser (`SpeechRecognizer.createOnDeviceSpeechRecognizer`: on the test phone,
+Google's, the one Gboard and the Google app use). No model of ours, nothing sent off the phone.
+The recorder hands it each chunk of the PCM it writes (`AudioRecord` → `EXTRA_AUDIO_SOURCE`, a
+pipe, a segmented session so pauses don't end it), through a queue so recording never waits on
+it. The WAV is still what the chat plays back.
+
+- **The words are the message.** They are its text: the chat's title when it has none (one still
+  called "Voice message" is renamed by its first words), shown under the player in the same
+  bubble (and in the panel), and what the model reads: a voice message with words goes without its
+  audio (`ContextWindow.sentAttachment`), so a spoken request is a typed one. Spoken, the model
+  skipped tools and said it had done things (`HonestyEvalTest`). With words come memory recall,
+  photos, the photo question rules and the archive, as for typed messages (the user had decided
+  voice notes stay out of memory; written down, they're remembered like the rest).
+- **When it can't,** the voice message goes as audio, as before: Android 12 or older (an app may
+  hand the recogniser its audio from 13), no on-device recogniser, or no words 4 s after the
+  recording ends. A missing language pack is fetched for next time (`triggerModelDownload`).
+- **Measured on the phone** (`TranscriberDeviceTest`, `-e eval transcribe -e clips honesty-voice`:
+  34 clips fed at the pace a recording comes): the words came 69–287 ms after the audio ended,
+  about 95 ms typically. Fed as it was, the last word went missing whenever the audio stopped on it
+  ("turn on dark" for "turn on dark mode", "call" for "call amma"), so 0.7 s of silence follows the
+  recording; then every clip kept it. Mistakes left were names and addresses in a synthetic voice
+  ("land a Lord", an email address).
+
 ## Photos
 
 "Photos" in the drawer searches the phone's own photos by what is in them: type "sunset" or
@@ -917,8 +947,9 @@ past 40% of the way (or 220 dp) it fills the screen and opens the full app at th
 **Memory when spoken to.** Its turns are the app's (same sender, tools and memory), but most are
 spoken, and a spoken message has no words for recall to match: memory went unsearched. Typed in
 the app, "what is my credit card number" was answered from an earlier chat; spoken in the panel,
-it got only the card's photos (2026-10-27). Voice messages stay untranscribed (the user's call),
-so for a spoken photo search (`find_photos`, the tool such questions go to) the executor
+it got only the card's photos (2026-10-27). Voice messages are now written down where the phone
+can (see "Writing voice messages down"), and then go as words, recalled for like typed ones.
+Where they aren't, for a spoken photo search (`find_photos`, the tool such questions go to) the executor
 searches memory with the search's own words, as `search_memory` would, and puts what it finds
 first in the result with a note to answer from it. Given as a plain field after the counts it
 was passed over. By voice (`PanelMemoryEvalTest#spokenQuestions`): "what is my credit card
@@ -968,12 +999,13 @@ How it fits together:
   assistant. It is a translucent activity in its own task, kept out of Recents, and closes as
   soon as it is out of view. (It is an activity rather than a
   `VoiceInteractionService`, which would also make the app the phone's speech recogniser for
-  every other app — and there is no recogniser here: the model hears the audio itself.)
+  every other app — the app uses the phone's own recogniser, it isn't one.)
 - Each opening starts a new chat, created with the first question and marked `hidden`
   (`ChatEntity.hidden`, DB v7): it stays out of the chat list, but is stored and learned from like
   any other chat, so "remember that…" is saved, and the archive, session summaries and nightly
-  extraction all see it. (Voice messages themselves are never transcribed or archived, as
-  anywhere in the app; what is learned from them is what the model saved through its tools.) An
+  extraction all see it. (A voice message counts by its words when it was written down; one
+  that wasn't is never archived, and what is learned from it is what the model saved through
+  its tools.) An
   overlay chat continued in the app ("Open in app" or the handle) joins the chat list.
 - `chat/ChatSender` sends messages and streams replies for the chat screen and the overlay alike,
   one turn at a time. A reply outlives the screen that asked for it: closing the overlay, or a

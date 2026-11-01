@@ -522,6 +522,9 @@ class AppContainer(context: Context) {
 
     val audioRecorder = AudioRecorder(appScope)
 
+    /** Voice messages written down as they're recorded, by the phone's own recogniser. */
+    val transcriber = com.local.assistant.voice.Transcriber(context, appScope)
+
     /** Sends messages and streams replies for the chat and the assistant overlay alike. */
     val chatSender = ChatSender(chatRepository, llmService, turnRunner, appScope)
 

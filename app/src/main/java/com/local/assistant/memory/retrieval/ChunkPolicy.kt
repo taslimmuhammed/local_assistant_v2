@@ -27,11 +27,11 @@ object ChunkPolicy {
     const val FORGOTTEN = "forgotten"
 
     /**
-     * The chunk text for an exchange, or null if there is nothing to archive: voice notes are
-     * kept for playback but never remembered, and a picture with no words has nothing to search.
+     * The chunk text for an exchange, or null if there is nothing to archive: a voice note with
+     * nothing written down, or a picture with no words, has nothing to search. A voice note
+     * written down (`voice/Transcriber`) is remembered by its words, as typed ones are.
      */
     fun text(userText: String, attachment: AttachmentKind?, reply: String?): String? {
-        if (attachment == AttachmentKind.AUDIO) return null
         val question = userText.trim()
         if (question.isEmpty()) return null
         val answer = reply?.trim()?.takeIf { it.isNotEmpty() }?.let(::excerpt)

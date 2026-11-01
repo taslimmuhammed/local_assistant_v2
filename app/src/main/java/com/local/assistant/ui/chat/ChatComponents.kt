@@ -61,15 +61,25 @@ fun UserMessage(message: MessageEntity, modifier: Modifier = Modifier) {
         modifier = modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp),
         horizontalAlignment = Alignment.End,
     ) {
+        // A voice message written down: its words under the player, in the same bubble.
+        val transcribed = message.attachmentKind == AttachmentKind.AUDIO && message.attachmentPath != null && message.text.isNotBlank()
         when (message.attachmentKind) {
             AttachmentKind.IMAGE -> message.attachmentPath?.let { AttachedImage(it) }
             AttachmentKind.AUDIO -> message.attachmentPath?.let {
-                AudioAttachment(it, message.attachmentDurationMs)
+                AudioAttachment(
+                    it,
+                    message.attachmentDurationMs,
+                    below = if (transcribed) {
+                        { TranscribedWords(message.text) }
+                    } else {
+                        null
+                    },
+                )
             }
             null -> Unit
         }
 
-        if (message.text.isNotBlank()) {
+        if (message.text.isNotBlank() && !transcribed) {
             if (message.attachmentKind != null) Spacer(Modifier.height(6.dp))
             val shown = rememberShown(message.text)
             SelectionContainer {
@@ -86,6 +96,18 @@ fun UserMessage(message: MessageEntity, modifier: Modifier = Modifier) {
             }
             if (shown.hidden) HiddenDetails(Modifier.padding(top = 2.dp))
         }
+    }
+}
+
+/** What was said in a voice message, with its sensitive details hidden as typed ones are. */
+@Composable
+fun TranscribedWords(text: String) {
+    val shown = rememberShown(text)
+    Column {
+        SelectionContainer {
+            Text(text = shown.text, style = MaterialTheme.typography.bodyLarge, color = AppColors.TextPrimary)
+        }
+        if (shown.hidden) HiddenDetails(Modifier.padding(top = 2.dp))
     }
 }
 

@@ -13,6 +13,15 @@ import kotlin.math.ceil
  */
 object ContextWindow {
 
+    /**
+     * The kind of [kind]'s file the model is given with [text]: none for a voice message written
+     * down (`voice/Transcriber`), which goes as its words alone. Spoken, a request had the model
+     * skip its tool and claim it was done (HonestyEvalTest); and words are what memory and photo
+     * recall search with.
+     */
+    fun sentAttachment(kind: AttachmentKind?, text: String): AttachmentKind? =
+        kind.takeUnless { it == AttachmentKind.AUDIO && text.isNotBlank() }
+
     /** Per-message overhead for the chat template's role and turn markers. */
     const val TURN_OVERHEAD_TOKENS = 8
 
@@ -20,7 +29,7 @@ object ContextWindow {
     const val AUDIO_TOKENS_PER_SECOND = 32
 
     fun attachmentTokens(message: MessageEntity, visionTokensPerImage: Int): Int =
-        when (message.attachmentKind) {
+        when (sentAttachment(message.attachmentKind, message.text)) {
             AttachmentKind.IMAGE -> visionTokensPerImage
             AttachmentKind.AUDIO -> {
                 val seconds = ceil((message.attachmentDurationMs ?: 0L) / 1000.0).toInt()
