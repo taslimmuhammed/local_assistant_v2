@@ -22,6 +22,17 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ArrowBack
 import androidx.compose.material.icons.automirrored.outlined.KeyboardArrowRight
+import androidx.compose.material.icons.outlined.History
+import androidx.compose.material.icons.outlined.Info
+import androidx.compose.material.icons.outlined.Memory
+import androidx.compose.material.icons.outlined.Mic
+import androidx.compose.material.icons.outlined.Person
+import androidx.compose.material.icons.outlined.Public
+import androidx.compose.material.icons.outlined.RecordVoiceOver
+import androidx.compose.material.icons.outlined.Science
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.runtime.key
+import androidx.activity.compose.BackHandler
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -83,10 +94,22 @@ import com.local.assistant.wake.WakeWordMode
 import kotlinx.coroutines.launch
 import java.time.LocalDate
 
+/** The pages of Settings, each opened from a row on its main page. */
+enum class SettingsSection(val title: String) {
+    CALLING("Calling the assistant"),
+    VOICE("Voice"),
+    MODEL("Model"),
+    MEMORY("Memory and history"),
+    ABOUT("About"),
+    TEST_BUILD("Test build"),
+}
+
 /**
- * Every setting in one place: who the user is, the model and its window, web search, and what
- * memory keeps. Things that need their own screen — the profile form, the model file, the Tavily
- * key — open from here; the rest is set right on this page.
+ * Settings, as the phone's own are: a main page with one row per section, each showing how it is
+ * set, and a page per section with its settings (the user, 2026-11-01: one long page was "too
+ * much scrolling … bad UX"). The profile and web search open their own screens straight from the
+ * main page, as do the model file and the Tavily key. [section] is the page open, null for the
+ * main one; it is kept by the caller, so coming back from one of those screens returns to it.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -97,6 +120,8 @@ fun SettingsScreen(
     voicePacks: List<VoicePackInstaller>,
     webSearchOn: Boolean,
     memory: MemoryViewModel,
+    section: SettingsSection?,
+    onSection: (SettingsSection?) -> Unit,
     onBack: () -> Unit,
     onOpenProfile: () -> Unit,
     onOpenModel: () -> Unit,
@@ -104,15 +129,19 @@ fun SettingsScreen(
 ) {
     val snackbar = remember { SnackbarHostState() }
     LaunchedEffect(memory) { memory.notices.collect { snackbar.showSnackbar(it.message) } }
+    // A section's page goes back to the main page, not out of Settings.
+    if (section != null) BackHandler { onSection(null) }
 
     Scaffold(
         containerColor = AppColors.Background,
         snackbarHost = { SnackbarHost(snackbar) },
         topBar = {
             TopAppBar(
-                title = { Text("Settings", style = MaterialTheme.typography.titleMedium) },
+                title = { Text(section?.title ?: "Settings", style = MaterialTheme.typography.titleMedium) },
                 navigationIcon = {
-                    IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Outlined.ArrowBack, contentDescription = "Back") }
+                    IconButton(onClick = { if (section != null) onSection(null) else onBack() }) {
+                        Icon(Icons.AutoMirrored.Outlined.ArrowBack, contentDescription = "Back")
+                    }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(
                     containerColor = AppColors.Background,
@@ -122,40 +151,91 @@ fun SettingsScreen(
             )
         },
     ) { padding ->
-        Column(Modifier.fillMaxSize().padding(padding).verticalScroll(rememberScrollState())) {
-            SectionHeader("You")
-            NavRow("Your profile", "Name, age, work and more, kept in mind in every chat", onOpenProfile)
-
-            SectionDivider()
-            SectionHeader("Model")
-            val state by llmService.state.collectAsStateWithLifecycle()
-            NavRow(
-                "Model and memory search",
-                listOfNotNull(
-                    ModelCatalog.DISPLAY_NAME,
-                    (state as? LlmService.State.Ready)?.let { "running on ${it.backend}" },
-                ).joinToString(" · "),
-                onOpenModel,
-            )
-            ContextWindow(llmService, settings)
-
-            SectionDivider()
-            SectionHeader("Assistant")
-            AssistantSettings(settings, speaker, voicePacks, llmService)
-
-            SectionDivider()
-            SectionHeader("Web search")
-            NavRow("Web search", if (webSearchOn) "On · Tavily" else "Off · add a Tavily key to turn it on", onOpenWebSearch)
-
-            SectionDivider()
-            SectionHeader("Memory")
-            MemorySettings(memory)
-
-            SectionDivider()
-            SectionHeader("Models and licences")
-            ModelLicences()
-            Spacer(Modifier.height(32.dp))
+        // Each page scrolls on its own, from its top.
+        key(section) {
+            Column(Modifier.fillMaxSize().padding(padding).verticalScroll(rememberScrollState())) {
+                when (section) {
+                    null -> MainPage(settings, webSearchOn, memory, onSection, onOpenProfile, onOpenWebSearch)
+                    SettingsSection.CALLING -> CallingSettings(settings)
+                    SettingsSection.VOICE -> VoiceSettings(settings, speaker, voicePacks)
+                    SettingsSection.MODEL -> {
+                        val state by llmService.state.collectAsStateWithLifecycle()
+                        NavRow(
+                            "Model and memory search",
+                            listOfNotNull(
+                                ModelCatalog.DISPLAY_NAME,
+                                (state as? LlmService.State.Ready)?.let { "running on ${it.backend}" },
+                            ).joinToString(" · "),
+                            onOpenModel,
+                        )
+                        ContextWindow(llmService, settings)
+                        KeepReady(settings, llmService)
+                    }
+                    SettingsSection.MEMORY -> MemorySettings(memory)
+                    SettingsSection.ABOUT -> LicenceEntries()
+                    SettingsSection.TEST_BUILD -> TestBuildSettings()
+                }
+                Spacer(Modifier.height(32.dp))
+            }
         }
+    }
+}
+
+/** One row per section, with how it is set now, so most visits end here. */
+@Composable
+private fun MainPage(
+    settings: SettingsStore,
+    webSearchOn: Boolean,
+    memory: MemoryViewModel,
+    onSection: (SettingsSection) -> Unit,
+    onOpenProfile: () -> Unit,
+    onOpenWebSearch: () -> Unit,
+) {
+    val context = LocalContext.current
+    val paused by memory.memoryPaused.collectAsStateWithLifecycle()
+    val retention by memory.retentionDays.collectAsStateWithLifecycle()
+    Spacer(Modifier.height(8.dp))
+    SectionRow(Icons.Outlined.Person, "Your profile", "Name, age, work and more, kept in mind in every chat", onOpenProfile)
+    SectionRow(
+        Icons.Outlined.Mic,
+        SettingsSection.CALLING.title,
+        listOf(
+            if (AssistantRole.isDefault(context)) "Power button" else "Power button off",
+            when (settings.wakeWord) {
+                WakeWordMode.OFF -> "wake word off"
+                WakeWordMode.WHILE_CHARGING -> "\u201c${WakeWord.PHRASE}\u201d while charging"
+                WakeWordMode.ALWAYS -> "\u201c${WakeWord.PHRASE}\u201d"
+            },
+            if (settings.assistantOnLockScreen) "on the lock screen" else "unlock first",
+        ).joinToString(" \u00b7 "),
+    ) { onSection(SettingsSection.CALLING) }
+    SectionRow(
+        Icons.Outlined.RecordVoiceOver,
+        SettingsSection.VOICE.title,
+        listOfNotNull(
+            if (settings.speakReplies) "Answers out loud" else "Answers in text",
+            NaturalVoices.byId(settings.naturalVoice)?.name,
+            SettingsStore.SPEECH_RATES.firstOrNull { it.first == settings.speechRate }?.second?.let { "$it pace" },
+        ).joinToString(" \u00b7 "),
+    ) { onSection(SettingsSection.VOICE) }
+    SectionRow(
+        Icons.Outlined.Memory,
+        SettingsSection.MODEL.title,
+        listOfNotNull(
+            ModelCatalog.DISPLAY_NAME,
+            "${settings.contextTokens / 1024}K window",
+            "kept ready".takeIf { settings.keepAssistantReady },
+        ).joinToString(" \u00b7 "),
+    ) { onSection(SettingsSection.MODEL) }
+    SectionRow(Icons.Outlined.Public, "Web search", if (webSearchOn) "On \u00b7 Tavily" else "Off \u00b7 add a Tavily key to turn it on", onOpenWebSearch)
+    SectionRow(
+        Icons.Outlined.History,
+        SettingsSection.MEMORY.title,
+        if (paused) "Memory paused" else "Remembering \u00b7 " + if (retention == 0) "chats kept for good" else "chats kept for ${retentionLabel(retention)}",
+    ) { onSection(SettingsSection.MEMORY) }
+    SectionRow(Icons.Outlined.Info, SettingsSection.ABOUT.title, "The models the app runs, and their licences") { onSection(SettingsSection.ABOUT) }
+    if (WakeSamples.available(context)) {
+        SectionRow(Icons.Outlined.Science, SettingsSection.TEST_BUILD.title, "Wake word samples for training") { onSection(SettingsSection.TEST_BUILD) }
     }
 }
 
@@ -231,11 +311,12 @@ private fun ContextWindow(llmService: LlmService, settings: SettingsStore) {
 }
 
 /**
- * The power-button assistant and its voice. Being the phone's assistant is the system's to
- * grant, so this only says whether it is and opens the page where it's chosen.
+ * The ways to call the assistant up: the power button, the wake word, and whether either works
+ * on the lock screen. Being the phone's assistant is the system's to grant, so this only says
+ * whether it is and opens the page where it's chosen.
  */
 @Composable
-private fun AssistantSettings(settings: SettingsStore, speaker: Speaker, voicePacks: List<VoicePackInstaller>, llmService: LlmService) {
+private fun CallingSettings(settings: SettingsStore) {
     val context = LocalContext.current
     val lifecycle = LocalLifecycleOwner.current.lifecycle
     var isAssistant by remember { mutableStateOf(AssistantRole.isDefault(context)) }
@@ -264,52 +345,27 @@ private fun AssistantSettings(settings: SettingsStore, speaker: Speaker, voicePa
         )
     }
 
-    var keepReady by remember { mutableStateOf(settings.keepAssistantReady) }
-    Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-        Column(Modifier.weight(1f).padding(end = 16.dp)) {
-            Text("Keep the assistant ready", style = MaterialTheme.typography.bodyLarge, color = AppColors.TextPrimary)
-            Text(
-                "Keeps the model loaded so the power button answers in about a second, instead of about 15 seconds after the phone has put the app away. " +
-                    "Holds about $KEEP_READY_MEMORY of memory and shows a silent notification.",
-                style = MaterialTheme.typography.bodySmall,
-                color = AppColors.TextSecondary,
-            )
-        }
-        AppSwitch(checked = keepReady, onCheckedChange = {
-            keepReady = it
-            settings.keepAssistantReady = it
-            // Off, the model goes the next time Android asks for memory back, as before; the
-            // service stays if it is listening for the wake word.
-            KeepReadyService.update(context)
-            if (it) llmService.warmUp()
-        })
-    }
-
     // Off by default: whoever holds the locked phone could set reminders and alarms with it.
     var onLockScreen by remember { mutableStateOf(settings.assistantOnLockScreen) }
     var confirmingLockScreen by remember { mutableStateOf(false) }
-    Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-        Column(Modifier.weight(1f).padding(end = 16.dp)) {
-            Text("Use on the lock screen", style = MaterialTheme.typography.bodyLarge, color = AppColors.TextPrimary)
-            Text(
-                if (onLockScreen) {
-                    "On: the power button and the wake word open the assistant without unlocking, for reminders, alarms, timers and the like. ${LockScreenNotice.RISK}"
-                } else {
-                    "Off: on the lock screen the assistant asks you to unlock first."
-                },
-                style = MaterialTheme.typography.bodySmall,
-                color = AppColors.TextSecondary,
-            )
-        }
-        AppSwitch(checked = onLockScreen, onCheckedChange = { on ->
+    WakeWordSettings(settings, onLockScreen, ready = isAssistant && serviceActive)
+    SwitchRow(
+        "Use on the lock screen",
+        if (onLockScreen) {
+            "On: the power button and the wake word open the assistant without unlocking, for reminders, alarms, timers and the like. ${LockScreenNotice.RISK}"
+        } else {
+            "Off: on the lock screen the assistant asks you to unlock first."
+        },
+        checked = onLockScreen,
+        onCheckedChange = { on ->
             if (on) {
                 confirmingLockScreen = true
             } else {
                 onLockScreen = false
                 settings.assistantOnLockScreen = false
             }
-        })
-    }
+        },
+    )
     if (confirmingLockScreen) {
         AlertDialog(
             onDismissRequest = { confirmingLockScreen = false },
@@ -330,24 +386,22 @@ private fun AssistantSettings(settings: SettingsStore, speaker: Speaker, voicePa
             dismissButton = { TextButton(onClick = { confirmingLockScreen = false }) { Text("Keep it off") } },
         )
     }
+}
 
-    WakeWordSettings(settings, onLockScreen, ready = isAssistant && serviceActive)
-
+/** How the assistant sounds: whether it answers aloud, in which voice, how fast. */
+@Composable
+private fun VoiceSettings(settings: SettingsStore, speaker: Speaker, voicePacks: List<VoicePackInstaller>) {
+    val context = LocalContext.current
     var speak by remember { mutableStateOf(settings.speakReplies) }
-    Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-        Column(Modifier.weight(1f).padding(end = 16.dp)) {
-            Text("Answer out loud", style = MaterialTheme.typography.bodyLarge, color = AppColors.TextPrimary)
-            Text(
-                "When you ask by voice, the answer is read aloud as well as shown.",
-                style = MaterialTheme.typography.bodySmall,
-                color = AppColors.TextSecondary,
-            )
-        }
-        AppSwitch(checked = speak, onCheckedChange = {
+    SwitchRow(
+        "Answer out loud",
+        "When you ask by voice, the answer is read aloud as well as shown.",
+        checked = speak,
+        onCheckedChange = {
             speak = it
             settings.speakReplies = it
-        })
-    }
+        },
+    )
 
     // The engine lists its voices once it has started, which takes a moment the first time.
     var voices by remember { mutableStateOf<List<VoiceOption>?>(null) }
@@ -480,6 +534,27 @@ private fun AssistantSettings(settings: SettingsStore, speaker: Speaker, voicePa
             },
         )
     }
+}
+
+/** The model kept loaded for the power button (and the service the wake word listens in). */
+@Composable
+private fun KeepReady(settings: SettingsStore, llmService: LlmService) {
+    val context = LocalContext.current
+    var keepReady by remember { mutableStateOf(settings.keepAssistantReady) }
+    SwitchRow(
+        "Keep the assistant ready",
+        "Keeps the model loaded so the power button answers in about a second, instead of about 15 seconds after the phone has put the app away. " +
+            "Holds about $KEEP_READY_MEMORY of memory and shows a silent notification.",
+        checked = keepReady,
+        onCheckedChange = {
+            keepReady = it
+            settings.keepAssistantReady = it
+            // Off, the model goes the next time Android asks for memory back, as before; the
+            // service stays if it is listening for the wake word.
+            KeepReadyService.update(context)
+            if (it) llmService.warmUp()
+        },
+    )
 }
 
 /**
@@ -664,14 +739,6 @@ private fun WakeWordSettings(settings: SettingsStore, onLockScreen: Boolean, rea
                 modifier = Modifier.padding(start = 12.dp),
             )
         }
-        if (WakeTry.keepsTries(context)) {
-            Text(
-                "This is a test build: each try is kept on the phone, so the wake word can be tuned to your voice.",
-                style = MaterialTheme.typography.bodySmall,
-                color = AppColors.TextSecondary,
-            )
-        }
-        if (WakeSamples.available(context)) WakeSampleRecorder()
         if (mode != WakeWordMode.OFF && !ready) {
             Text(
                 "Needs Local Assistant as the phone's digital assistant app. If it already is, pick another app there and then Local Assistant again: " +
@@ -684,6 +751,19 @@ private fun WakeWordSettings(settings: SettingsStore, onLockScreen: Boolean, rea
         if (micRefused) {
             Text("The wake word needs the microphone. Allow it in the phone's settings for this app.", style = MaterialTheme.typography.bodySmall, color = AppColors.Danger)
         }
+    }
+}
+
+/** Test builds only: what they keep, and recording samples to train the wake word on the user's voice. */
+@Composable
+private fun TestBuildSettings() {
+    Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)) {
+        Text(
+            "Each wake word try is kept on the phone, so the wake word can be tuned to your voice.",
+            style = MaterialTheme.typography.bodySmall,
+            color = AppColors.TextSecondary,
+        )
+        WakeSampleRecorder()
     }
 }
 
@@ -838,8 +918,9 @@ private const val KEEP_READY_MEMORY = "1.8 GB"
  * it means passing on the Gemma Terms of Use and its Prohibited Use Policy, and saying it was
  * modified (converted). Gemma 4 E4B and Granite are Apache 2.0.
  */
+/** The models' and libraries' licences: the About page. */
 @Composable
-private fun ModelLicences() {
+private fun LicenceEntries() {
     val uri = LocalUriHandler.current
     @Composable
     fun Entry(title: String, body: String, links: List<Pair<String, String>>) {
@@ -919,19 +1000,32 @@ private val CONTEXT_NOTES = mapOf(
     16384 to "Longest chats. Most memory, slowest to start.",
 )
 
+/** A row of the main page: a section, and how it is set now. */
 @Composable
-private fun SectionHeader(title: String) {
-    Text(
-        title,
-        style = MaterialTheme.typography.titleSmall,
-        color = AppColors.TextPrimary,
-        modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 20.dp, bottom = 4.dp),
-    )
+private fun SectionRow(icon: ImageVector, title: String, subtitle: String, onClick: () -> Unit) {
+    Row(
+        Modifier.fillMaxWidth().clickable(onClick = onClick).padding(horizontal = 16.dp, vertical = 14.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(icon, contentDescription = null, tint = AppColors.TextPrimary, modifier = Modifier.padding(end = 16.dp))
+        Column(Modifier.weight(1f)) {
+            Text(title, style = MaterialTheme.typography.bodyLarge, color = AppColors.TextPrimary)
+            Text(subtitle, style = MaterialTheme.typography.bodySmall, color = AppColors.TextSecondary)
+        }
+        Icon(Icons.AutoMirrored.Outlined.KeyboardArrowRight, contentDescription = null, tint = AppColors.TextSecondary)
+    }
 }
 
+/** A setting that is on or off: its name, what it does, and the switch. */
 @Composable
-private fun SectionDivider() {
-    HorizontalDivider(color = AppColors.Border, modifier = Modifier.padding(top = 12.dp))
+private fun SwitchRow(title: String, subtitle: String, checked: Boolean, onCheckedChange: (Boolean) -> Unit) {
+    Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+        Column(Modifier.weight(1f).padding(end = 16.dp)) {
+            Text(title, style = MaterialTheme.typography.bodyLarge, color = AppColors.TextPrimary)
+            Text(subtitle, style = MaterialTheme.typography.bodySmall, color = AppColors.TextSecondary)
+        }
+        AppSwitch(checked = checked, onCheckedChange = onCheckedChange)
+    }
 }
 
 @Composable
@@ -963,17 +1057,12 @@ private fun MemorySettings(viewModel: MemoryViewModel) {
     }
 
     Column(Modifier.fillMaxWidth()) {
-        Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-            Column(Modifier.weight(1f).padding(end = 16.dp)) {
-                Text("Pause memory", style = MaterialTheme.typography.bodyLarge, color = AppColors.TextPrimary)
-                Text(
-                    "Chats go on as usual, but nothing from them is remembered, archived or learned. Reminders still work.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = AppColors.TextSecondary,
-                )
-            }
-            AppSwitch(checked = paused, onCheckedChange = viewModel::setPaused)
-        }
+        SwitchRow(
+            "Pause memory",
+            "Chats go on as usual, but nothing from them is remembered, archived or learned. Reminders still work.",
+            checked = paused,
+            onCheckedChange = viewModel::setPaused,
+        )
         Box(Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) {
             Row(Modifier.fillMaxWidth().clickable { retentionMenu = true }, verticalAlignment = Alignment.CenterVertically) {
                 Text("Keep chat history", style = MaterialTheme.typography.bodyLarge, color = AppColors.TextPrimary, modifier = Modifier.weight(1f))

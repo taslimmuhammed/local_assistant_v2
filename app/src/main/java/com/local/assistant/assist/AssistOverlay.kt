@@ -542,7 +542,7 @@ private fun LockedOut(onOpenSettings: () -> Unit) {
     Column(Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, top = 14.dp, bottom = 4.dp)) {
         Text("Unlock to talk", style = HeadlineStyle, color = AppColors.TextPrimary)
         Text(
-            "Talking to the assistant on the lock screen is off. You can turn it on in Settings \u2192 Assistant; " +
+            "Talking to the assistant on the lock screen is off. You can turn it on in Settings \u2192 Calling the assistant; " +
                 "a notification about it is waiting for you.",
             style = MaterialTheme.typography.bodyMedium,
             color = AppColors.TextSecondary,

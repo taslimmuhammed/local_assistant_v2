@@ -22,7 +22,7 @@ import kotlin.math.sqrt
 /**
  * Recordings for training a wake word model on the user's own voice (the user's request,
  * 2026-10-29: train a dedicated "Hey Luna" model with microWakeWord). Test builds only, from
- * Settings › Wake word: the user says the phrase again and again, or talks normally, and the
+ * Settings › Test build: the user says the phrase again and again, or talks normally, and the
  * session is kept whole as a WAV under `Android/data/<app>/files/wake-samples/` for the Mac to cut
  * up. Recorded as the background listener hears (the raw voice-recognition microphone, 16 kHz
  * mono), not through the Recorder app, which cleans the sound up first.

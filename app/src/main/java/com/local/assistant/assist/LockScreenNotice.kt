@@ -46,7 +46,7 @@ object LockScreenNotice {
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
         )
         val text = "It's off, so the assistant opens only after you unlock. " +
-            "You can turn on “Use on the lock screen” in the app's Settings → Assistant. $RISK"
+            "You can turn on “Use on the lock screen” in the app's Settings → Calling the assistant. $RISK"
         val notification = NotificationCompat.Builder(context, CHANNEL)
             .setSmallIcon(R.drawable.ic_notification_assistant)
             .setContentTitle(TITLE)

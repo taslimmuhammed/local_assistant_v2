@@ -54,7 +54,7 @@ from then on answers right away.
 
 ### Use it from the power button
 
-In the app, go to **Settings → Assistant → Power button** and choose Local Assistant as the
+In the app, go to **Settings → Calling the assistant → Power button** and choose Local Assistant as the
 *digital assistant app*. If holding the power button still brings up the power menu, switch it to
 the voice assistant in your phone's power-button settings. You can also long-press the app icon
 and pick **Talk**.

@@ -1,6 +1,6 @@
 package com.local.assistant.wake
 
-/** When the wake word listens (Settings › Assistant). Off until the user turns it on. */
+/** When the wake word listens (Settings › Calling the assistant). Off until the user turns it on. */
 enum class WakeWordMode {
     OFF,
 

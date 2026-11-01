@@ -67,7 +67,7 @@ nothing to host. The app loads it from where Play unpacked it (`memory/embed/Bun
 unless the user has downloaded or imported another embedder in Settings. An APK built with
 `assembleDebug` has no packs; `./gradlew :app:installBundleDebug` installs the bundle the way Play
 would. `embedder_pack/README.md` covers putting the model file in place and the Gemma licence
-checklist. Settings → Models and licences shows the notices in the app.
+checklist. Settings → About shows the notices in the app.
 
 ## Architecture
 
@@ -331,9 +331,21 @@ duplicates are asked about, never merged silently.
 
 ### Settings
 
-One page, from the drawer's **Settings**: *Your profile*; *Model and memory search* (the model
-file and the embedder); *Context window* (4K, 8K, 12K or 16K); *Web search* (the Tavily key); and the
-memory controls below. The chat history drawer takes 85% of the screen and has a back arrow at the
+From the drawer's **Settings**: a main page with one row per section, each showing how it is set
+now ("Power button · wake word off · on the lock screen"), and a page per section (the user,
+2026-11-01: one long page was "too much scrolling … bad UX"). Nothing changed but where things sit:
+- **Your profile** and **Web search** (the Tavily key) open their own screens from the main page.
+- **Calling the assistant**: *Power button*, *Wake word* (with *Try it*), *Use on the lock screen*.
+- **Voice**: *Answer out loud*, *Voice*, *Pace*.
+- **Model**: *Model and memory search* (the model file and the embedder), *Context window* (4K,
+  8K, 12K or 16K), *Keep the assistant ready*.
+- **Memory and history**: the controls below.
+- **About**: the models' licences.
+- **Test build**, in debuggable builds only: the wake word's sample recorder.
+
+The open page (`SettingsSection`) is kept by `MainActivity`, so coming back from the model,
+profile or web search screen returns to it; back on a section page goes to the main page. The
+lock-screen notice opens Settings on *Calling the assistant*. On/off settings share one row (`SwitchRow`). The chat history drawer takes 85% of the screen and has a back arrow at the
 top, so it is plain how to close it; deleting a chat from it asks first.
 
 First launch asks two things before the chat: the profile, then web search — optional and only
@@ -862,7 +874,7 @@ credit card" showed the photos and read nothing out, 3 in 3. A spoken question t
 tool still gets no recall.
 
 **On the lock screen** the assistant works without unlocking only if **Use on the lock screen**
-is on (Settings → Assistant; off by default, and turning it on first shows a warning). Then it
+is on (Settings → Calling the assistant; off by default, and turning it on first shows a warning). Then it
 opens over the lock screen and keeps the screen awake while open, but with none of the user's
 memory (the user, 2026-10-30: "on lock-screen it'll have no access any memory including photos,
 but it can set reminders, alarms, etc, if user asks to do something else or remember something
@@ -890,7 +902,7 @@ exposes. It opens Settings, which needs an unlock; there is deliberately no "Tur
 it. "Open in app" on the lock screen asks for the unlock first, from the tap: asked for as the
 panel was created, the unlock prompt never appeared on the test phone and the panel sat there.
 
-**Setting it up.** Settings → Assistant → Power button opens the system page where the phone's
+**Setting it up.** Settings → Calling the assistant → Power button opens the system page where the phone's
 *digital assistant app* is chosen; pick Local Assistant. Android doesn't let an app ask for this
 role itself. If holding the power button still brings up the power menu, switch it to the voice
 assistant in the phone's power button settings (on OnePlus phones, look under Additional
@@ -944,7 +956,7 @@ So the model answers in under a second; the waiting was loading it and reading t
   also done a minute after the app goes to the background, and 30 s after background model work
   (summaries, extraction) closed it. Only one conversation ever exists, so a chat left open in the
   app is rebuilt when the user returns to it.
-- **Keep the assistant ready** (Settings → Assistant, on by default): the model isn't released
+- **Keep the assistant ready** (Settings → Model, on by default): the model isn't released
   when the app goes to the background, and `assist/KeepReadyService`, a foreground service with a
   silent notification, keeps the process alive and unfrozen (OxygenOS freezes cached apps). It
   holds about 1.8 GB (PSS measured 1.7–1.9 GB). Off, the model goes as before, and a cold press
@@ -952,13 +964,13 @@ So the model answers in under a second; the waiting was loading it and reading t
 
 **The voice** is the phone's own text-to-speech engine (`voice/Speaker`), restricted to voices
 that are installed and run offline, in the phone's language or English (`voice/VoiceChoice`). By
-default it is the engine's default voice; Settings → Assistant lists the others (tap one to hear
+default it is the engine's default voice; Settings → Voice lists the others (tap one to hear
 it) and has three paces. Replies are cleaned for speech first (`voice/SpeechText`): no markdown
 marks, links, code blocks or emoji read out. Music pauses while the assistant listens and speaks.
 
 **The natural voice** (user's request, 2026-10-28: "human like audio … least RAM") is Kokoro-82M
 v1.0 with the `af_heart` voice, run on the CPU by sherpa-onnx (`voice/NaturalVoice`), and offered
-at the top of Settings → Assistant → Voice as a 334 MB download. Once it is installed the
+at the top of Settings → Voice → Voice as a 334 MB download. Once it is installed the
 assistant uses it; the phone's voice stays as the fallback for anything it can't say (not
 installed, or the engine fails to load).
 
@@ -1003,7 +1015,7 @@ installed, or the engine fails to load).
 phrase "Hey Kalyani"; then "you can change the keyword to some simple english names if the
 recognition is becoming an issue"; then, after trying Luna, Computer and Kalyani, "ok lets go
 with luna"). The phrase is **Hey Luna** (`WakeWord.PHRASE`, `assets/wake/keywords.txt`). Off by
-default; Settings → Assistant → Wake word offers **While charging** and **Always**. Two listeners
+default; Settings → Calling the assistant → Wake word offers **While charging** and **Always**. Two listeners
 hear the same audio, and the phrase wakes the phone when either hears it (`wake/WakeDetector`):
 the keyword spotter below, and since 2026-10-30 a small model trained on the user's voice (see
 "The second listener"). **Try it** listens for four seconds with the same two and says whether it
@@ -1170,7 +1182,7 @@ heard it) to tune against real voices.
     clips at 0.9 and woke 7 times an hour on dev-other. With 100 h more speech it woke 1.8 times
     an hour but heard 4: it grew stricter about what "Hey Luna" sounds like, and no synthetic
     voice says it the way the user does.
-  - **The user's recordings** (Settings › Wake word › Samples for training, test builds only; the
+  - **The user's recordings** (Settings › Test build, test builds only; the
     user: "I have created 53 x hey luna as of now please proceed with that"): 53 phrases (28
     close, 25 with noise, none yet across the room) and 161 s of talk. Every fourth phrase was held
     back, 40 trained, at 50 varied copies each (room echo, noise, gain), sampled twice as often as

@@ -20,6 +20,7 @@ import androidx.compose.material.icons.automirrored.outlined.ArrowBack
 import androidx.compose.material.icons.outlined.Add
 import androidx.compose.material.icons.outlined.DeleteOutline
 import androidx.compose.material.icons.outlined.PhotoLibrary
+import androidx.compose.material.icons.outlined.Psychology
 import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.HorizontalDivider
@@ -167,10 +168,13 @@ fun ChatDrawer(
                 .padding(horizontal = 20.dp, vertical = 16.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
+            // A brain, beside the photo and settings icons.
+            Icon(Icons.Outlined.Psychology, contentDescription = null, tint = AppColors.TextSecondary)
             Text(
                 text = "What I know about you",
                 style = MaterialTheme.typography.labelLarge,
                 color = AppColors.TextSecondary,
+                modifier = Modifier.padding(start = 12.dp),
             )
         }
 

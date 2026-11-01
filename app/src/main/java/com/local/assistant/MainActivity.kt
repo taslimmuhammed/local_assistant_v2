@@ -27,6 +27,7 @@ import com.local.assistant.ui.profile.ProfileViewModel
 import androidx.activity.compose.BackHandler
 import com.local.assistant.ui.chat.ChatViewModel
 import com.local.assistant.ui.settings.SettingsScreen
+import com.local.assistant.ui.settings.SettingsSection
 import com.local.assistant.ui.setup.ModelScreen
 import com.local.assistant.ui.setup.PreparingScreen
 import com.local.assistant.ui.web.WebSearchScreen
@@ -94,6 +95,9 @@ private fun AppRoot(
 ) {
     val installed by container.modelManager.installed.collectAsStateWithLifecycle()
     var showSettings by remember { mutableStateOf(false) }
+    // The settings page open: kept here, so returning from the model, profile or web search
+    // screen comes back to it.
+    var settingsSection by rememberSaveable { mutableStateOf<SettingsSection?>(null) }
     var showModelScreen by remember { mutableStateOf(false) }
     var showMemoryScreen by remember { mutableStateOf(false) }
     var showProfileScreen by remember { mutableStateOf(false) }
@@ -138,6 +142,7 @@ private fun AppRoot(
         showWebSearchScreen = false
         showPhotosScreen = false
         showSettings = true
+        settingsSection = SettingsSection.CALLING
         onSettingsOpened()
     }
 
@@ -197,7 +202,10 @@ private fun AppRoot(
         return
     }
     if (showSettings) {
-        BackHandler { showSettings = false }
+        BackHandler {
+            showSettings = false
+            settingsSection = null
+        }
         val memoryViewModel: MemoryViewModel = viewModel(factory = MemoryViewModel.factory(container))
         SettingsScreen(
             llmService = container.llmService,
@@ -206,7 +214,12 @@ private fun AppRoot(
             voicePacks = container.voicePacks,
             webSearchOn = container.webSearch.enabled,
             memory = memoryViewModel,
-            onBack = { showSettings = false },
+            section = settingsSection,
+            onSection = { settingsSection = it },
+            onBack = {
+                showSettings = false
+                settingsSection = null
+            },
             onOpenProfile = { showProfileScreen = true },
             onOpenModel = { showModelScreen = true },
             onOpenWebSearch = { showWebSearchScreen = true },
