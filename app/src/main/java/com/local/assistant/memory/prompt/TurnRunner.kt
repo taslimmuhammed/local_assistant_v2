@@ -9,6 +9,7 @@ import com.local.assistant.memory.tools.MemoryChip
 import com.local.assistant.memory.tools.NumberGrounding
 import com.local.assistant.memory.tools.ToolContext
 import com.local.assistant.memory.tools.ToolLoop
+import com.local.assistant.memory.tools.ToolSteps
 import com.local.assistant.memory.work.ModelScheduler
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
@@ -24,6 +25,9 @@ sealed interface TurnEvent {
 
     /** On the lock screen, the request needs more than is allowed there: unlock, then ask again. */
     data object NeedsUnlock : TurnEvent
+
+    /** What is being done now, for the user to see: recall, a rebuild, a tool ([ToolSteps]). */
+    data class Step(val label: String) : TurnEvent
 }
 
 /**
@@ -77,7 +81,10 @@ class TurnRunner(
             var reseeded = false
             var rebuiltForPhotos = false
             while (true) {
-                val turn = conversations.prepareTurn(chatId, userMessageId, userText, locked)
+                val preparing = android.os.SystemClock.elapsedRealtime()
+                val turn = conversations.prepareTurn(chatId, userMessageId, userText, locked) { emit(TurnEvent.Step(it)) }
+                android.util.Log.i("TurnTiming", "turn prepared in ${android.os.SystemClock.elapsedRealtime() - preparing} ms (${if (turn.fresh) "fresh" else "carried on"}, ${turn.recalledImages.size} images, ${turn.envelope.tokens} tokens)")
+                emit(TurnEvent.Step(ToolSteps.THINKING))
                 var overflowed = false
                 var unreadable = false
                 var rebuild = false
@@ -127,6 +134,7 @@ class TurnRunner(
                         }
                         LoopEvent.NeedsUnlock -> emit(TurnEvent.NeedsUnlock)
                         LoopEvent.Rebuild -> rebuild = true
+                        is LoopEvent.Step -> emit(TurnEvent.Step(event.label))
                     }
                 }
                 when {

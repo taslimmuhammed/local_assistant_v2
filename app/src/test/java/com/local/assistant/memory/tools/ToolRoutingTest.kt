@@ -795,6 +795,20 @@ class ToolRoutingTest {
     }
 
     @Test
+    fun `each tool call is announced before it runs`() {
+        val (_, events) = askedForPhotos(
+            "show me my beach photos",
+            ScriptedSession.calls(ToolCall("find_photos", mapOf("query" to "beach"))),
+            ScriptedSession.says("Here they are."),
+        )
+        assertEquals(listOf(LoopEvent.Step("Searching your photos…")), events.filterIsInstance<LoopEvent.Step>())
+        assertTrue(events.indexOfFirst { it is LoopEvent.Step } < events.indexOfFirst { it is LoopEvent.Text })
+        assertEquals("Searching your memories…", ToolSteps.of(ToolCall("search_memory", emptyMap()), "what did I say about Goa"))
+        assertEquals("Searching your photos and reading one…", ToolSteps.of(ToolCall("find_photos", mapOf("query" to "PAN card")), "fetch my pan number"))
+        assertEquals("Working on it…", ToolSteps.of(ToolCall("something_new", emptyMap()), ""))
+    }
+
+    @Test
     fun `still no search, a claim to have found photos gives way to the truth`() {
         val (_, events) = askedForPhotos(
             "show me the photos of me attending wedding",

@@ -154,6 +154,7 @@ fun AssistOverlay(
     val chips by viewModel.chips.collectAsStateWithLifecycle()
     val pending by viewModel.pending.collectAsStateWithLifecycle()
     val streaming by viewModel.streamingText.collectAsStateWithLifecycle()
+    val step by viewModel.streamingStep.collectAsStateWithLifecycle()
     val listening by viewModel.listening.collectAsStateWithLifecycle()
     val level by viewModel.level.collectAsStateWithLifecycle()
     val speaking by viewModel.speaking.collectAsStateWithLifecycle()
@@ -367,6 +368,7 @@ fun AssistOverlay(
                             chips = chips,
                             pending = pending,
                             streaming = streaming,
+                            step = step,
                             waiting = waiting,
                             modelLoading = engine !is LlmService.State.Ready,
                             viewModel = viewModel,
@@ -586,6 +588,8 @@ private fun Transcript(
     chips: Map<Long, List<com.local.assistant.ui.chat.ChatViewModel.ChipItem>>,
     pending: AssistViewModel.Pending?,
     streaming: String?,
+    /** What the reply is waiting on: recall, a tool. */
+    step: String?,
     waiting: Boolean,
     modelLoading: Boolean,
     viewModel: AssistViewModel,
@@ -619,8 +623,11 @@ private fun Transcript(
         pending?.let { Question(it.text, it.audioPath != null, it.durationMs) }
         when {
             waiting || streaming?.isEmpty() == true ->
-                ThinkingIndicator(label = if (modelLoading) "Loading model…" else "Thinking…")
-            streaming != null -> Answer(streaming, streaming = true)
+                ThinkingIndicator(label = if (modelLoading) "Loading model…" else step ?: "Thinking…")
+            streaming != null -> {
+                Answer(streaming, streaming = true)
+                step?.let { ThinkingIndicator(label = it) }
+            }
         }
         asking?.let {
             MemoryChips(

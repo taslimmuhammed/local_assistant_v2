@@ -45,7 +45,8 @@ class ChatSender(
      * The reply being streamed. [chatId] is null only for the moment a new chat is being made;
      * [owner] is the screen that sent the message.
      */
-    data class Live(val chatId: Long?, val text: String, val owner: Any)
+    /** [step]: what is being done before (or between) the words, for the screen to say ([ToolSteps]). */
+    data class Live(val chatId: Long?, val text: String, val owner: Any, val step: String? = null)
 
     /** What the screen that sent a message hears back. Called on the main thread. */
     interface Listener {
@@ -172,10 +173,15 @@ class ChatSender(
                     when (event) {
                         is TurnEvent.Text -> {
                             reply.append(event.delta)
-                            _live.update { it?.copy(text = reply.toString()) }
+                            // Words again: whatever was being done is done.
+                            _live.update { it?.copy(text = reply.toString(), step = null) }
                         }
+                        is TurnEvent.Step -> _live.update { it?.copy(step = event.label) }
                         is TurnEvent.Memory -> listener.onMemory(event.chip)
-                        is TurnEvent.Done -> completed = true
+                        is TurnEvent.Done -> {
+                            completed = true
+                            _live.update { it?.copy(step = null) }
+                        }
                         TurnEvent.NeedsUnlock -> needsUnlock = true
                     }
                 }

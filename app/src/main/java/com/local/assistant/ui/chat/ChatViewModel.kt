@@ -120,6 +120,11 @@ class ChatViewModel(
         live?.takeIf { isHere(it, chatId) }?.text
     }.stateIn(viewModelScope, SharingStarted.Eagerly, null)
 
+    /** What the reply on screen is waiting on, while it is: "Searching your photos…" ([ChatSender.Live.step]). */
+    val streamingStep: StateFlow<String?> = combine(sender.live, _activeChatId) { live, chatId ->
+        live?.takeIf { isHere(it, chatId) }?.step
+    }.stateIn(viewModelScope, SharingStarted.Eagerly, null)
+
     /** The chat on screen is generating a reply. */
     val isGenerating: StateFlow<Boolean> = streamingText
         .map { it != null }

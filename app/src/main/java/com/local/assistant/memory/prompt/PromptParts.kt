@@ -93,6 +93,8 @@ data class EnvelopeInputs(
     val savedImage: SavedImageLine? = null,
     /** Photos from the user's gallery that may be about this message, best first. */
     val photos: List<PhotoLine> = emptyList(),
+    /** The message asks to see photos ("show me…"), and find_photos is there to show them. */
+    val asksForPhotos: Boolean = false,
     /** What files sent with the message cost: the user's own, and a recalled image. */
     val attachmentTokens: Int = 0,
     val userText: String,

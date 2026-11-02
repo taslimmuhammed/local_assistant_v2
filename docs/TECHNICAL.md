@@ -613,6 +613,14 @@ photos" with no search, and asked again "I don't have any photos", while a new c
   photos of wedding" was answered from the previous search 3 times in 3, also after being asked to
   search; rebuilt, it searched 6 times in 6. That costs the rebuild: 22 s for that reply against
   8.5 s for the first.
+- **Asked to see photos, the message says to search** (`PromptAssembler.SEARCH_PHOTOS`): "[They
+  ask to see photos: call find_photos for this message; only that shows them, even if an earlier
+  search was like it.]", and no recalled photos go with it (find_photos shows them; each sent
+  would cost about 3 s of reading). With it, the follow-up searched at once in the conversation
+  carried on, 3 times in 3, in 2.6–3.4 s instead of 21–22 s through the rebuild (which had been:
+  1.4 s for the answer held back, 5.5 s rebuilding 2,827 tokens, 14 s for the turn again). The
+  rebuild stays for when the line isn't enough. Of the routing eval's 96 requests, the 13 the line
+  goes with all expect find_photos. `TurnTiming` in the log shows where a turn's time goes.
 - **Why the guard had let it through:** saying photos were found counts as a claim only with no
   picture in front of the model, and the user's one saved image, a wedding invitation, was
   recalled for "wedding" and sent with the message.
@@ -1369,7 +1377,17 @@ The model starts loading the moment the app does (`AssistantApplication`, and ag
 `ChatViewModel` for a model installed just now), and the chat opens straight away. It takes a few
 seconds when the model file is in the page cache (about 3 s on the test phone). While it loads, the
 banner at the top says "Getting ready…". A message sent before it is ready simply waits for it, and
-the typing dot says "Loading model…" beside it, so the wait doesn't look like a hang. If the model
+the typing dot says "Loading model…" beside it, so the wait doesn't look like a hang.
+
+**What it's doing** is shown beside the dot while a reply is worked on, and under the reply when a
+tool runs partway through it (`memory/tools/ToolSteps`, `TurnEvent.Step`, `ChatSender.Live.step`,
+in the chat and the power-button panel): "Getting ready…" (a new chat's conversation being made)
+or "Reading the conversation…" (one rebuilt from its history), "Checking your memories…" (recall),
+"Thinking…", then the tool: "Searching your photos…", "Searching the web…",
+"Setting a reminder…" and so on. The model doesn't think aloud here (thinking is off, and the model
+reports none), so these are the steps the app can see. What a tool did stays as its chip. On the
+phone, a follow-up "show me my beach photos" showed "Checking your memories…" at 0.7 s, "Thinking…"
+at 2.0 s, "Searching your photos…" at 2.5 s and the reply with its photo card at 3.1 s. If the model
 fails to start, the banner says so in red. Tapping it tries again.
 
 ## Context window

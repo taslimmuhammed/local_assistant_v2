@@ -348,6 +348,14 @@ class PromptBudgetTest {
     }
 
     @Test
+    fun `a message asking to see photos is told to search for them`() {
+        val asked = assembler.buildEnvelope(EnvelopeInputs(now, showNow = false, asksForPhotos = true, userText = "show all the photos of wedding"))
+        assertEquals(PromptAssembler.SEARCH_PHOTOS + "\nshow all the photos of wedding", asked.text)
+        val plain = assembler.buildEnvelope(EnvelopeInputs(now, showNow = false, userText = "show all the photos of wedding"))
+        assertEquals("show all the photos of wedding", plain.text)
+    }
+
+    @Test
     fun `photos go after snippets, before facts, the least likely first`() {
         val envelope = richEnvelope.copy(photos = photos)
         val bare = assembler.buildEnvelope(envelope.copy(snippets = emptyList(), photos = photos.take(1)))

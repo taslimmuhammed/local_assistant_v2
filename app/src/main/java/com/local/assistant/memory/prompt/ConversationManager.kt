@@ -15,6 +15,7 @@ import com.local.assistant.llm.LlmService
 import com.local.assistant.llm.Sampling
 import com.local.assistant.llm.ToolReplay
 import com.local.assistant.memory.tools.ToolCatalog
+import com.local.assistant.memory.tools.ToolSteps
 import com.local.assistant.memory.db.MemoryRepository
 import com.local.assistant.memory.retrieval.QueryText
 import com.local.assistant.memory.retrieval.Recall
@@ -185,7 +186,14 @@ class ConversationManager(
      * Readies the conversation for [chatId] and builds this turn's envelope. [userMessageId] is
      * the user's message, already stored; everything before it is history.
      */
-    suspend fun prepareTurn(chatId: Long, userMessageId: Long, userText: String, locked: Boolean = false): PreparedTurn = mutex.withLock {
+    /** [step]: told what is being done, for the user to see (a rebuild, recall). */
+    suspend fun prepareTurn(
+        chatId: Long,
+        userMessageId: Long,
+        userText: String,
+        locked: Boolean = false,
+        step: suspend (String) -> Unit = {},
+    ): PreparedTurn = mutex.withLock {
         // Changing mode changes the prefix, so the conversation below won't match and is rebuilt.
         if (locked) lockedChats += chatId else lockedChats -= chatId
         val userMessage = chats.message(userMessageId)
@@ -210,6 +218,8 @@ class ConversationManager(
         val reusable = carriedOn ?: adoptFresh(chatId, history, budget, capabilities)
         var current: Live = reusable ?: run {
             _contextUsage.value = null
+            // A new chat has nothing to read but the instructions.
+            step(if (history.isEmpty()) ToolSteps.GETTING_READY else ToolSteps.READING_CONVERSATION)
             rebuild(chatId, history, budget, capabilities)
         }
 
@@ -221,14 +231,18 @@ class ConversationManager(
         val (recall, photos) = if (locked || command) {
             Recall.NONE to RecalledPhotos.NONE
         } else {
+            if (!QueryText.isTrivial(userText)) step(ToolSteps.CHECKING_MEMORY)
             // The photo search runs beside memory's: its own model, on the CPU.
             coroutineScope {
                 val search = async { photosFor(userText, current) }
                 recall(chatId, userText, current.windowStartId, budget) to search.await()
             }
         }
+        // Asked to see photos, find_photos shows them: sending recalled ones too (about 3 s each to
+        // read) would only slow the reply. They're told to search instead (PromptAssembler.SEARCH_PHOTOS).
+        val asksForPhotos = !locked && photoSearch() && QueryText.asksForPhotos(userText)
         // Shown whatever is attached; sent only beside nothing of the user's own.
-        val found = if (userAttached) emptyList() else photos.sent
+        val found = if (userAttached || asksForPhotos) emptyList() else photos.sent
         val image = recall.image?.takeIf { !userAttached }
         // Two pictures at most: a saved image the user asked to keep comes first.
         val photoLines = found.take(MAX_RECALLED_IMAGES - if (image != null && image.noteId !in current.attachedNotes) 1 else 0)
@@ -244,6 +258,7 @@ class ConversationManager(
             photos = photoLines,
             attachmentTokens = userMessage?.let { ContextWindow.attachmentTokens(it, capabilities.visionTokensPerImage) } ?: 0,
             userText = userText,
+            asksForPhotos = asksForPhotos,
         )
         val liveTokens = current.session.tokenCount() ?: 0
         var envelope = assembler.fitEnvelope(liveTokens, inputs)

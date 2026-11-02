@@ -9,6 +9,8 @@ import com.local.assistant.data.db.Role
 import com.local.assistant.memory.tools.ChatToolLog
 import com.local.assistant.memory.tools.ToolRecord
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
 import org.junit.Assume.assumeTrue
@@ -79,6 +81,7 @@ class PhotoRequestsEvalTest {
                     val from = container.chatRepository.messagesFor(chatId).maxOf { it.id }
                     val finished = CompletableDeferred<String>()
                     val started = System.currentTimeMillis()
+                    Log.i(TAG, "sending: $question")
                     check(container.chatSender.send(chatId, question, null, this@PhotoRequestsEvalTest, hidden = true, listener = object : ChatSender.Listener {
                         override fun onFinished(reply: String, failure: String?) { finished.complete(reply + (failure?.let { " [failed: $it]" } ?: "")) }
                     })) { "the sender was busy" }
@@ -125,10 +128,17 @@ class PhotoRequestsEvalTest {
                 val from = container.chatRepository.messagesFor(chatId).maxOfOrNull { it.id } ?: 0L
                 val finished = CompletableDeferred<String>()
                 val started = System.currentTimeMillis()
+                // The steps the screen is shown while the reply is worked on, in order.
+                val steps = java.util.Collections.synchronizedList(ArrayList<String>())
+                val watching = launch(kotlinx.coroutines.Dispatchers.Default) {
+                    container.chatSender.live.collect { live -> live?.step?.let { if (steps.lastOrNull() != it) steps += it } }
+                }
                 check(container.chatSender.send(chatId, question, null, this@PhotoRequestsEvalTest, hidden = true, listener = object : ChatSender.Listener {
                     override fun onFinished(reply: String, failure: String?) { finished.complete(reply + (failure?.let { " [failed: $it]" } ?: "")) }
                 })) { "the sender was busy" }
                 val reply = withTimeout(180_000) { finished.await() }
+                watching.cancel()
+                report("  steps: ${steps.joinToString(" → ")}")
                 val tools = container.chatRepository.messagesFor(chatId).filter { it.role == Role.TOOL && it.id > from }.mapNotNull { ChatToolLog.parse(it.text)?.tool }
                 if (tool in tools) right++
                 report("${if (tool in tools) "OK  " else "MISS"} | %.1f s | tools $tools | $question".format((System.currentTimeMillis() - started) / 1000.0) +
@@ -139,6 +149,28 @@ class PhotoRequestsEvalTest {
             container.conversations.forget(chatId)
         }
         report("its tool on $right of ${asks.size}")
+    }
+
+    /**
+     * Deletes a chat made by hand while checking the screen: only one titled exactly [title] and
+     * begun after [since] (ms), never by title alone, since titles repeat.
+     *
+     *     adb shell am instrument -w -e eval deletechat -e title "show me my sunset photos" -e since 1793... \
+     *         -e class com.local.assistant.gallery.PhotoRequestsEvalTest com.local.assistant.test/androidx.test.runner.AndroidJUnitRunner
+     */
+    @Test
+    fun deleteCheckChat() = runBlocking<Unit> {
+        val args = InstrumentationRegistry.getArguments()
+        assumeTrue("Opt-in: -e eval deletechat", args.getString("eval") == "deletechat")
+        val title = requireNotNull(args.getString("title"))
+        val since = requireNotNull(args.getString("since")).toLong()
+        val container = context.appContainer
+        val matching = container.chatRepository.observeChats().first().filter { it.title == title && it.createdAt >= since }
+        report("matching chats: ${matching.map { it.id }}")
+        check(matching.size == 1) { "expected exactly one chat, found ${matching.size}" }
+        container.chatRepository.deleteChat(matching.single().id)
+        container.conversations.forget(matching.single().id)
+        report("deleted chat ${matching.single().id}")
     }
 
     private fun report(line: String) {

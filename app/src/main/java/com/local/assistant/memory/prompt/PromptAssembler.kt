@@ -124,7 +124,7 @@ class PromptAssembler(
             keptSnippets += snippet
         }
         val imageLine = inputs.savedImage?.let(::renderSavedImage)
-        val photosLine = renderPhotos(inputs.photos)
+        val photosLine = renderPhotos(inputs.photos) ?: SEARCH_PHOTOS.takeIf { inputs.asksForPhotos }
 
         // Hold the app-added part to its cap: snippets go before facts. The image line has its
         // own allowance ([MemoryBudget.savedImageTokens]) on top: the user asked for it to be kept.
@@ -356,6 +356,14 @@ class PromptAssembler(
     }
 
     companion object {
+        /**
+         * Before a message asking to see photos. Late in a chat the model answered such requests
+         * from an earlier search instead of searching (1 Nov 2026): "I found 3 photos of you at a
+         * wedding" for "show all the photos of wedding", with nothing shown.
+         */
+        const val SEARCH_PHOTOS = "[They ask to see photos: call find_photos for this message; only that shows them, " +
+            "even if an earlier search was like it.]"
+
         const val DEFAULT_VISION_TOKENS = 256
         private const val MIN_SUMMARY_TOKENS = 50
         private const val CORE_STEP_TOKENS = 100

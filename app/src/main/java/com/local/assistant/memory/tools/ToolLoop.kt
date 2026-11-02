@@ -42,6 +42,9 @@ sealed interface LoopEvent {
      */
     data object NeedsUnlock : LoopEvent
 
+    /** What is being done now, for the user to see ([ToolSteps]). */
+    data class Step(val label: String) : LoopEvent
+
     /**
      * Asked to see photos, the model answered with no search in a conversation it had been
      * having: try the turn again in one rebuilt from what is stored, tool calls and all, where it
@@ -99,6 +102,9 @@ class ToolLoop(
         /** Whether [LoopEvent.Rebuild] may be asked for: not when [session] was just built for this turn. */
         canRebuild: Boolean = false,
     ): Flow<LoopEvent> = flow {
+        val started = android.os.SystemClock.elapsedRealtime()
+        /** Where a turn's time goes, in the log (tag TurnTiming): no words of it, only what and when. */
+        fun mark(what: String) = android.util.Log.i(TIMING, "$what at ${android.os.SystemClock.elapsedRealtime() - started} ms")
         var reply = session.send(envelope, attachments)
         var rounds = 0
         var spoke = false
@@ -172,6 +178,7 @@ class ToolLoop(
                     }
                 }
             }
+            mark("model answered (round $rounds: ${calls.joinToString { it.name }.ifEmpty { "no tool" }}, ${held?.length ?: 0} characters held)")
             if (overflowed) {
                 emit(LoopEvent.Overflow)
                 return@flow
@@ -251,7 +258,9 @@ class ToolLoop(
                 if (rounds > maxRounds) {
                     ToolResult(call.name, LIMIT_REACHED)
                 } else {
+                    emit(LoopEvent.Step(ToolSteps.of(call, context.userText)))
                     val outcome = executor.execute(call, context)
+                    mark("${call.name} ran")
                     changedPrefix = changedPrefix || outcome.changedPrefix
                     if (outcome.chip != null && outcome.recordId != null) emit(LoopEvent.Memory(outcome.recordId, outcome.chip))
                     if (call.name == ToolCatalog.CALCULATE && outcome.ok) answerOf(outcome.result)?.let(sums::add)
@@ -303,6 +312,8 @@ class ToolLoop(
     companion object {
         private val gson = com.google.gson.Gson()
         const val REPAIRED_REPLY = "Done."
+
+        private const val TIMING = "TurnTiming"
         const val LIMIT_REACHED = """{"ok":false,"error":"Tool limit reached for this message. Answer the user now."}"""
 
         /** Shown when the model, asked again, still says it did what no tool did. */

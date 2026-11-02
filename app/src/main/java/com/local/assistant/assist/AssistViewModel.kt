@@ -120,6 +120,11 @@ class AssistViewModel(
         pending?.takeIf { p -> p.storedId == null || messages.none { it.id == p.storedId } }
     }.stateIn(viewModelScope, SharingStarted.Eagerly, null)
 
+    /** What this overlay's reply is waiting on, while it is ([ChatSender.Live.step]). */
+    val streamingStep: StateFlow<String?> = sender.live
+        .map { live -> live?.takeIf { it.owner === this@AssistViewModel }?.step }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, null)
+
     /** This overlay's reply as it streams; "" before the first word. */
     val streamingText: StateFlow<String?> = sender.live
         .map { live -> live?.takeIf { it.owner === this@AssistViewModel }?.text }

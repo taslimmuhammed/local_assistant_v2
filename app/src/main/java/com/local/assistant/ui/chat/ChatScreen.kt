@@ -119,6 +119,7 @@ fun ChatScreen(
     val activeChatId by viewModel.activeChatId.collectAsStateWithLifecycle()
     val messages by viewModel.messages.collectAsStateWithLifecycle()
     val streamingText by viewModel.streamingText.collectAsStateWithLifecycle()
+    val streamingStep by viewModel.streamingStep.collectAsStateWithLifecycle()
     val isGenerating by viewModel.isGenerating.collectAsStateWithLifecycle()
     val engineState by viewModel.engineState.collectAsStateWithLifecycle()
     val error by viewModel.error.collectAsStateWithLifecycle()
@@ -306,10 +307,13 @@ fun ChatScreen(
                                 item(key = STREAMING_ITEM_KEY) {
                                     if (partial.isEmpty()) {
                                         // A message sent while the model is still starting waits
-                                        // for it: say so, so the wait doesn't look like a hang.
-                                        ThinkingIndicator(label = "Loading model…".takeIf { engineState !is LlmService.State.Ready })
+                                        // for it: say so, so the wait doesn't look like a hang. Then
+                                        // what is being done: "Checking your memories…", a tool.
+                                        ThinkingIndicator(label = if (engineState !is LlmService.State.Ready) "Loading model…" else streamingStep)
                                     } else {
                                         AssistantMessage(partial, streaming = true)
+                                        // A tool partway through the reply.
+                                        streamingStep?.let { ThinkingIndicator(label = it) }
                                     }
                                     asking?.let {
                                         MemoryChips(
