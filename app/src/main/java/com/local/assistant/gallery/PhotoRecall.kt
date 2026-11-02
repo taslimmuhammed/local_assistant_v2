@@ -27,7 +27,7 @@ class PhotoRecall(
 ) : PhotoSource {
 
     override suspend fun photosFor(text: String, max: Int, inConversation: Set<Long>): RecalledPhotos {
-        if (!ready() || QueryText.isTrivial(text)) return RecalledPhotos.NONE
+        if (!ready() || QueryText.isTrivial(text) || QueryText.isSmallTalk(text)) return RecalledPhotos.NONE
         val best = index.bestPhotos(text.take(MAX_QUERY), COMPARED) ?: return RecalledPhotos.NONE
         val top = best.firstOrNull()?.similarity ?: return RecalledPhotos.NONE
         // Shown more readily than sent ([SHOWN_FROM]): the answer may be in one the model wasn't

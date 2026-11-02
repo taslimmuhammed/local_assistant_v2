@@ -57,7 +57,7 @@ class MemoryEvalTest {
         "Amma ka birthday 12 March ko hai" to setOf("fact:mother.birthday"),
         "I'm vegetarian, no eggs either" to setOf("fact:user.diet"),
         "please always answer me in short points" to setOf("fact:user.pref.reply_style"),
-        "I have a job interview at Infosys on Friday at 3" to setOf("event"),
+        "I have a job interview at google on Friday at 3" to setOf("event"),
         "need to submit the GST return by the 20th" to setOf("task"),
         "what's the capital of Australia?" to emptySet(),
         "ugh I'm so tired today" to emptySet(),

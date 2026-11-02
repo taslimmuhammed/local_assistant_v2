@@ -42,20 +42,31 @@ class TranscriberDeviceTest {
         val clips = folder.listFiles { f -> f.name.endsWith(".wav") }.orEmpty().sortedBy { it.nameWithoutExtension.toIntOrNull() ?: Int.MAX_VALUE }
         report("${clips.size} clips in ${folder.name}")
         val limit = args.getString("limit")?.toInt() ?: clips.size
+        // -e compare true: each clip as is, with Transcriber.COMMAND_HINTS, and asking for 5 guesses.
+        val ways = if (args.getString("compare") == "true") {
+            listOf("plain" to (emptyList<String>() to 1), "hints" to (Transcriber.COMMAND_HINTS to 1), "guesses" to (emptyList<String>() to 5))
+        } else {
+            listOf("plain" to (emptyList<String>() to 1))
+        }
         for (clip in clips.take(limit)) {
             val pcm = clip.readBytes().let { it.copyOfRange(WAV_HEADER, it.size) }
-            val session = withContext(Dispatchers.Main) { transcriber.start() } ?: error("no session")
-            // As a recording comes: a tenth of a second at a time.
-            var at = 0
-            while (at < pcm.size) {
-                val n = minOf(CHUNK, pcm.size - at)
-                session.feed(pcm.copyOfRange(at, at + n), n)
-                at += n
-                delay(CHUNK_MS)
+            for ((way, options) in ways) {
+                val session = withContext(Dispatchers.Main) { transcriber.start(hints = options.first, alternatives = options.second) } ?: error("no session")
+                // As a recording comes: a tenth of a second at a time.
+                var at = 0
+                while (at < pcm.size) {
+                    val n = minOf(CHUNK, pcm.size - at)
+                    session.feed(pcm.copyOfRange(at, at + n), n)
+                    at += n
+                    delay(CHUNK_MS)
+                }
+                val ended = System.currentTimeMillis()
+                val words = withContext(Dispatchers.Main) { session.finish() }
+                val heard = session.guesses.joinToString(" ") { it.first() }
+                val others = session.guesses.joinToString(" / ") { it.drop(1).joinToString(" | ") }.takeIf { it.isNotBlank() }?.let { " | other guesses: $it" }.orEmpty()
+                // What the recogniser heard, then what goes to the chat (SpokenCommands.repair).
+                report("${clip.nameWithoutExtension} | $way | %.1f s of audio | words after %d ms | heard: $heard | sent: ${words ?: "(nothing)"}$others".format(pcm.size / 32_000.0, System.currentTimeMillis() - ended))
             }
-            val ended = System.currentTimeMillis()
-            val words = withContext(Dispatchers.Main) { session.finish() }
-            report("${clip.nameWithoutExtension} | %.1f s of audio | words after %d ms | ${words ?: "(nothing)"}".format(pcm.size / 32_000.0, System.currentTimeMillis() - ended))
         }
     }
 

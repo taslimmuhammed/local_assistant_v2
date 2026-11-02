@@ -32,7 +32,7 @@ class ActionClaimsTest {
     fun `replies that say something was done are claims`() {
         val claims = listOf(
             // From the user's chats: the first two had no tool call behind them.
-            "I've sent the email to Hitesh at infosys.com with \"Hi\" in it.",
+            "I've sent the email to Hitesh at google.com with \"Hi\" in it.",
             "I have set an alarm for 7:30 AM.",
             "OK. I've sent \"Hi\" to Sandra on WhatsApp.",
             "I've added a reminder for Salah in 15 minutes.",
@@ -121,9 +121,9 @@ class ActionClaimsTest {
 
     @Test
     fun `the opening is the first sentence, or more while it is short, and at most 200 characters`() {
-        // Not ended yet: the full stop has no space after it, and "infosys.com" is not an end.
-        assertNull(ActionClaims.openingEnd("I've sent the email to Hitesh at infosys.com."))
-        assertEquals(45, ActionClaims.openingEnd("I've sent the email to Hitesh at infosys.com. More"))
+        // Not ended yet: the full stop has no space after it, and "google.com" is not an end.
+        assertNull(ActionClaims.openingEnd("I've sent the email to Hitesh at google.com."))
+        assertEquals(45, ActionClaims.openingEnd("I've sent the email to Hitesh at google.com. More"))
         // "Sure!" alone is too short to be the opening; the claim comes after it.
         val text = "Sure! I've sent the email to him. Anything else?"
         assertEquals(33, ActionClaims.openingEnd(text))

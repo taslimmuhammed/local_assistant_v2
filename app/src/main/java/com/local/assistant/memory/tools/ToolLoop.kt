@@ -14,8 +14,8 @@ import kotlinx.coroutines.flow.flow
 sealed interface LoopEvent {
     data class Text(val delta: String) : LoopEvent
 
-    /** A tool changed something worth showing under the reply. */
-    data class Memory(val recordId: Long, val chip: MemoryChip) : LoopEvent
+    /** A tool ([tool], its name) changed something worth showing under the reply. */
+    data class Memory(val recordId: Long, val chip: MemoryChip, val tool: String? = null) : LoopEvent
 
     /**
      * [toolRounds] is how many rounds of tool calls the turn took; 0 for a plain reply.
@@ -187,7 +187,7 @@ class ToolLoop(
                 // A call that only slipped in its format, to a tool that acts rather than looks
                 // something up, is carried out as meant and confirmed without the model. What the
                 // model should have said next is not needed: the chip shows what was done.
-                val fixed = repair(cause)?.takeIf { it.name in ToolCatalog.WRITES || it.name in ToolCatalog.DEVICE_ACTIONS }
+                val fixed = repair(cause)?.takeIf { it.name in ToolCatalog.ACTS }
                 if (fixed != null && context.locked && fixed.name !in ToolCatalog.LOCKED) {
                     emit(LoopEvent.NeedsUnlock)
                     emit(LoopEvent.Done(null, changedPrefix = false, toolRounds = 0, staleConversation = true))
@@ -198,7 +198,7 @@ class ToolLoop(
                     emit(LoopEvent.Unreadable)
                     return@flow
                 }
-                if (outcome.chip != null && outcome.recordId != null) emit(LoopEvent.Memory(outcome.recordId, outcome.chip))
+                if (outcome.chip != null && outcome.recordId != null) emit(LoopEvent.Memory(outcome.recordId, outcome.chip, fixed.name))
                 emit(LoopEvent.Text(REPAIRED_REPLY))
                 emit(LoopEvent.Done(null, outcome.changedPrefix, toolRounds = 1, staleConversation = true))
                 return@flow
@@ -262,7 +262,7 @@ class ToolLoop(
                     val outcome = executor.execute(call, context)
                     mark("${call.name} ran")
                     changedPrefix = changedPrefix || outcome.changedPrefix
-                    if (outcome.chip != null && outcome.recordId != null) emit(LoopEvent.Memory(outcome.recordId, outcome.chip))
+                    if (outcome.chip != null && outcome.recordId != null) emit(LoopEvent.Memory(outcome.recordId, outcome.chip, call.name))
                     if (call.name == ToolCatalog.CALCULATE && outcome.ok) answerOf(outcome.result)?.let(sums::add)
                     outcome.reply?.let(written::add)
                     grounding.add(outcome.result)

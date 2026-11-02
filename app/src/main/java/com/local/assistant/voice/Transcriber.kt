@@ -38,17 +38,21 @@ class Transcriber(private val context: Context, private val scope: CoroutineScop
     val available: Boolean
         get() = Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU && SpeechRecognizer.isOnDeviceRecognitionAvailable(context)
 
-    /** Starts writing down a recording about to begin; null when it can't. On the main thread, as the recogniser asks. */
+    /**
+     * Starts writing down a recording about to begin; null when it can't. On the main thread, as
+     * the recogniser asks. [hints]: phrases to lean towards ([RecognizerIntent.EXTRA_BIASING_STRINGS]);
+     * [alternatives]: how many guesses to ask for each stretch of speech.
+     */
     @MainThread
-    fun start(locale: Locale = Locale.getDefault()): Session? {
+    fun start(locale: Locale = Locale.getDefault(), hints: List<String> = emptyList(), alternatives: Int = 1): Session? {
         if (!available) return null
-        return runCatching { Session(locale) }
+        return runCatching { Session(locale, hints, alternatives) }
             .onFailure { Log.w(TAG, "No transcript: the recogniser wouldn't start", it) }
             .getOrNull()
     }
 
     /** One recording's words. [feed] it the audio, then [finish] for what was said. */
-    inner class Session internal constructor(locale: Locale) {
+    inner class Session internal constructor(locale: Locale, hints: List<String>, alternatives: Int) {
 
         private val pipe = ParcelFileDescriptor.createPipe()
         private val out = ParcelFileDescriptor.AutoCloseOutputStream(pipe[1])
@@ -67,6 +71,9 @@ class Transcriber(private val context: Context, private val scope: CoroutineScop
 
         /** Each segment's best guess, in order: written by the recogniser's callbacks, read by [finish]. */
         private val said: MutableList<String> = java.util.Collections.synchronizedList(ArrayList())
+
+        /** Each segment's guesses, best first. */
+        val guesses: MutableList<List<String>> = java.util.Collections.synchronizedList(ArrayList())
         private val done = CompletableDeferred<Unit>()
         private val recognizer = SpeechRecognizer.createOnDeviceSpeechRecognizer(context)
         private val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
@@ -78,6 +85,8 @@ class Transcriber(private val context: Context, private val scope: CoroutineScop
             putExtra(RecognizerIntent.EXTRA_AUDIO_SOURCE_SAMPLING_RATE, MediaLimits.AUDIO_SAMPLE_RATE_HZ)
             // The whole recording, pauses and all, not just the first sentence.
             putExtra(RecognizerIntent.EXTRA_SEGMENTED_SESSION, RecognizerIntent.EXTRA_AUDIO_SOURCE)
+            if (hints.isNotEmpty()) putStringArrayListExtra(RecognizerIntent.EXTRA_BIASING_STRINGS, ArrayList(hints))
+            if (alternatives > 1) putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, alternatives)
         }
 
         init {
@@ -128,7 +137,10 @@ class Transcriber(private val context: Context, private val scope: CoroutineScop
             val words = synchronized(said) { said.joinToString(" ") }.replace(Regex("\\s+"), " ").trim()
             Log.i(TAG, "${if (heard) "Transcribed" else "Timed out"} in ${System.currentTimeMillis() - started} ms after the recording: ${words.length} characters")
             release()
-            return words.ifEmpty { null }
+            // "Sarlamat 4:30 p.m. today" was "set alarm at 4:30 p.m. today".
+            val meant = SpokenCommands.repair(words)
+            if (meant != words) Log.i(TAG, "A garbled alarm request put right")
+            return meant.ifEmpty { null }
         }
 
         /** The recording was thrown away. */
@@ -139,8 +151,9 @@ class Transcriber(private val context: Context, private val scope: CoroutineScop
         }
 
         private fun keep(results: Bundle) {
-            results.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)?.firstOrNull()?.trim()
-                ?.takeIf { it.isNotEmpty() }?.let(said::add)
+            val all = results.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION).orEmpty().map { it.trim() }.filter { it.isNotEmpty() }
+            all.firstOrNull()?.let(said::add)
+            if (all.isNotEmpty()) guesses += all
         }
 
         /** The language's pack, for next time: the phone downloads it itself. */
@@ -158,13 +171,16 @@ class Transcriber(private val context: Context, private val scope: CoroutineScop
         }
     }
 
-    private companion object {
-        const val TAG = "Transcriber"
+    companion object {
+        private const val TAG = "Transcriber"
+
+        /** Requests the recogniser gets wrong for the user: "set alarm at" came out "sarlamat". */
+        val COMMAND_HINTS = listOf("set alarm", "set an alarm", "set alarm at", "set alarm for", "set a timer", "remind me", "wake me up", "Luna")
 
         /** How long the words may take after the recording ends before the audio goes alone. */
-        const val FINISH_TIMEOUT_MS = 4_000L
+        private const val FINISH_TIMEOUT_MS = 4_000L
 
         /** 0.7 s of silence, 16 kHz mono 16-bit. */
-        const val TRAILING_SILENCE_BYTES = MediaLimits.AUDIO_SAMPLE_RATE_HZ * 2 * 7 / 10
+        private const val TRAILING_SILENCE_BYTES = MediaLimits.AUDIO_SAMPLE_RATE_HZ * 2 * 7 / 10
     }
 }

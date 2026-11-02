@@ -154,8 +154,8 @@ class MemoryControlsTest {
         assertNotNull(database.factDao().tombstone("priya_sharma", "birthday"))
 
         // "Priya" now files under priya_sharma.
-        memory.saveFact("Priya", "employer", "Infosys", FactOrigin.CHAT)
-        assertEquals("Infosys", database.factDao().find("priya_sharma", "employer")!!.value)
+        memory.saveFact("Priya", "employer", "google", FactOrigin.CHAT)
+        assertEquals("google", database.factDao().find("priya_sharma", "employer")!!.value)
         assertTrue(controls.duplicates().isEmpty())
     }
 

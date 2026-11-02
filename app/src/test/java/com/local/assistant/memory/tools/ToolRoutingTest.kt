@@ -135,6 +135,17 @@ class ToolRoutingTest {
     // ---- The brief's three cases ----
 
     @Test
+    fun `a misheard command that still acts is known by its tool`() {
+        // "Set alarm at 4:30" as the recogniser wrote it: no command in the words, but the turn
+        // acted, so no related-photos card goes under it (TurnRunner).
+        val (_, events) = turn(call("set_alarm", "when" to "6am"))
+        val memory = events.filterIsInstance<LoopEvent.Memory>().single()
+        assertEquals("set_alarm", memory.tool)
+        assertTrue(memory.tool in ToolCatalog.ACTS)
+        assertFalse(ToolCatalog.FIND_PHOTOS in ToolCatalog.ACTS || ToolCatalog.WEB_SEARCH in ToolCatalog.ACTS || ToolCatalog.SEARCH_MEMORY in ToolCatalog.ACTS)
+    }
+
+    @Test
     fun `remind me to call the CA tomorrow at 11`() {
         val (session, events) = turn(call("add_task", "title" to "Call the CA", "when" to "tomorrow at 11"))
 
@@ -374,6 +385,18 @@ class ToolRoutingTest {
     fun `wake me up at 5 30 tomorrow means the morning, and a label that just says alarm is dropped`() {
         turn(call("set_alarm", "when" to "tomorrow at 5:30", "label" to "Alarm"))
         assertEquals(listOf(FakeSystemAlarms.Set(5, 30, emptySet(), null)), clock.set)
+    }
+
+    @Test
+    fun `a misheard request is neither the alarm's name nor a reminder`() {
+        // "set alarm at 4:30" written down as "setalaam 4:30" / "sarlamat 4:30 p.m. today".
+        turn(call("set_alarm", "when" to "6am", "label" to "Setalaam"))
+        assertEquals(listOf(FakeSystemAlarms.Set(6, 0, emptySet(), null)), clock.set)
+
+        val (session, _) = turn(call("add_task", "title" to "sarlamat", "when" to "today at 4:30 p.m."))
+        assertTrue(store.tasks.isEmpty())
+        assertEquals(false, result(session)["ok"])
+        assertTrue(result(session)["error"].toString().contains("set_alarm"))
     }
 
     @Test
@@ -747,7 +770,7 @@ class ToolRoutingTest {
     @Test
     fun `a reply that says it sent something when no tool ran is never shown, and the model is asked again`() {
         val (session, events) = replies(
-            ScriptedSession.says("I've sent the email to Hitesh at infosys.com with \"Hi\" in it."),
+            ScriptedSession.says("I've sent the email to Hitesh at google.com with \"Hi\" in it."),
             ScriptedSession.says("I can't send emails myself. I can open your email app with it written; what's his full address?"),
         )
         assertEquals("I can't send emails myself. I can open your email app with it written; what's his full address?", shown(events))

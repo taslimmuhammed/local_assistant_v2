@@ -53,7 +53,7 @@ object ActionClaims {
     /** What follows a message that is shown: a colon, or the text in quotes. */
     private val SHOWN = Regex("[:\"“«]")
 
-    /** A sentence ends at . ! or ? once a space follows (not in "infosys.com"), or a line ends. */
+    /** A sentence ends at . ! or ? once a space follows (not in "google.com"), or a line ends. */
     private val SENTENCE_END = Regex("[.!?](?=\\s)|\\n")
 
     /** "I", "I've", "I have just" …: the model speaking of what it did. */

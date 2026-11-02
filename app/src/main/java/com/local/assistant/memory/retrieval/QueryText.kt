@@ -28,6 +28,16 @@ object QueryText {
     }
 
     /**
+     * Greetings and pleasantries, however long: "good morning Luna", "hi, how are you doing?".
+     * Nothing in the photos answers them, so the photos aren't searched for them (the user, 2 Nov
+     * 2026: no photo card for "good morning"). Memory still is, as for any message over [isTrivial].
+     */
+    fun isSmallTalk(text: String): Boolean {
+        val words = words(text).map { it.lowercase(Locale.ROOT).replace('’', '\'') }
+        return words.isNotEmpty() && words.all { it in ACKNOWLEDGEMENTS || it in SMALL_TALK }
+    }
+
+    /**
      * A command to act on rather than a question: an alarm, a timer, a reminder, a call, a message,
      * an app, a setting, a list. Nothing is recalled for one (the user, 30 Oct 2026: recall only
      * slows commands down). Only what is plainly put as a command counts: a question taken for a
@@ -151,6 +161,13 @@ object QueryText {
         "that", "is", "sounds", "fair", "enough", "welcome", "goodnight", "night", "morning", "see", "ya",
         "theek", "thik", "hai", "haan", "han", "ha", "ji", "accha", "acha", "achha", "shukriya", "dhanyavad",
         "bas", "sahi", "badhiya", "chalo", "chal", "thanku", "tq",
+    )
+
+    /** With [ACKNOWLEDGEMENTS], the words of a greeting ([isSmallTalk]). */
+    private val SMALL_TALK = setOf(
+        "luna", "morning", "afternoon", "evening", "gm", "gn", "how", "are", "r", "u", "doing", "today",
+        "what's", "whats", "up", "sup", "wassup", "there", "all", "everyone", "have", "day", "i'm", "im",
+        "am", "well", "too", "and", "also", "dear", "buddy", "namaste", "namaskaram", "kaise", "ho", "haal",
     )
 
     /**

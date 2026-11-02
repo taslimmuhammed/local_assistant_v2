@@ -14,6 +14,7 @@ import com.local.assistant.memory.db.TaskEntity
 import com.local.assistant.memory.db.TaskStatus
 import com.local.assistant.memory.notes.FoundImage
 import com.local.assistant.memory.notes.ImageNotes
+import com.local.assistant.voice.SpokenCommands
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import java.time.DayOfWeek
@@ -234,6 +235,10 @@ class ToolExecutor(
 
     private suspend fun addTask(args: Args, context: ToolContext): Applied {
         val title = tidyTitle(args.required("title"))
+        // "Sarlamat 4:30 p.m. today" made a reminder named "Sarlamat" (2 Nov 2026): it was an alarm.
+        if (SpokenCommands.isGarbledCommand(title) && alarms.available()) {
+            throw ToolError("'$title' is \"set alarm\" misheard: the user asked for an alarm. Call set_alarm with the same time, and no label.")
+        }
         val rule = args.text("repeat")?.let { RepeatRule.parse(it) ?: throw ToolError("I couldn't understand repeat '$it'. Ask how often.") }
         val now = now()
         val due: ZonedDateTime? = when (val whenText = args.text("when")) {
@@ -451,7 +456,8 @@ class ToolExecutor(
                 throw ToolError("The clock app can only set a one-off alarm for the next 24 hours. Offer a reminder for that day instead.")
             }
         }
-        val label = args.text("label")?.let(::tidyTitle)?.takeUnless { it.equals("alarm", ignoreCase = true) }
+        // Not the garbled request itself ("Setalaam"): that is no name.
+        val label = args.text("label")?.let(::tidyTitle)?.takeUnless { it.equals("alarm", ignoreCase = true) || SpokenCommands.isGarbledCommand(it) }
         if (!alarms.set(at.hour, at.minute, days, label)) {
             throw ToolError("The clock app couldn't be reached. Offer a reminder instead.")
         }

@@ -21,6 +21,14 @@ class QueryTextTest {
     }
 
     @Test
+    fun greetingsAreSmallTalkHoweverLong() {
+        listOf("good morning Luna", "Hi, how are you doing today?", "hey luna what's up", "good evening everyone", "have a nice day", "gm", "namaste, kaise ho")
+            .forEach { assertTrue("'$it' should be small talk", QueryText.isSmallTalk(it)) }
+        listOf("good morning, what's the weather today?", "how are the photos from Munnar", "good morning set an alarm for 6", "what is today", "")
+            .forEach { assertFalse("'$it' should not be small talk", QueryText.isSmallTalk(it)) }
+    }
+
+    @Test
     fun termsDropStopWordsAndRepeats() {
         assertEquals(listOf("ca", "iyer", "office", "jayanagar"), QueryText.terms("My CA is Mr. Iyer, his office is in Jayanagar. Iyer!"))
         assertEquals(listOf("meeting", "kal"), QueryText.terms("meeting kab hai kal?"))

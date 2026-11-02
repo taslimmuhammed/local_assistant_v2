@@ -7,6 +7,7 @@ import com.local.assistant.llm.PromptAttachment
 import com.local.assistant.memory.tools.LoopEvent
 import com.local.assistant.memory.tools.MemoryChip
 import com.local.assistant.memory.tools.NumberGrounding
+import com.local.assistant.memory.tools.ToolCatalog
 import com.local.assistant.memory.tools.ToolContext
 import com.local.assistant.memory.tools.ToolLoop
 import com.local.assistant.memory.tools.ToolSteps
@@ -89,6 +90,7 @@ class TurnRunner(
                 var unreadable = false
                 var rebuild = false
                 var photosShown = false
+                var acted = false
                 val reply = StringBuilder()
                 // A saved image the message is about is looked at again, as if sent with it, and so
                 // are photos from the gallery a question may be about.
@@ -102,6 +104,7 @@ class TurnRunner(
                         }
                         is LoopEvent.Memory -> {
                             if (event.chip.kind == MemoryChip.Kind.PHOTOS) photosShown = true
+                            if (event.tool in ToolCatalog.ACTS) acted = true
                             emit(TurnEvent.Memory(event.recordId, event.chip))
                         }
                         is LoopEvent.Done -> {
@@ -117,8 +120,10 @@ class TurnRunner(
                                 conversations.learnFromTurn(chatId, turn.envelope.text, reply.toString())
                             }
                             // Photos the message itself matched, under the reply, unless a photo
-                            // search already put its own there.
-                            if (!photosShown && turn.relatedPhotos.isNotEmpty()) {
+                            // search already put its own there, or the turn did something (an
+                            // alarm, a call): a command, however put. "Set alarm at 4:30" heard as
+                            // "sarlamat 4:30 p.m. today" got the card (2 Nov 2026).
+                            if (!photosShown && !acted && turn.relatedPhotos.isNotEmpty()) {
                                 val (recordId, chip) = tools.showRelatedPhotos(chatId, turn.relatedPhotos)
                                 emit(TurnEvent.Memory(recordId, chip))
                             }

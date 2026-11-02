@@ -217,7 +217,11 @@ and to leave them unmentioned if they aren't about it (`PromptAssembler.renderPh
   one the model wasn't sent. At first shown whatever they scored (the user's call, 1 Nov 2026),
   then given that lower bar: on the phone's photos it shows for 11 of 16 questions the photos
   answer and 2 of 30 general ones. Not when a photo
-  search in the turn showed its own, nor for commands or over the lock screen.
+  search in the turn showed its own, nor for commands or over the lock screen. A command is also
+  known by what the turn did: one that ran a tool in `ToolCatalog.ACTS` (a reminder, an alarm, a
+  call…) gets no card, however it was put; "set alarm at 4:30" written down as "sarlamat 4:30
+  p.m. today" got one before. Greetings ("good morning Luna", "hi, how are you?",
+  `QueryText.isSmallTalk`) aren't searched for photos at all; memory still is.
 - **Only a clear match goes to the model.** A whole question scores differently from a short search: of 30
   general questions on the test phone's 2,685 photos ("what is the capital of France?", "tell me a
   joke") the best photo scored up to 0.777, so the search's own floor (0.72) would have sent
@@ -585,7 +589,7 @@ the check. With the old result wording, replies after the app opened a message o
 sent yet" in the result, 4 in 4 said it was open and ready. Still wrong: spoken, "Teams" and
 "Instagram" sometimes go to `send_message` (which refuses any app but SMS, WhatsApp and email),
 and "pay my electricity bill" to `find_photos`. A spoken email address is often misheard
-("taslim.moosa@infosys.com" came out as "thasaleem.musa@infosec.com"): the mail app opens with
+("taslimmuhammed67@gmail.com" came out as "thasaleem.musa@infosec.com"): the mail app opens with
 it, so check it before tapping send.
 
 Routing didn't move: `RoutingEvalTest` scored 88/94 before and after (positives 77/79,

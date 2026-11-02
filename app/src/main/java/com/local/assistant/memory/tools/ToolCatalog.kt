@@ -47,6 +47,9 @@ object ToolCatalog {
     /** Device tools with an effect a repeat would duplicate: a second dialer, a second timer. */
     val DEVICE_ACTIONS = DEVICE - CALCULATE
 
+    /** Tools that do something for the user: a turn that ran one was a command, however it was put. */
+    val ACTS = WRITES + DEVICE_ACTIONS
+
     /**
      * What runs on the lock screen (the user, 2026-10-30: "on lock-screen it'll have no access any
      * memory including photos, but it can set reminders, alarms, etc, if user asks to do something
@@ -148,7 +151,7 @@ object ToolCatalog {
         ),
         function(
             SET_ALARM,
-            "Use when the user asks for an alarm (\\\"wake me up at 5:30\\\"). It rings in the phone's clock app. Put the user's own time words in when, copied exactly.",
+            "Use when the user asks for an alarm (\\\"wake me up at 5:30\\\"). It rings in the phone's clock app. Put the user's own time words in when, copied exactly. label: only a name the user gives the alarm (\\\"for gym\\\": gym), never words of the request itself.",
             required = listOf("when"),
             "when" to "string",
             "label" to "string",
