@@ -59,14 +59,7 @@ object ChunkPolicy {
     fun isUtility(userText: String, tools: Collection<String>): Boolean =
         tools.all { it in UTILITY_TOOLS } && (tools.isNotEmpty() || looksLikeArithmetic(userText) || asksForPhotos(userText))
 
-    /** "Show me photos from Munnar", "get my beach videos": asking to see them, not telling about them. */
-    private fun asksForPhotos(text: String): Boolean {
-        val words = QueryText.words(text.lowercase())
-        return words.any { it in PHOTO_WORDS } && words.any { it in SEE_WORDS }
-    }
-
-    private val PHOTO_WORDS = setOf("photo", "photos", "pic", "pics", "picture", "pictures", "video", "videos", "selfie", "selfies")
-    private val SEE_WORDS = setOf("show", "find", "get", "fetch", "pull", "see", "give", "search")
+    private fun asksForPhotos(text: String): Boolean = QueryText.asksForPhotos(text)
 
     private fun looksLikeArithmetic(text: String): Boolean {
         val lower = text.lowercase()

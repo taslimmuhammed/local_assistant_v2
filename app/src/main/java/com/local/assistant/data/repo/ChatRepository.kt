@@ -35,6 +35,9 @@ class ChatRepository(
     suspend fun turnsBefore(chatId: Long, beforeId: Long): List<MessageEntity> =
         dao.turnsBefore(chatId, beforeId)
 
+    suspend fun toolRowsBetween(chatId: Long, afterId: Long, beforeId: Long): List<MessageEntity> =
+        dao.toolRowsBetween(chatId, afterId, beforeId)
+
     suspend fun chat(chatId: Long): ChatEntity? = dao.chat(chatId)
 
     suspend fun message(messageId: Long): MessageEntity? = dao.message(messageId)

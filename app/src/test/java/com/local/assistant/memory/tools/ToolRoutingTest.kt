@@ -756,6 +756,67 @@ class ToolRoutingTest {
         assertTrue((events.last() as LoopEvent.Done).staleConversation)
     }
 
+    private val photoLoop = ToolLoop(
+        executor,
+        maxRounds = 3,
+        isOverflow = { "too long" in it.message.orEmpty() },
+        photosAvailable = { true },
+    )
+
+    private fun askedForPhotos(text: String, vararg script: List<GenEvent>): Pair<ScriptedSession, List<LoopEvent>> {
+        val session = ScriptedSession(ArrayDeque(script.toList()))
+        return session to runBlocking { photoLoop.run(session, "envelope", emptyList(), context.copy(userText = text)).toList() }
+    }
+
+    /** As it went in the user's chat on 1 Nov 2026: a second request for the same photos, answered without searching. */
+    @Test
+    fun `asked to see photos and answered with no search, the model is asked to search`() {
+        val (session, events) = askedForPhotos(
+            "Could you show all the photos of wedding",
+            ScriptedSession.says("I'm sorry, I don't have any photos of you attending a wedding."),
+            ScriptedSession.calls(ToolCall("find_photos", mapOf("query" to "wedding"))),
+            ScriptedSession.says("Here they are."),
+        )
+        assertEquals(listOf("envelope", ToolLoop.PHOTO_CHECK), session.sentEnvelopes)
+        assertEquals("find_photos", session.sentResults.single().single().name)
+        // The reply nobody saw stays out; the live conversation holds it, so it's rebuilt.
+        assertFalse("don't have any photos" in shown(events))
+        assertTrue((events.last() as LoopEvent.Done).staleConversation)
+    }
+
+    @Test
+    fun `in a conversation carried on, an unsearched photo request asks for a rebuilt one instead`() {
+        val session = ScriptedSession(ArrayDeque(listOf(ScriptedSession.says("I found 3 photos of you attending a wedding."))))
+        val events = runBlocking {
+            photoLoop.run(session, "envelope", emptyList(), context.copy(userText = "Could you show all the photos of wedding"), canRebuild = true).toList()
+        }
+        assertEquals(listOf<LoopEvent>(LoopEvent.Rebuild), events)
+        assertEquals(listOf("envelope"), session.sentEnvelopes)
+    }
+
+    @Test
+    fun `still no search, a claim to have found photos gives way to the truth`() {
+        val (_, events) = askedForPhotos(
+            "show me the photos of me attending wedding",
+            ScriptedSession.says("I found 0 photos of you attending a wedding."),
+            ScriptedSession.says("I found 0 photos of you attending a wedding."),
+        )
+        assertEquals(ToolLoop.NOT_SEARCHED, shown(events))
+    }
+
+    @Test
+    fun `a question back after the check is shown, and other messages aren't held to a search`() {
+        val (_, asked) = askedForPhotos(
+            "show me photos from the trip",
+            ScriptedSession.says("Sure."),
+            ScriptedSession.says("Which trip do you mean, Goa or Munnar?"),
+        )
+        assertEquals("Which trip do you mean, Goa or Munnar?", shown(asked))
+        val (session, events) = askedForPhotos("what's the capital of Kerala?", ScriptedSession.says("Thiruvananthapuram."))
+        assertEquals(listOf("envelope"), session.sentEnvelopes)
+        assertEquals("Thiruvananthapuram.", shown(events))
+    }
+
     /** As it went in the user's chat on 1 Nov 2026: a follow-up answered with the last search's count, and no search. */
     @Test
     fun `saying photos were found with no search and no photo sent is asked again`() {

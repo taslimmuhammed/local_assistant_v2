@@ -72,6 +72,15 @@ object QueryText {
         Regex("^(remember|note|save) (that|this|my)\\b|^forget\\b"),
     )
 
+    /** "Show me photos from Munnar", "get my beach videos": asking to see them, not telling about them. */
+    fun asksForPhotos(text: String): Boolean {
+        val words = words(text.lowercase(Locale.ROOT))
+        return words.any { it in PHOTO_WORDS } && words.any { it in SEE_WORDS }
+    }
+
+    private val PHOTO_WORDS = setOf("photo", "photos", "pic", "pics", "picture", "pictures", "video", "videos", "selfie", "selfies")
+    private val SEE_WORDS = setOf("show", "find", "get", "fetch", "pull", "see", "give", "search")
+
     /** Lower-cased words worth searching for, in order, without repeats. */
     fun terms(text: String): List<String> =
         words(text).map { it.lowercase(Locale.ROOT).replace('’', '\'').substringBefore('\'') }

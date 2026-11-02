@@ -11,6 +11,7 @@ import com.google.ai.edge.litertlm.RepetitionPenaltyConfig
 import com.google.ai.edge.litertlm.ResponseFormat
 import com.google.ai.edge.litertlm.SamplerConfig
 import com.google.ai.edge.litertlm.ThinkingConfig
+import com.google.ai.edge.litertlm.ToolCall as RuntimeToolCall
 import com.google.ai.edge.litertlm.tool
 import com.google.gson.Gson
 import com.local.assistant.data.db.AttachmentKind
@@ -48,7 +49,7 @@ class LiteRtLmBackend(
         val conversation = llm.createConversation(
             ConversationConfig(
                 systemInstruction = spec.systemPrefix.takeIf { it.isNotBlank() }?.let { Contents.of(it) },
-                initialMessages = spec.history.mapNotNull { it.toLiteRtMessage() },
+                initialMessages = spec.history.flatMap { it.toLiteRtMessages() },
                 tools = spec.toolDeclarations.map { tool(DeclaredTool(it)) },
                 samplerConfig = spec.sampling.toConfig(),
                 automaticToolCalling = false,
@@ -120,14 +121,20 @@ class LiteRtLmBackend(
 
     private fun Sampling.toConfig() = SamplerConfig(topK = topK, topP = topP, temperature = temperature, seed = seed)
 
-    private fun MessageEntity.toLiteRtMessage(): Message? = when (role) {
-        Role.USER -> Message.user(
-            contentsOf(text, listOfNotNull(attachmentPath?.let { path -> ContextWindow.sentAttachment(attachmentKind, text)?.let { PromptAttachment(path, it) } })),
+    private fun MessageEntity.toLiteRtMessages(): List<Message> = when (role) {
+        Role.USER -> listOf(
+            Message.user(
+                contentsOf(text, listOfNotNull(attachmentPath?.let { path -> ContextWindow.sentAttachment(attachmentKind, text)?.let { PromptAttachment(path, it) } })),
+            ),
         )
-        Role.ASSISTANT -> Message.model(text)
-        // What a tool changed is already in the rebuilt prefix; replaying the call would only
-        // spend tokens.
-        Role.TOOL -> null
+        Role.ASSISTANT -> listOf(Message.model(text))
+        // As the model made it, and what it got back (cut short): see ConversationManager.withToolCalls.
+        Role.TOOL -> ToolReplay.call(text)?.let { (name, arguments) ->
+            listOf(
+                Message.model(Contents.of(emptyList()), listOf(RuntimeToolCall(name, arguments))),
+                Message.tool(Contents.of(listOf(Content.ToolResponse(name, ToolReplay.result(text))))),
+            )
+        }.orEmpty()
     }
 
     /** A declaration the model sees. Never executed by the runtime: tool calling is manual. */

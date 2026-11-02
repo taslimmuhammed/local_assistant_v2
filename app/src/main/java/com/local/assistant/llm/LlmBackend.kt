@@ -80,7 +80,7 @@ data class Sampling(val topK: Int, val topP: Double, val temperature: Double, va
 data class ChatSpec(
     /** Sections A–D, byte-stable for the life of the session. */
     val systemPrefix: String,
-    /** Replayed verbatim; user and assistant turns only. */
+    /** Replayed verbatim: user and assistant turns, and the tool calls between them ([ToolReplay]). */
     val history: List<MessageEntity>,
     /** OpenAPI function declarations, one JSON object each. Empty until tools exist. */
     val toolDeclarations: List<String> = emptyList(),

@@ -75,16 +75,19 @@ class TurnRunner(
         scheduler.runUser {
             var retried = false
             var reseeded = false
+            var rebuiltForPhotos = false
             while (true) {
                 val turn = conversations.prepareTurn(chatId, userMessageId, userText, locked)
                 var overflowed = false
                 var unreadable = false
+                var rebuild = false
                 var photosShown = false
                 val reply = StringBuilder()
                 // A saved image the message is about is looked at again, as if sent with it, and so
                 // are photos from the gallery a question may be about.
                 val sent = attachment?.let(::listOf) ?: turn.recalledImages.map { PromptAttachment(it, AttachmentKind.IMAGE) }
-                tools.run(turn.session, turn.envelope.text, sent, ToolContext(chatId, userMessageId, userText, locked), sources = listOf(turn.prefix)).collect { event ->
+                val context = ToolContext(chatId, userMessageId, userText, locked)
+                tools.run(turn.session, turn.envelope.text, sent, context, sources = listOf(turn.prefix), canRebuild = !turn.fresh && !rebuiltForPhotos).collect { event ->
                     when (event) {
                         is LoopEvent.Text -> {
                             reply.append(event.delta)
@@ -123,6 +126,7 @@ class TurnRunner(
                             unreadable = true
                         }
                         LoopEvent.NeedsUnlock -> emit(TurnEvent.NeedsUnlock)
+                        LoopEvent.Rebuild -> rebuild = true
                     }
                 }
                 when {
@@ -133,6 +137,11 @@ class TurnRunner(
                     unreadable -> {
                         conversations.reseed(chatId)
                         reseeded = true
+                    }
+                    rebuild -> {
+                        // The next prepareTurn rebuilds it from what is stored, tool calls included.
+                        conversations.forget(chatId)
+                        rebuiltForPhotos = true
                     }
                     else -> break
                 }

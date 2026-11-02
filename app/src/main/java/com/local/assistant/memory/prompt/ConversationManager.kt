@@ -13,6 +13,8 @@ import com.local.assistant.llm.LlmBackend
 import com.local.assistant.llm.ContextWindow
 import com.local.assistant.llm.LlmService
 import com.local.assistant.llm.Sampling
+import com.local.assistant.llm.ToolReplay
+import com.local.assistant.memory.tools.ToolCatalog
 import com.local.assistant.memory.db.MemoryRepository
 import com.local.assistant.memory.retrieval.QueryText
 import com.local.assistant.memory.retrieval.Recall
@@ -98,6 +100,8 @@ class ConversationManager(
         val relatedPhotos: List<Long> = emptyList(),
         /** The system prefix the conversation holds: what the reply may read numbers out of. */
         val prefix: String = "",
+        /** Built for this turn (rebuilt from what is stored, or made ready for a new chat), not one carried on. */
+        val fresh: Boolean = false,
     )
 
     private class Live(
@@ -196,13 +200,14 @@ class ConversationManager(
         var history = historyFor(chatId, userMessageId)
         val now = now()
 
-        val reusable = live?.takeIf {
+        val carriedOn = live?.takeIf {
             it.chatId == chatId &&
                 it.locked == locked &&
                 it.lastMessageId == (history.lastOrNull()?.id ?: 0L) &&
                 it.budget == budget &&
                 it.session.isAlive
-        } ?: adoptFresh(chatId, history, budget, capabilities)
+        }
+        val reusable = carriedOn ?: adoptFresh(chatId, history, budget, capabilities)
         var current: Live = reusable ?: run {
             _contextUsage.value = null
             rebuild(chatId, history, budget, capabilities)
@@ -282,6 +287,7 @@ class ConversationManager(
             recalledImages = listOfNotNull(attached?.path) + photosSent.map { it.path },
             relatedPhotos = photos.related,
             prefix = current.acknowledgedPrefix,
+            fresh = carriedOn == null || current !== carriedOn,
         )
     }
 
@@ -607,7 +613,7 @@ class ConversationManager(
             if (plan.shed.isNotEmpty()) Log.i(TAG, "Shed ${plan.shed} to fit ${plan.totalTokens} tokens")
             val spec = ChatSpec(
                 systemPrefix = plan.prefix.text,
-                history = plan.history.messages,
+                history = withToolCalls(chatId, plan.history.messages),
                 toolDeclarations = declared,
                 sampling = Sampling.CHAT.copy(seed = seed),
                 maxOutputTokens = minOf(settings.maxOutputTokens, budget.generationReserve),
@@ -693,6 +699,23 @@ class ConversationManager(
     )
 
     /** Stored turns before [beforeId], minus any that a rolling summary already covers. */
+    /**
+     * [turns] with the tool calls made between them, for a rebuilt conversation to hold what a
+     * live one does. Without them the model saw earlier photo requests answered in plain words
+     * ("I found 3 photos of you watching the sunset.") and answered the next the same way, with
+     * no search: "I found 0 photos of you attending a wedding" (1 Nov 2026; 0 of 6 replays
+     * searched). Not the photos the app shows by itself ([ToolCatalog.RELATED_PHOTOS]), which the
+     * model never asked for; only the newest [MAX_REPLAYED_TOOLS], their results cut short.
+     */
+    private suspend fun withToolCalls(chatId: Long, turns: List<MessageEntity>): List<MessageEntity> {
+        val first = turns.firstOrNull() ?: return turns
+        val calls = chats.toolRowsBetween(chatId, first.id, turns.last().id)
+            .filter { ToolReplay.call(it.text)?.first?.let { name -> name != ToolCatalog.RELATED_PHOTOS } == true }
+            .takeLast(MAX_REPLAYED_TOOLS)
+        if (calls.isEmpty()) return turns
+        return (turns + calls).sortedBy { it.id }
+    }
+
     private suspend fun historyFor(chatId: Long, beforeId: Long): List<MessageEntity> {
         val summarisedUpTo = chats.chat(chatId)?.rollingUptoMessageId ?: 0L
         return chats.turnsBefore(chatId, beforeId).filter { it.id > summarisedUpTo }
@@ -736,5 +759,8 @@ class ConversationManager(
 
         /** Pictures recalled for one message at most, a saved image and photos together (the user's limit). */
         const val MAX_RECALLED_IMAGES = 2
+
+        /** Tool calls replayed into a rebuilt conversation at most: the newest. */
+        const val MAX_REPLAYED_TOOLS = 8
     }
 }

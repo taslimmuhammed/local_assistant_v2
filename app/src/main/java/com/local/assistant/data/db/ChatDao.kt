@@ -29,6 +29,10 @@ interface ChatDao {
     )
     suspend fun turnsBefore(chatId: Long, beforeId: Long): List<MessageEntity>
 
+    /** The tool calls made between [afterId] and [beforeId], oldest first. */
+    @Query("SELECT * FROM messages WHERE chatId = :chatId AND role = 'TOOL' AND id > :afterId AND id < :beforeId ORDER BY id ASC")
+    suspend fun toolRowsBetween(chatId: Long, afterId: Long, beforeId: Long): List<MessageEntity>
+
     @Query("SELECT attachmentPath FROM messages WHERE attachmentPath IS NOT NULL")
     suspend fun attachmentPaths(): List<String>
 

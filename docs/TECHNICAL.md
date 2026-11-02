@@ -593,6 +593,33 @@ negatives 11/15; "find photos of Amma at the beach" now passes, "what's my denti
 goes to `find_photos`). The rule and wording cost 108 tokens of prefix: instructions 832 → 901,
 declarations 1,651 → 1,690.
 
+
+**Photo requests late in a chat** (1 Nov 2026). After a photo question, a photo search and a
+reply the app held back, "Could you show me the photos of me attending wedding" got "I found 0
+photos" with no search, and asked again "I don't have any photos", while a new chat found 3.
+
+- **A rebuilt conversation now holds its tool calls** (`ConversationManager.withToolCalls`,
+  `llm/ToolReplay`). History had been user and assistant turns only, so the model saw earlier
+  photo requests answered in plain words and answered the next one the same way. Now the calls
+  between the turns go back in as the model made them, each with its result cut short (240
+  characters a text, 6 items a list), the newest 8 at most. Not the photos the app shows by itself.
+  Replaying that chat (`PhotoRequestsEvalTest`, `-e eval photorequests`): the first request
+  searched 0 times in 3 before, 3 in 3 after.
+- **Asked to see photos, a reply with no search isn't shown** (`QueryText.asksForPhotos`, "show /
+  find / get … photos"; `ToolLoop`). In a conversation carried on from earlier turns, the turn is
+  tried again in one rebuilt from what is stored (`LoopEvent.Rebuild`); in one just built, the
+  model is asked once to search (`ToolLoop.PHOTO_CHECK`); still nothing, and it says it didn't
+  search (`NOT_SEARCHED`) rather than a count it made up. The follow-up "Could you show all the
+  photos of wedding" was answered from the previous search 3 times in 3, also after being asked to
+  search; rebuilt, it searched 6 times in 6. That costs the rebuild: 22 s for that reply against
+  8.5 s for the first.
+- **Why the guard had let it through:** saying photos were found counts as a claim only with no
+  picture in front of the model, and the user's one saved image, a wedding invitation, was
+  recalled for "wedding" and sent with the message.
+- Six read-only tools in one chat rebuilt before every message (`-e eval replaymix`): no failures,
+  5 of 6 called their tool; "what did I tell you about my dentist?" searched photos instead of
+  memory, as "what's my dentist's name?" does in the routing eval without any replay.
+
 ### Web search
 
 `web_lookup` looks things up through Tavily with the user's own API key, pasted in under "Web

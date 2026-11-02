@@ -41,6 +41,13 @@ sealed interface LoopEvent {
      * [Done] follows, with a stale conversation.
      */
     data object NeedsUnlock : LoopEvent
+
+    /**
+     * Asked to see photos, the model answered with no search in a conversation it had been
+     * having: try the turn again in one rebuilt from what is stored, tool calls and all, where it
+     * searches ([ToolLoop.run]'s canRebuild).
+     */
+    data object Rebuild : LoopEvent
 }
 
 /**
@@ -73,6 +80,8 @@ class ToolLoop(
     private val seesImages: () -> Boolean = { true },
     /** A reply said something was done with no tool run, and was held back ([ActionClaims]). */
     private val onUnbackedClaim: (said: String) -> Unit = {},
+    /** Whether find_photos is declared to the model now: photo search set up. */
+    private val photosAvailable: () -> Boolean = { false },
 ) {
 
     /**
@@ -87,6 +96,8 @@ class ToolLoop(
         attachments: List<PromptAttachment>,
         context: ToolContext,
         sources: List<String> = emptyList(),
+        /** Whether [LoopEvent.Rebuild] may be asked for: not when [session] was just built for this turn. */
+        canRebuild: Boolean = false,
     ): Flow<LoopEvent> = flow {
         var reply = session.send(envelope, attachments)
         var rounds = 0
@@ -99,6 +110,10 @@ class ToolLoop(
         // recalled photo sent along, "I found a photo of your certificate" is true.
         val seesPhotos = attachments.any { it.kind == com.local.assistant.data.db.AttachmentKind.IMAGE }
         fun claimed(text: CharSequence) = ActionClaims.claims(text) || (!seesPhotos && ActionClaims.foundPhotos(text))
+        // Asked to see photos: only find_photos shows them, so a reply with no search isn't shown
+        // until the model has been asked once more to search ([PHOTO_CHECK]).
+        val mustSearch = photosAvailable() && !context.locked && com.local.assistant.memory.retrieval.QueryText.asksForPhotos(context.userText)
+        var searchAsked = false
         val text = if (groundNumbers()) GroundedReply(grounding, onNumberFixed) else null
 
         /** Reply text the user may see now. */
@@ -133,7 +148,7 @@ class ToolLoop(
                             show(event.text)
                         } else {
                             opening.append(event.text)
-                            val end = if (suspect) null else ActionClaims.openingEnd(opening)
+                            val end = if (suspect || mustSearch) null else ActionClaims.openingEnd(opening)
                             when {
                                 end == null -> Unit
                                 claimed(opening.substring(0, end)) -> suspect = true
@@ -182,6 +197,21 @@ class ToolLoop(
                 return@flow
             }
             val opening = held
+            if (opening != null && calls.isEmpty() && mustSearch && !searchAsked) {
+                // "Could you show all the photos of wedding", right after a search for them,
+                // answered with no search, and again after the general check (1 Nov 2026).
+                onUnbackedClaim(opening.toString())
+                // Asked again in the same conversation, it repeated itself 3 times in 3; in one
+                // rebuilt from what is stored, it searched 6 times in 6 (PhotoRequestsEvalTest).
+                if (canRebuild) {
+                    emit(LoopEvent.Rebuild)
+                    return@flow
+                }
+                searchAsked = true
+                checked = true
+                reply = session.send(PHOTO_CHECK, null)
+                continue
+            }
             if (opening != null) {
                 if (calls.isEmpty() && (suspect || claimed(opening) || ActionClaims.unshownDraft(opening))) {
                     // Said it did something no tool did: not shown, and the model asked again,
@@ -195,7 +225,7 @@ class ToolLoop(
                     }
                     // Asked again and still saying it (the panel's "yes go ahead" by voice,
                     // 27 Oct 2026): what is true goes out instead.
-                    show(NOT_DONE)
+                    show(if (mustSearch) NOT_SEARCHED else NOT_DONE)
                 } else {
                     show(opening.toString())
                 }
@@ -277,6 +307,14 @@ class ToolLoop(
 
         /** Shown when the model, asked again, still says it did what no tool did. */
         const val NOT_DONE = "Sorry, I didn't actually do that: nothing was sent, set or saved."
+
+        /** Shown when, asked to see photos, the model still answered with no search. */
+        const val NOT_SEARCHED = "Sorry, I didn't search your photos for that. Please ask me again."
+
+        /** Sent when the user asked to see photos and the reply came with no search. */
+        const val PHOTO_CHECK = "[App check: they asked to see photos, and only a find_photos call shows them: none ran for your last " +
+            "reply, so nothing was shown. Call find_photos now for what they asked, even if an earlier search was like it. " +
+            "Don't mention this check.]"
 
         /** Sent when a reply says something was done and no tool ran ([ActionClaims]). */
         const val UNBACKED_CLAIM = "[App check: no tool ran for your last reply, so nothing in it was done. " +
