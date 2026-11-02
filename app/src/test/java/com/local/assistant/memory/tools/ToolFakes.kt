@@ -125,7 +125,8 @@ class FakeSystemAlarms(var present: Boolean = true, var reachable: Boolean = tru
         timers += seconds to label
         return true
     }
-    override fun openClock() = Unit
+    var clockOpened = 0
+    override fun openClock() { clockOpened++ }
 }
 
 class FakeToolLog : ToolLog {

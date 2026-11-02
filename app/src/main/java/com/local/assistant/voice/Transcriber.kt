@@ -174,7 +174,12 @@ class Transcriber(private val context: Context, private val scope: CoroutineScop
     companion object {
         private const val TAG = "Transcriber"
 
-        /** Requests the recogniser gets wrong for the user: "set alarm at" came out "sarlamat". */
+        /**
+         * Requests the recogniser got wrong for the user: "set alarm at" came out "sarlamat". Not
+         * used: on the user's 21 alarm recordings (2 Nov 2026, `TranscriberDeviceTest -e compare
+         * true`) these hints changed no word, and no other guess held "set alarm" either; asking for
+         * 5 guesses once gave nothing at all. [SpokenCommands] puts the two misheard ones right.
+         */
         val COMMAND_HINTS = listOf("set alarm", "set an alarm", "set alarm at", "set alarm for", "set a timer", "remind me", "wake me up", "Luna")
 
         /** How long the words may take after the recording ends before the audio goes alone. */

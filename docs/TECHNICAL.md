@@ -480,6 +480,16 @@ alarm is either one-off within the next 24 hours or repeating on days of the wee
 is refused and the model offers a reminder. For alarms a bare hour means whichever comes first —
 "5:30" set at night is 5:30 AM — rather than the daytime rule reminders use.
 
+An alarm's name is one the user said. On the test phone the clock held alarms named "Salaam",
+"Salah Ahmed", "Salaamat" and "Sarlamat (task 3)": "set alarm" misheard (by the model hearing
+audio, later by the recogniser), and once a reminder's listing copied over. So a label is dropped
+when it is the request garbled (`SpokenCommands.isGarbledCommand`), a reminder listing, or has no
+word of the user's message; a reminder titled with the garble is refused, telling the model to set
+the alarm. The clock app can't rename or remove an alarm for another app: OnePlus Clock ignores
+`ACTION_DISMISS_ALARM` by label or time, and a new name at the same time sets a second alarm beside
+the first, both on. So a new name for an alarm set from here (until a one-off rings, 12 h for a
+repeating one) opens the clock app's alarms instead, and the model tells the user to rename it there.
+
 Routing is measured, not assumed: `RoutingEvalTest` sends 62 requests — reminders, reschedules,
 facts, events, calls, messages, timers, apps, settings, sums, web lookups, and negatives that must
 not call anything — through the real model with the real instructions and all 16 declarations,
@@ -741,6 +751,13 @@ it. The WAV is still what the chat plays back.
   ("turn on dark" for "turn on dark mode", "call" for "call amma"), so 0.7 s of silence follows the
   recording; then every clip kept it. Mistakes left were names and addresses in a synthetic voice
   ("land a Lord", an email address).
+- **Misheard alarm requests are put right** (`SpokenCommands.repair`): "sarlamat 4:30 p.m. today"
+  for "set alarm at 4:30" made a reminder named "Sarlamat". Words within 3 letters (and 45%) of
+  "set alarm (at|for)" at the start, with a time within four words after, become "Set an alarm
+  at …"; "meeting at", "call mom at" and "gym at" are 4 or more letters off. On the user's 21
+  alarm recordings (`-e compare true -e clips alarm-voice`) it put both misheard ones right and
+  left the other 19 as heard; the recogniser's own options didn't help (biasing strings changed no
+  word, no alternative held "set alarm", and asking for 5 once gave nothing).
 
 ## Photos
 

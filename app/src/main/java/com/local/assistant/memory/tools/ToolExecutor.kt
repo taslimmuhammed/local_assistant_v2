@@ -221,7 +221,7 @@ class ToolExecutor(
             ToolCatalog.GET_UPCOMING -> getUpcoming(args)
             ToolCatalog.SEARCH_MEMORY -> searchMemory(args)
             ToolCatalog.FORGET -> forget(args)
-            ToolCatalog.SET_ALARM -> setAlarm(args)
+            ToolCatalog.SET_ALARM -> setAlarm(args, context.userText)
             ToolCatalog.REMEMBER_IMAGE -> if (memoryPaused()) {
                 throw ToolError("Memory is paused, so nothing was saved. Tell the user; they can turn memory back on in 'What I know about you'.")
             } else {
@@ -432,7 +432,7 @@ class ToolExecutor(
      * the next time its time comes round, or repeats on days of the week. So anything further
      * off than a day, or repeating some other way, is refused — the model can offer a reminder.
      */
-    private fun setAlarm(args: Args): Applied {
+    private fun setAlarm(args: Args, userText: String): Applied {
         if (!alarms.available()) throw ToolError("This phone's clock app doesn't accept alarms from other apps. Offer a reminder instead.")
         val whenText = args.required("when")
         val now = now()
@@ -456,13 +456,25 @@ class ToolExecutor(
                 throw ToolError("The clock app can only set a one-off alarm for the next 24 hours. Offer a reminder for that day instead.")
             }
         }
-        // Not the garbled request itself ("Setalaam"): that is no name.
-        val label = args.text("label")?.let(::tidyTitle)?.takeUnless { it.equals("alarm", ignoreCase = true) || SpokenCommands.isGarbledCommand(it) }
+        val label = args.text("label")?.let(::alarmName)?.takeIf { saidIn(it, userText) }
+        // The clock app can't rename an alarm, nor remove one, for another app (seen on the test
+        // phone's OnePlus Clock: DISMISS_ALARM ignored, a new name set a second alarm beside the
+        // first, both on). A new name for one just set goes to the clock app, opened for it.
+        val next = if (days.isEmpty()) at else nextOn(days, at, now)
+        val key = ClockAlarm(at.hour, at.minute, days)
+        val earlier = synchronized(clockAlarms) { clockAlarms[key]?.takeIf { now.millis() < it.second } }
+        if (earlier != null && label != null && label != earlier.first) {
+            alarms.openClock()
+            val name = earlier.first?.let { " ($it)" }.orEmpty()
+            throw ToolError("The clock app doesn't let other apps rename an alarm, and setting another would ring twice. Its alarms are open now: tell the user to rename the ${modelTime(next)} alarm$name to $label there.")
+        }
         if (!alarms.set(at.hour, at.minute, days, label)) {
             throw ToolError("The clock app couldn't be reached. Offer a reminder instead.")
         }
+        // A one-off alarm can be renamed until it rings; a repeating one, for a while after it's set.
+        val until = if (days.isEmpty()) next.millis() else now.millis() + RENAME_WINDOW_MS
+        synchronized(clockAlarms) { clockAlarms[key] = label to until }
 
-        val next = if (days.isEmpty()) at else nextOn(days, at, now)
         return Applied(
             result = ok("alarm" to modelTime(next), "repeats" to days.takeIf { it.isNotEmpty() }?.let(::describeDays)),
             chip = MemoryChip(
@@ -473,6 +485,25 @@ class ToolExecutor(
                 note = days.takeIf { it.isNotEmpty() }?.let { "Repeats " + describeDays(it) },
             ),
         )
+    }
+
+    private data class ClockAlarm(val hour: Int, val minute: Int, val days: Set<DayOfWeek>)
+
+    /** Alarms set from here, with their names and until when a new name is a rename: the clock app can't be asked. */
+    private val clockAlarms = HashMap<ClockAlarm, Pair<String?, Long>>()
+
+    /**
+     * An alarm's name as the model gave it, or null for none: not "alarm", not a reminder's
+     * listing copied over ("Sarlamat (task 3)", 2 Nov 2026), not the garbled request ("Setalaam").
+     */
+    private fun alarmName(raw: String): String? =
+        tidyTitle(raw.replace(TASK_LISTING, "")).takeUnless { it.isEmpty() || it.equals("alarm", ignoreCase = true) || SpokenCommands.isGarbledCommand(it) }
+
+    /** Whether the user said any of [name]'s words in [userText]; with no text to check, it stands. */
+    private fun saidIn(name: String, userText: String): Boolean {
+        if (userText.isBlank()) return true
+        val said = significantWords(userText)
+        return significantWords(name).any { word -> said.any { it == word || (minOf(it.length, word.length) >= 3 && (it.startsWith(word) || word.startsWith(it))) } }
     }
 
     /** The first of [days] at [at]'s time, after [now]. */
@@ -805,6 +836,12 @@ class ToolExecutor(
         private const val TAG = "ToolExecutor"
         const val DEDUPE_WINDOW_MS = 2 * 60 * 1000L
         const val DEVICE_DEDUPE_WINDOW_MS = 15 * 1000L
+
+        /** How long after a repeating alarm is set a new name for it is taken as a rename. */
+        private const val RENAME_WINDOW_MS = 12 * 60 * 60 * 1000L
+
+        /** "(task 3, open, Mon 2 Nov 16:30)", as reminders are listed to the model. */
+        private val TASK_LISTING = Regex("\\s*\\(task\\s*#?\\d+[^)]*\\)", RegexOption.IGNORE_CASE)
         private const val MAX_FACT_LENGTH = 300
         private const val MAX_LISTED = 8
         private const val MAX_FOUND = 5

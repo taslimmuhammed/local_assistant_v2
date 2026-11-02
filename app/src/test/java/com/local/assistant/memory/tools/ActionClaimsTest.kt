@@ -123,7 +123,7 @@ class ActionClaimsTest {
     fun `the opening is the first sentence, or more while it is short, and at most 200 characters`() {
         // Not ended yet: the full stop has no space after it, and "google.com" is not an end.
         assertNull(ActionClaims.openingEnd("I've sent the email to Hitesh at google.com."))
-        assertEquals(45, ActionClaims.openingEnd("I've sent the email to Hitesh at google.com. More"))
+        assertEquals(44, ActionClaims.openingEnd("I've sent the email to Hitesh at google.com. More"))
         // "Sure!" alone is too short to be the opening; the claim comes after it.
         val text = "Sure! I've sent the email to him. Anything else?"
         assertEquals(33, ActionClaims.openingEnd(text))

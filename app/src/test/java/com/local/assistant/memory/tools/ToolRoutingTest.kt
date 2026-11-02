@@ -399,6 +399,35 @@ class ToolRoutingTest {
         assertTrue(result(session)["error"].toString().contains("set_alarm"))
     }
 
+    /** As [turn], for a message the user said: [text]. */
+    private fun said(text: String, vararg calls: ToolCall): Pair<ScriptedSession, List<LoopEvent>> {
+        val session = ScriptedSession(ArrayDeque(listOf(ScriptedSession.calls(*calls), ScriptedSession.says("Done."))))
+        val events = runBlocking { loop.run(session, "envelope", emptyList(), context.copy(userText = text)).toList() }
+        return session to events
+    }
+
+    @Test
+    fun `an alarm's name is one the user said`() {
+        // The model named it after a reminder in its list (2 Nov 2026).
+        said("alarm at 6 a.m.", call("set_alarm", "when" to "6am", "label" to "Sarlamat (task 3)"))
+        said("set an alarm for gym at 7", call("set_alarm", "when" to "7am", "label" to "gym"))
+        said("wake me up at 8", call("set_alarm", "when" to "8am", "label" to "Morning routine"))
+        assertEquals(listOf(null, "Gym", null), clock.set.map { it.label })
+    }
+
+    @Test
+    fun `a new name for an alarm just set opens the clock app rather than setting a second`() {
+        said("set an alarm at 6", call("set_alarm", "when" to "6am"))
+        val (session, _) = said("name it gym", call("set_alarm", "when" to "6am", "label" to "gym"))
+        assertEquals(listOf(FakeSystemAlarms.Set(6, 0, emptySet(), null)), clock.set)
+        assertEquals(1, clock.clockOpened)
+        assertEquals(false, result(session)["ok"])
+        assertTrue(result(session)["error"].toString().contains("rename"))
+        // Another time is another alarm.
+        said("and one at 7 for gym", call("set_alarm", "when" to "7am", "label" to "gym"))
+        assertEquals(2, clock.set.size)
+    }
+
     @Test
     fun `a weekday alarm repeats on those days`() {
         val (session, events) = turn(call("set_alarm", "when" to "7am", "repeat" to "weekdays"))
