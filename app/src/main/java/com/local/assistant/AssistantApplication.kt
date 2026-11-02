@@ -246,6 +246,14 @@ class AppContainer(context: Context) {
         setGroupedBy = { settings.faceGroupingVersion = it },
     )
 
+    /** People named from contacts' photos, once faces are found (`gallery/faces/ContactNames`). */
+    val contactNames = com.local.assistant.gallery.faces.ContactNames(
+        database = galleryDatabase,
+        faces = faceIndex,
+        photos = com.local.assistant.gallery.faces.AndroidContactPhotos(context),
+        enabled = { settings.findPeople },
+    )
+
     val galleryIndex = GalleryIndex(
         dao = galleryDatabase.photoDao(),
         library = photoLibrary,

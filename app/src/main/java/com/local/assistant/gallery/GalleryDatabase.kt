@@ -72,7 +72,8 @@ data class PhotoEntity(
 
 /**
  * Someone in the photos, named by the user. [isMe] marks the user themself, which is how
- * "photos of me" is answered.
+ * "photos of me" is answered. [contactKey]: named from that contact's photo (its
+ * `ContactsContract.Contacts.LOOKUP_KEY`), by the app or on the user's yes.
  */
 @Entity(tableName = "people")
 data class PersonEntity(
@@ -80,6 +81,31 @@ data class PersonEntity(
     val name: String,
     val isMe: Boolean = false,
     val createdAt: Long,
+    val contactKey: String? = null,
+)
+
+/**
+ * A contact's photo as last read: its face [print] ([com.local.assistant.gallery.faces.FacePrints]
+ * bytes), or null when it holds no single clear face. [photoId] is the contact's `PHOTO_ID` then:
+ * a new photo is read again, an unchanged one never.
+ */
+@Entity(tableName = "contact_faces")
+data class ContactFaceEntity(
+    @PrimaryKey val contactKey: String,
+    val name: String,
+    val photoId: Long,
+    val print: ByteArray?,
+    val readAt: Long,
+) {
+    override fun equals(other: Any?): Boolean = other is ContactFaceEntity && other.contactKey == contactKey && other.photoId == photoId
+    override fun hashCode(): Int = contactKey.hashCode()
+}
+
+/** The user said face [faceId] isn't the contact [contactKey]: never suggested or named for it again. */
+@Entity(tableName = "contact_declines", primaryKeys = ["contactKey", "faceId"])
+data class ContactDeclineEntity(
+    val contactKey: String,
+    val faceId: Long,
 )
 
 /**
@@ -361,6 +387,34 @@ interface FaceDao {
 
     @Query("DELETE FROM people")
     suspend fun clearPeople()
+
+    @Query("UPDATE people SET contactKey = :contactKey WHERE id = :id")
+    suspend fun setContactKey(id: Long, contactKey: String?)
+}
+
+@Dao
+interface ContactFaceDao {
+
+    @Query("SELECT * FROM contact_faces")
+    suspend fun all(): List<ContactFaceEntity>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun put(contact: ContactFaceEntity)
+
+    @Query("DELETE FROM contact_faces WHERE contactKey NOT IN (:keep)")
+    suspend fun keepOnly(keep: List<String>)
+
+    @Query("DELETE FROM contact_faces")
+    suspend fun clear()
+
+    @Insert(onConflict = OnConflictStrategy.IGNORE)
+    suspend fun decline(declines: List<ContactDeclineEntity>)
+
+    @Query("SELECT * FROM contact_declines")
+    suspend fun declines(): List<ContactDeclineEntity>
+
+    @Query("DELETE FROM contact_declines")
+    suspend fun clearDeclines()
 }
 
 /**
@@ -368,12 +422,18 @@ interface FaceDao {
  * database. Version 1 held only what can be rebuilt from the photos; version 2 adds the people
  * the user named, which can't be, so from 2 on every schema change gets a real migration.
  */
-@Database(entities = [PhotoEntity::class, PersonEntity::class, FaceEntity::class, FrameEntity::class], version = 6, exportSchema = true)
+@Database(
+    entities = [PhotoEntity::class, PersonEntity::class, FaceEntity::class, FrameEntity::class, ContactFaceEntity::class, ContactDeclineEntity::class],
+    version = 7,
+    exportSchema = true,
+)
 abstract class GalleryDatabase : RoomDatabase() {
 
     abstract fun photoDao(): PhotoDao
 
     abstract fun faceDao(): FaceDao
+
+    abstract fun contactFaceDao(): ContactFaceDao
 
     companion object {
         const val FILE_NAME = "gallery.db"
@@ -442,12 +502,30 @@ abstract class GalleryDatabase : RoomDatabase() {
             }
         }
 
+        /**
+         * People named from contacts' photos: which contact each came from, each contact's face as
+         * last read, and the faces the user said aren't a contact.
+         */
+        val MIGRATION_6_7 = object : Migration(6, 7) {
+            override fun migrate(connection: SQLiteConnection) {
+                connection.execSQL("ALTER TABLE people ADD COLUMN contactKey TEXT")
+                connection.execSQL(
+                    "CREATE TABLE IF NOT EXISTS `contact_faces` (`contactKey` TEXT NOT NULL, `name` TEXT NOT NULL, `photoId` INTEGER NOT NULL, " +
+                        "`print` BLOB, `readAt` INTEGER NOT NULL, PRIMARY KEY(`contactKey`))",
+                )
+                connection.execSQL(
+                    "CREATE TABLE IF NOT EXISTS `contact_declines` (`contactKey` TEXT NOT NULL, `faceId` INTEGER NOT NULL, " +
+                        "PRIMARY KEY(`contactKey`, `faceId`))",
+                )
+            }
+        }
+
         fun build(context: Context): GalleryDatabase =
             Room.databaseBuilder(context, GalleryDatabase::class.java, FILE_NAME)
                 .setDriver(BundledSQLiteDriver())
                 .setQueryCoroutineContext(Dispatchers.IO)
                 // No destructive fallback any more: from version 2 it holds names the user gave.
-                .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6)
+                .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7)
                 .build()
     }
 }

@@ -9,6 +9,8 @@ import com.local.assistant.AppContainer
 import com.local.assistant.gallery.GalleryIndex
 import com.local.assistant.gallery.PhotoLibrary
 import com.local.assistant.gallery.PhotoThumbnails
+import com.local.assistant.gallery.faces.ContactMatching
+import com.local.assistant.gallery.faces.ContactNames
 import com.local.assistant.gallery.faces.FaceIndex
 import com.local.assistant.data.prefs.SettingsStore
 import com.local.assistant.model.InstalledModel
@@ -57,6 +59,8 @@ class GalleryViewModel(
     private val pauseWhenHidden: Boolean,
     private val faces: FaceIndex,
     private val settings: SettingsStore,
+    /** Names people from contacts' photos; none when not wired in. */
+    private val contactNames: ContactNames? = null,
 ) : ViewModel() {
 
     private val _access = MutableStateFlow(library.access())
@@ -96,6 +100,10 @@ class GalleryViewModel(
     private val _groups = MutableStateFlow<List<FaceIndex.Group>>(emptyList())
     val groups: StateFlow<List<FaceIndex.Group>> = _groups.asStateFlow()
 
+    /** "Is this Rahul?": a contact an unnamed group may be, by group id ([ContactNames]). */
+    private val _suggestions = MutableStateFlow<Map<Long, ContactMatching.Match>>(emptyMap())
+    val suggestions: StateFlow<Map<Long, ContactMatching.Match>> = _suggestions.asStateFlow()
+
     /** Turning it on starts looking; turning it off deletes every face found and every name. */
     fun setFindPeople(on: Boolean) {
         settings.findPeople = on
@@ -114,6 +122,16 @@ class GalleryViewModel(
     private suspend fun loadPeople() {
         _people.value = faces.people()
         _groups.value = faces.groups()
+        _suggestions.value = if (_findPeople.value) runCatching { contactNames?.suggestions() }.getOrNull().orEmpty() else emptyMap()
+    }
+
+    /** Yes, the group is that contact. */
+    fun acceptSuggestion(match: ContactMatching.Match) = viewModelScope.launch { contactNames?.accept(match) }
+
+    /** No, it isn't: not offered again. */
+    fun declineSuggestion(match: ContactMatching.Match) = viewModelScope.launch {
+        contactNames?.decline(match)
+        loadPeople()
     }
 
     suspend fun photosOf(target: PeopleTarget): List<Long> = when (target) {
@@ -141,6 +159,16 @@ class GalleryViewModel(
             faces.status.map { it.version to it.photosDone / PEOPLE_REFRESH_EVERY }.distinctUntilChanged().collectLatest { loadPeople() }
         }
         viewModelScope.launch { faces.refreshStatus() }
+        // Once the faces are all found, contacts' photos name whom they clearly match. In a
+        // coroutine of its own: the reloads above restart with every change, naming included.
+        viewModelScope.launch {
+            faces.status.map { it.photosLeft == 0 }.distinctUntilChanged().collect { done ->
+                if (done && _findPeople.value) {
+                    runCatching { contactNames?.update() }.onFailure { android.util.Log.w("GalleryViewModel", "Naming from contacts failed", it) }
+                    loadPeople()
+                }
+            }
+        }
         observeResults()
         // A model that has just arrived starts indexing at once.
         viewModelScope.launch { installed.collect { if (it != null) startIfReady() } }
@@ -213,6 +241,7 @@ class GalleryViewModel(
                     pauseWhenHidden = container.isSmallDevice,
                     faces = container.faceIndex,
                     settings = container.settings,
+                    contactNames = container.contactNames,
                 )
             }
         }

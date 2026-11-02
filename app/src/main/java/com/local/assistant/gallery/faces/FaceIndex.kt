@@ -3,6 +3,7 @@ package com.local.assistant.gallery.faces
 import android.util.Log
 import androidx.room.immediateTransaction
 import androidx.room.useWriterConnection
+import com.local.assistant.gallery.ContactDeclineEntity
 import com.local.assistant.gallery.FaceEntity
 import com.local.assistant.gallery.GalleryDatabase
 import com.local.assistant.gallery.PersonEntity
@@ -148,14 +149,15 @@ class FaceIndex(
 
     // --- People ---------------------------------------------------------------------------
 
-    class Person(val id: Long, val name: String, val isMe: Boolean, val cover: FaceEntity?, val photos: Int)
+    /** [fromContacts]: named from a contact's photo ([ContactNames]). */
+    class Person(val id: Long, val name: String, val isMe: Boolean, val cover: FaceEntity?, val photos: Int, val fromContacts: Boolean = false)
 
     class Group(val id: Long, val cover: FaceEntity, val faces: Int, val photos: Int)
 
     /** Named people, the user first, with the clearest face of each. */
     suspend fun people(): List<Person> = faces.people().map { person ->
         val theirs = faces.ofPerson(person.id)
-        Person(person.id, person.name, person.isMe, theirs.maxByOrNull { it.score * it.w }, theirs.map { it.mediaId }.toSet().size)
+        Person(person.id, person.name, person.isMe, theirs.maxByOrNull { it.score * it.w }, theirs.map { it.mediaId }.toSet().size, person.contactKey != null)
     }
 
     /** Unnamed groups, biggest first, with at least [minPhotos] photos each. */
@@ -214,10 +216,48 @@ class FaceIndex(
         regroup()
     }
 
-    /** The person's faces become nobody's again; their photos stay. */
+    /**
+     * The person's faces become nobody's again; their photos stay. Named from a contact, those
+     * faces are marked as not that contact, so the name isn't put back.
+     */
     suspend fun forget(personId: Long) {
+        faces.person(personId)?.contactKey?.let { key ->
+            database.contactFaceDao().decline(faces.ofPerson(personId).map { ContactDeclineEntity(key, it.id) })
+        }
         faces.deletePerson(personId)
         regroup()
+    }
+
+    // --- Names from contacts ([ContactNames]) ------------------------------------------------
+
+    /** The print of the one face in [photo] (a contact's), or null when it has none or several. */
+    suspend fun printOfOnlyFace(photo: android.graphics.Bitmap): FloatArray? =
+        finderLock.withLock { withContext(Dispatchers.Default) { finder().find(photo) } }.singleOrNull()?.print
+
+    /** The named people and the unnamed groups (as [groups] lists them), with their faces' prints. */
+    suspend fun forContactMatching(): Pair<List<ContactMatching.Person>, List<ContactMatching.Group>> {
+        val all = faces.all()
+        val people = faces.people().map { person ->
+            ContactMatching.Person(person.name, person.contactKey, all.filter { it.personId == person.id }.map { FacePrints.unit(it.print) })
+        }
+        val shown = groups().map { it.id }.toSet()
+        val groups = all.filter { it.groupId in shown && it.personId == null }.groupBy { it.groupId!! }
+            .map { (id, members) -> ContactMatching.Group(id, members.map { it.id }.toSet(), members.map { FacePrints.unit(it.print) }) }
+        return people to groups
+    }
+
+    suspend fun facesOfGroup(groupId: Long): List<Long> = faces.inGroup(groupId)
+
+    /**
+     * Names the group after the contact [contactKey], as if the user had typed [name]; the person
+     * and where the name came from are written together.
+     */
+    suspend fun nameFromContact(groupId: Long, name: String, contactKey: String): Long {
+        val personId = faces.insertPerson(PersonEntity(name = name.trim(), isMe = false, createdAt = clock(), contactKey = contactKey))
+        faces.confirm(faces.inGroup(groupId), personId)
+        if (name.trim().equals(userName()?.trim(), ignoreCase = true)) faces.setMe(personId)
+        regroup()
+        return personId
     }
 
     /**
@@ -251,6 +291,8 @@ class FaceIndex(
                 faces.clear()
                 faces.clearPeople()
                 photos.forgetFacesModel()
+                database.contactFaceDao().clear()
+                database.contactFaceDao().clearDeclines()
             }
         }
         close()

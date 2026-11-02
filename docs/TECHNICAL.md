@@ -818,6 +818,21 @@ it. The WAV is still what the chat plays back.
   sends loosely, as seen in real chats: filler queries ("all", "photos") are dropped, and a query
   that names someone already named counts as another person ("me" plus query "shiyas", or
   "shiyas" plus query "me"); "me" alone in the query is "show me", nobody.
+  Groups are also named from contact photos (`ContactNames`, `ContactMatching`), since most had
+  to be named by hand. Only with "Find people" on and contacts already allowed (asked for calls
+  and messages, never for this): each contact photo's one face is printed once, again only when
+  the photo changes, and kept in `contact_faces` (`gallery.db` version 7). Once indexing is done,
+  each contact is compared with the unnamed groups as `FaceGrouping` compares: 0.62 or more and
+  0.15 clear of the next group names the group ("From contacts" under it); 0.50 and 0.07 clear
+  asks "Is this Rahul?" on it (Yes, No, Another name). A contact already linked, named like
+  someone the user named, or within 0.55 of a named person's face is left alone; a No, or
+  removing a name that came from a contact, keeps that contact off those faces for good
+  (`contact_declines`). Set on the test phone (`ContactFacesCalibrationTest`, scores only): its
+  107 contact photos are all 96 px thumbnails, a face in about 70. Against the 110 unnamed
+  groups three contacts stood out at 0.65 to 0.67 (0.22 to 0.31 clear of the next group), three
+  more at 0.51 to 0.54 (0.08 to 0.15 clear), the rest 0.46 at most. The one contact named like a
+  named person matched them at 0.61, but a differently named contact matched the user at 0.59,
+  hence the bar against named people.
   `PhotoChatEvalTest` asks photo questions one after another through the real `ChatSender`: after
   two "I found N photos" turns the model answered the third ("photos of taslim") with a made-up
   count and no call, 3 times in 3. The rule now says to call find_photos for every such request,

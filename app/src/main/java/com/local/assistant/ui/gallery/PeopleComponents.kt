@@ -84,6 +84,7 @@ fun PeopleSection(viewModel: GalleryViewModel, onOpen: (PeopleTarget) -> Unit) {
     val status by viewModel.faceStatus.collectAsStateWithLifecycle()
     val people by viewModel.people.collectAsStateWithLifecycle()
     val groups by viewModel.groups.collectAsStateWithLifecycle()
+    val suggestions by viewModel.suggestions.collectAsStateWithLifecycle()
     var confirmingOff by remember { mutableStateOf(false) }
     val numbers = NumberFormat.getIntegerInstance()
 
@@ -139,10 +140,23 @@ fun PeopleSection(viewModel: GalleryViewModel, onOpen: (PeopleTarget) -> Unit) {
                 contentPadding = PaddingValues(vertical = 8.dp),
             ) {
                 items(people, key = { "p${it.id}" }) { person ->
-                    Avatar(person.cover, label = person.name, sub = if (person.isMe) "You" else null, onClick = { onOpen(PeopleTarget.Named(person)) })
+                    val sub = when {
+                        person.isMe -> "You"
+                        person.fromContacts -> "From contacts"
+                        else -> null
+                    }
+                    Avatar(person.cover, label = person.name, sub = sub, onClick = { onOpen(PeopleTarget.Named(person)) })
                 }
                 items(groups, key = { "g${it.id}" }) { group ->
-                    Avatar(group.cover, label = "Add a name", sub = "${numbers.format(group.photos)} photos", faint = true, onClick = { onOpen(PeopleTarget.Unnamed(group)) })
+                    // A contact this may be: asked, for a yes or a no in the sheet.
+                    val maybe = suggestions[group.id]
+                    Avatar(
+                        group.cover,
+                        label = maybe?.let { "${it.name.substringBefore(' ')}?" } ?: "Add a name",
+                        sub = "${numbers.format(group.photos)} photos",
+                        faint = true,
+                        onClick = { onOpen(PeopleTarget.Unnamed(group)) },
+                    )
                 }
             }
         }
@@ -205,6 +219,9 @@ fun PersonSheet(target: PeopleTarget, viewModel: GalleryViewModel, onDismiss: ()
     val thumbnails = viewModel.thumbnails
     val people by viewModel.people.collectAsStateWithLifecycle()
     val status by viewModel.faceStatus.collectAsStateWithLifecycle()
+    val suggestions by viewModel.suggestions.collectAsStateWithLifecycle()
+    // A contact this unnamed group may be ("Is this Rahul?").
+    val maybe = (target as? PeopleTarget.Unnamed)?.let { suggestions[it.group.id] }
     val state = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val height = with(LocalDensity.current) { (LocalWindowInfo.current.containerSize.height * 0.88f).toInt().toDp() }
     val numbers = NumberFormat.getIntegerInstance()
@@ -235,9 +252,14 @@ fun PersonSheet(target: PeopleTarget, viewModel: GalleryViewModel, onDismiss: ()
             Row(Modifier.fillMaxWidth().padding(start = 20.dp, end = 8.dp), verticalAlignment = Alignment.CenterVertically) {
                 FaceCircle(person?.cover ?: (target as? PeopleTarget.Unnamed)?.group?.cover, 48.dp)
                 Column(Modifier.weight(1f).padding(start = 12.dp)) {
-                    Text(person?.name ?: "Who is this?", style = MaterialTheme.typography.titleMedium, color = AppColors.TextPrimary)
+                    Text(person?.name ?: maybe?.let { "Is this ${it.name}?" } ?: "Who is this?", style = MaterialTheme.typography.titleMedium, color = AppColors.TextPrimary)
                     Text(
-                        listOfNotNull(photos?.let { "${numbers.format(it.size)} photos" }, "You".takeIf { person?.isMe == true }).joinToString(" · "),
+                        listOfNotNull(
+                            photos?.let { "${numbers.format(it.size)} photos" },
+                            "You".takeIf { person?.isMe == true },
+                            "Named from contacts".takeIf { person?.fromContacts == true && !person.isMe },
+                            "Suggested from contacts".takeIf { maybe != null },
+                        ).joinToString(" · "),
                         style = MaterialTheme.typography.bodySmall,
                         color = AppColors.TextSecondary,
                     )
@@ -249,7 +271,14 @@ fun PersonSheet(target: PeopleTarget, viewModel: GalleryViewModel, onDismiss: ()
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                 verticalArrangement = Arrangement.spacedBy(4.dp),
             ) {
-                if (person == null) {
+                if (person == null && maybe != null) {
+                    PrimaryAction("Yes, ${maybe.name}") {
+                        viewModel.acceptSuggestion(maybe)
+                        onDismiss()
+                    }
+                    SecondaryAction("No") { viewModel.declineSuggestion(maybe) }
+                    SecondaryAction("Another name") { naming = true }
+                } else if (person == null) {
                     PrimaryAction("Add a name") { naming = true }
                 } else {
                     SecondaryAction("Rename") { renaming = true }

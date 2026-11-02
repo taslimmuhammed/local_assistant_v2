@@ -124,6 +124,21 @@ class GalleryMigrationTest {
         }
     }
 
+    @Test
+    fun peopleKeepTheirNamesWhenContactsCanNameThem() {
+        helper.createDatabase(6).use { db ->
+            db.execSQL("INSERT INTO people (id, name, isMe, createdAt) VALUES (3, 'Shiyas', 0, 100)")
+        }
+
+        helper.runMigrationsAndValidate(7, listOf(GalleryDatabase.MIGRATION_6_7)).use { db ->
+            assertEquals("Shiyas", db.string("SELECT name FROM people WHERE id = 3"))
+            // Named by the user, not from a contact.
+            assertEquals(1L, db.long("SELECT COUNT(*) FROM people WHERE contactKey IS NULL"))
+            assertEquals(0L, db.long("SELECT COUNT(*) FROM contact_faces"))
+            assertEquals(0L, db.long("SELECT COUNT(*) FROM contact_declines"))
+        }
+    }
+
     private fun SQLiteConnection.long(sql: String): Long = prepare(sql).use { it.step(); it.getLong(0) }
 
     private fun SQLiteConnection.string(sql: String): String = prepare(sql).use { it.step(); it.getText(0) }
