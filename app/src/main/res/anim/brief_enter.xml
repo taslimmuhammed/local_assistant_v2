@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The brief rises into place and settles, a little past and back. -->
+<set xmlns:android="http://schemas.android.com/apk/res/android"
+    android:shareInterpolator="false">
+    <translate
+        android:duration="420"
+        android:fromYDelta="45%"
+        android:interpolator="@android:interpolator/overshoot"
+        android:toYDelta="0%" />
+    <scale
+        android:duration="420"
+        android:fromXScale="0.94"
+        android:fromYScale="0.94"
+        android:interpolator="@android:interpolator/decelerate_cubic"
+        android:pivotX="50%"
+        android:pivotY="100%"
+        android:toXScale="1"
+        android:toYScale="1" />
+    <alpha
+        android:duration="200"
+        android:fromAlpha="0"
+        android:interpolator="@android:interpolator/decelerate_quad"
+        android:toAlpha="1" />
+</set>

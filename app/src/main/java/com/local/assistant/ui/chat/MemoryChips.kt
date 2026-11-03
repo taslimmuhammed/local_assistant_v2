@@ -32,6 +32,8 @@ import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.unit.dp
 import com.local.assistant.memory.tools.MemoryChip
 import com.local.assistant.ui.theme.AppColors
+import com.local.assistant.ui.theme.Glass
+import com.local.assistant.ui.theme.glass
 import java.time.Instant
 import java.time.LocalDate
 import java.time.LocalTime
@@ -99,8 +101,7 @@ private fun MemoryChipRow(
         .joinToString(" · ")
     Row(
         modifier = Modifier
-            .clip(RoundedCornerShape(12.dp))
-            .background(AppColors.SurfaceMuted)
+            .glass(RoundedCornerShape(14.dp), Glass.Raised)
             .padding(horizontal = 12.dp, vertical = 6.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(10.dp),

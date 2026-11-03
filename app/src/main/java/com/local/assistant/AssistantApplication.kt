@@ -552,6 +552,19 @@ class AppContainer(context: Context) {
     /** The chat screen's own hold on other audio, so it and the overlay never release each other's. */
     val chatAudioFocus = AudioFocus(context)
 
+    /** "While you were away": notifications kept for the brief, sorted by the chat model. */
+    val awayBrief = com.local.assistant.away.AwayBrief(
+        context = context,
+        settings = settings,
+        dao = com.local.assistant.away.AwayDatabase.build(context).dao(),
+        replies = com.local.assistant.away.ReplyActions(),
+        scheduler = modelScheduler,
+        model = conversations,
+        backend = llmBackend,
+        modelLoaded = { llmService.state.value is LlmService.State.Ready },
+        scope = appScope,
+    )
+
     /**
      * Memory search comes with the first chat model: once one is installed (downloaded or
      * imported) where there was none, EmbeddingGemma downloads right after it, from this app's

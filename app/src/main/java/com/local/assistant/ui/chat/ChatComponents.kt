@@ -33,11 +33,14 @@ import com.local.assistant.data.db.MessageEntity
 import com.local.assistant.data.db.Role
 import com.local.assistant.ui.privacy.HiddenDetails
 import com.local.assistant.ui.privacy.rememberShown
+import androidx.compose.ui.graphics.Color
 import com.local.assistant.ui.theme.AppColors
+import com.local.assistant.ui.theme.Glass
+import com.local.assistant.ui.theme.GlassShapes
 
 /**
- * User turns sit in a grey bubble on the right; model turns run full width with no bubble,
- * which is what makes long answers readable on a phone.
+ * User turns sit in a dark bubble on the right; model turns run full width with no bubble, on
+ * the glass, which is what makes long answers readable on a phone.
  */
 @Composable
 fun MessageRow(message: MessageEntity, modifier: Modifier = Modifier) {
@@ -69,8 +72,9 @@ fun UserMessage(message: MessageEntity, modifier: Modifier = Modifier) {
                 AudioAttachment(
                     it,
                     message.attachmentDurationMs,
+                    mine = true,
                     below = if (transcribed) {
-                        { TranscribedWords(message.text) }
+                        { TranscribedWords(message.text, color = Color.White) }
                     } else {
                         null
                     },
@@ -86,11 +90,11 @@ fun UserMessage(message: MessageEntity, modifier: Modifier = Modifier) {
                 Text(
                     text = shown.text,
                     style = MaterialTheme.typography.bodyLarge,
-                    color = AppColors.TextPrimary,
+                    color = Color.White,
                     modifier = Modifier
                         .widthIn(max = 300.dp)
-                        .clip(RoundedCornerShape(20.dp))
-                        .background(AppColors.SurfaceMuted)
+                        .clip(GlassShapes.Mine)
+                        .background(Glass.Mine)
                         .padding(horizontal = 16.dp, vertical = 10.dp),
                 )
             }
@@ -101,11 +105,11 @@ fun UserMessage(message: MessageEntity, modifier: Modifier = Modifier) {
 
 /** What was said in a voice message, with its sensitive details hidden as typed ones are. */
 @Composable
-fun TranscribedWords(text: String) {
+fun TranscribedWords(text: String, color: Color = AppColors.TextPrimary) {
     val shown = rememberShown(text)
     Column {
         SelectionContainer {
-            Text(text = shown.text, style = MaterialTheme.typography.bodyLarge, color = AppColors.TextPrimary)
+            Text(text = shown.text, style = MaterialTheme.typography.bodyLarge, color = color)
         }
         if (shown.hidden) HiddenDetails(Modifier.padding(top = 2.dp))
     }

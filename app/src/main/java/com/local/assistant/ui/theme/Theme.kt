@@ -15,14 +15,17 @@ import androidx.compose.ui.unit.sp
 import androidx.core.view.WindowCompat
 
 /**
- * A deliberately plain light palette: near-white surfaces, near-black text, one subtle grey for
- * user bubbles and dividers.
+ * A light palette on glass ([Glass]): screens are see-through to the frosted backdrop, text is
+ * near-black, and fills and lines are tints of that black, so they read on glass over any wallpaper.
  */
 object AppColors {
-    val Background = Color(0xFFFFFFFF)
+    /** A screen's own background: none, the window's frosted glass shows through. */
+    val Background = Color.Transparent
     val Surface = Color(0xFFFFFFFF)
-    val SurfaceMuted = Color(0xFFF4F4F5)
-    val Border = Color(0xFFE4E4E7)
+
+    /** A quiet fill on the glass: code, progress tracks, a photo still loading. */
+    val SurfaceMuted = Color(0x1418181B)
+    val Border = Color(0x1F18181B)
 
     /**
      * The edge of something to press: outlined buttons, text fields. [Border] is for dividers; on
@@ -30,7 +33,9 @@ object AppColors {
      */
     val Outline = Color(0xFFA1A1AA)
     val TextPrimary = Color(0xFF18181B)
-    val TextSecondary = Color(0xFF71717A)
+
+    /** Darker than a plain white screen would need: it sits on glass, over whatever the wallpaper is. */
+    val TextSecondary = Color(0xFF52525B)
     val Accent = Color(0xFF18181B)
     val OnAccent = Color(0xFFFFFFFF)
     val Danger = Color(0xFFDC2626)
@@ -48,6 +53,13 @@ private val LightColors = lightColorScheme(
     outline = AppColors.Outline,
     outlineVariant = AppColors.Border,
     error = AppColors.Danger,
+    // Dialogs, menus and sheets: near-white, not Material's default lavender greys.
+    surfaceContainerLowest = Color.White,
+    surfaceContainerLow = Color(0xFFFAFAFB),
+    surfaceContainer = Color(0xFFFAFAFB),
+    surfaceContainerHigh = Color(0xFFF7F7F9),
+    surfaceContainerHighest = Color(0xFFF1F1F4),
+    scrim = Color(0xFF18181B),
 )
 
 private val AppTypography = Typography(

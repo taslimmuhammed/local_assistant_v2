@@ -207,6 +207,33 @@ class SettingsStore(context: Context) {
         get() = prefs.getFloat(KEY_SPEECH_RATE, DEFAULT_SPEECH_RATE)
         set(value) = prefs.edit { putFloat(KEY_SPEECH_RATE, value) }
 
+    /**
+     * "While you were away": notifications are read and kept for the brief. Off until the user
+     * turns it on and allows notification access; other people's messages aren't read before that.
+     */
+    var awayBrief: Boolean
+        get() = prefs.getBoolean(KEY_AWAY_BRIEF, false)
+        set(value) = prefs.edit { putBoolean(KEY_AWAY_BRIEF, value) }
+
+    /** The brief opens by itself at the unlock; off, it waits as a quiet notification. */
+    var awayPopUp: Boolean
+        get() = prefs.getBoolean(KEY_AWAY_POP_UP, true)
+        set(value) = prefs.edit { putBoolean(KEY_AWAY_POP_UP, value) }
+
+    /** Locked at least this long counts as away. */
+    var awayMinutes: Int
+        get() = prefs.getInt(KEY_AWAY_MINUTES, com.local.assistant.away.AwayBrief.DEFAULT_AWAY_MINUTES)
+        set(value) = prefs.edit { putInt(KEY_AWAY_MINUTES, value) }
+
+    /** Apps the user left out of the brief, by package name. */
+    var awayIgnoredApps: Set<String>
+        get() = prefs.getStringSet(KEY_AWAY_IGNORED, emptySet()).orEmpty().toSet()
+        set(value) = prefs.edit { putStringSet(KEY_AWAY_IGNORED, value) }
+
+    fun observeAwayBrief(): Flow<Boolean> = observeKey(KEY_AWAY_BRIEF) { awayBrief }
+
+    fun observeAwayIgnoredApps(): Flow<Set<String>> = observeKey(KEY_AWAY_IGNORED) { awayIgnoredApps }
+
     fun observeModelPath(): Flow<String?> = observeKey(KEY_MODEL_PATH) { modelPath }
 
     fun observeMemoryPaused(): Flow<Boolean> = observeKey(KEY_MEMORY_PAUSED) { memoryPaused }
@@ -224,6 +251,10 @@ class SettingsStore(context: Context) {
 
     companion object {
         private const val KEY_MODEL_PATH = "model_path"
+        private const val KEY_AWAY_BRIEF = "away_brief"
+        private const val KEY_AWAY_POP_UP = "away_pop_up"
+        private const val KEY_AWAY_MINUTES = "away_minutes"
+        private const val KEY_AWAY_IGNORED = "away_ignored_apps"
         private const val KEY_EMBEDDER_PATH = "embedder_path"
         private const val KEY_EMBEDDER_KEY = "embedder_key"
         private const val KEY_GALLERY_MODEL_PATH = "gallery_model_path"

@@ -36,6 +36,7 @@ import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ArrowForward
@@ -72,6 +73,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.BlurredEdgeTreatment
+import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.draw.shadow
@@ -95,6 +98,10 @@ import com.local.assistant.ui.privacy.unreadable
 import com.local.assistant.gallery.PhotoThumbnails
 import com.local.assistant.memory.tools.PhotoSet
 import com.local.assistant.ui.theme.AppColors
+import com.local.assistant.ui.theme.glass
+import com.local.assistant.ui.theme.Glass
+import com.local.assistant.ui.theme.GlassRoundButton
+import com.local.assistant.ui.theme.liquidGlass
 import kotlinx.coroutines.delay
 import java.text.NumberFormat
 import java.time.Instant
@@ -410,7 +417,11 @@ fun PhotoResults(set: PhotoSet, modifier: Modifier = Modifier) {
                 PhotoThumb(
                     id,
                     access.thumbnails,
-                    Modifier.size(INLINE_SIZE).clip(RoundedCornerShape(14.dp)),
+                    Modifier
+                        .size(INLINE_SIZE)
+                        .shadow(6.dp, InlineShape, ambientColor = PrintShadow, spotColor = PrintShadow)
+                        .clip(InlineShape)
+                        .border(BorderStroke(2.dp, Glass.Rim), InlineShape),
                     onClick = { viewing = set.ids to index },
                 )
             }
@@ -425,38 +436,54 @@ fun PhotoResults(set: PhotoSet, modifier: Modifier = Modifier) {
     viewing?.let { (ids, start) -> PhotoViewer(ids, start, access.thumbnails, onClose = { viewing = null }, moments = set.moments.orEmpty()) }
 }
 
-/** "30 photos · Sunset · View all", beside three photos fanned like prints on a table. */
+/**
+ * "30 photos · Sunset · View all", beside three photos fanned like prints on a table. The card is
+ * glass over the photos themselves: the best match, blurred out of focus, tints it from behind.
+ */
 @Composable
 private fun StackCard(set: PhotoSet, thumbnails: PhotoThumbnails, onOpen: () -> Unit, modifier: Modifier) {
     val videos by produceState(0, set) { value = thumbnails.videoCount(set.ids) }
-    Row(
+    Box(
         modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(18.dp))
-            .background(AppColors.SurfaceMuted)
-            .clickable(onClick = onOpen)
-            .padding(start = 12.dp, end = 16.dp, top = 12.dp, bottom = 12.dp),
-        verticalAlignment = Alignment.CenterVertically,
+            .shadow(10.dp, StackShape, ambientColor = PrintShadow, spotColor = PrintShadow)
+            .clip(StackShape)
+            .clickable(onClick = onOpen),
     ) {
-        FannedStack(set.ids.take(3), thumbnails)
-        Spacer(Modifier.width(18.dp))
-        Column(Modifier.weight(1f)) {
-            Text(
-                itemCount(set.ids.size, videos),
-                style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.SemiBold,
-                color = AppColors.TextPrimary,
-            )
-            Text(
-                set.query.replaceFirstChar { it.titlecase(Locale.getDefault()) },
-                style = MaterialTheme.typography.bodyMedium,
-                color = AppColors.TextSecondary,
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis,
-            )
-            Row(Modifier.padding(top = 10.dp), verticalAlignment = Alignment.CenterVertically) {
-                Text("View all", style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.SemiBold, color = AppColors.TextPrimary)
-                Icon(Icons.AutoMirrored.Outlined.ArrowForward, contentDescription = null, tint = AppColors.TextPrimary, modifier = Modifier.padding(start = 4.dp).size(16.dp))
+        PhotoThumb(set.ids.first(), thumbnails, Modifier.matchParentSize().blur(36.dp, BlurredEdgeTreatment.Rectangle))
+        Box(Modifier.matchParentSize().background(Frost).liquidGlass(StackShape, Color.Transparent, sheen = 0.5f))
+        Row(
+            Modifier.fillMaxWidth().padding(start = 12.dp, end = 16.dp, top = 14.dp, bottom = 14.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            FannedStack(set.ids.take(3), thumbnails)
+            Spacer(Modifier.width(16.dp))
+            Column(Modifier.weight(1f)) {
+                Text(
+                    itemCount(set.ids.size, videos),
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.SemiBold,
+                    color = AppColors.TextPrimary,
+                )
+                Text(
+                    set.query.replaceFirstChar { it.titlecase(Locale.getDefault()) },
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = AppColors.TextSecondary,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Row(
+                    Modifier
+                        .padding(top = 12.dp)
+                        .clip(PillShape)
+                        .background(Glass.Mine)
+                        .liquidGlass(PillShape, Color.Transparent, sheen = 0.22f)
+                        .padding(start = 14.dp, end = 10.dp, top = 7.dp, bottom = 7.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text("View all", style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.SemiBold, color = AppColors.OnAccent)
+                    Icon(Icons.AutoMirrored.Outlined.ArrowForward, contentDescription = null, tint = AppColors.OnAccent, modifier = Modifier.padding(start = 4.dp).size(16.dp))
+                }
             }
         }
     }
@@ -467,7 +494,7 @@ private fun StackCard(set: PhotoSet, thumbnails: PhotoThumbnails, onOpen: () -> 
 private fun FannedStack(ids: List<Long>, thumbnails: PhotoThumbnails) {
     val tilts = listOf(0f, -12f, 11f)
     val shifts = listOf(0.dp to 4.dp, (-18).dp to (-2).dp, 18.dp to 0.dp)
-    Box(Modifier.size(width = 112.dp, height = 100.dp), contentAlignment = Alignment.Center) {
+    Box(Modifier.size(width = 126.dp, height = 104.dp), contentAlignment = Alignment.Center) {
         // Drawn back to front, so the best match lies on top.
         ids.indices.reversed().forEach { i ->
             PhotoThumb(
@@ -476,10 +503,10 @@ private fun FannedStack(ids: List<Long>, thumbnails: PhotoThumbnails) {
                 Modifier
                     .offset(shifts[i].first, shifts[i].second)
                     .rotate(tilts[i])
-                    .shadow(4.dp, RoundedCornerShape(10.dp))
-                    .size(72.dp)
-                    .clip(RoundedCornerShape(10.dp))
-                    .border(BorderStroke(2.dp, Color.White), RoundedCornerShape(10.dp)),
+                    .shadow(8.dp, PrintShape, ambientColor = PrintShadow, spotColor = PrintShadow)
+                    .size(76.dp)
+                    .clip(PrintShape)
+                    .border(BorderStroke(2.5.dp, Color.White), PrintShape),
             )
         }
     }
@@ -524,7 +551,7 @@ private fun PhotoSheet(set: PhotoSet, thumbnails: PhotoThumbnails, onDismiss: ()
     ModalBottomSheet(
         onDismissRequest = onDismiss,
         sheetState = state,
-        containerColor = AppColors.Background,
+        containerColor = Glass.Sheet,
         // Closed with ✕, back or a tap outside, never by a drag. A drag the grid didn't use went
         // to the sheet: past the last row it chased its own height and bobbed, and at the top
         // every pull or fling down moved it a little and it sprang back, over and over.
@@ -532,13 +559,15 @@ private fun PhotoSheet(set: PhotoSet, thumbnails: PhotoThumbnails, onDismiss: ()
         dragHandle = null,
     ) {
         Column(Modifier.height(height)) {
-            Row(Modifier.fillMaxWidth().padding(start = 20.dp, end = 8.dp, bottom = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-                Icon(Icons.Outlined.PhotoLibrary, contentDescription = null, tint = AppColors.TextPrimary)
+            Row(Modifier.fillMaxWidth().padding(start = 16.dp, end = 8.dp, top = 16.dp, bottom = 10.dp), verticalAlignment = Alignment.CenterVertically) {
+                Box(Modifier.size(40.dp).liquidGlass(CircleShape), contentAlignment = Alignment.Center) {
+                    Icon(Icons.Outlined.PhotoLibrary, contentDescription = null, tint = AppColors.TextPrimary, modifier = Modifier.size(20.dp))
+                }
                 Column(Modifier.weight(1f).padding(start = 12.dp)) {
                     Text(set.query.replaceFirstChar { it.titlecase(Locale.getDefault()) }, style = MaterialTheme.typography.titleMedium, color = AppColors.TextPrimary)
                     Text("${itemCount(set.ids.size, videos)}, ${sort.subtitle}", style = MaterialTheme.typography.bodySmall, color = AppColors.TextSecondary)
                 }
-                IconButton(onClick = onDismiss) { Icon(Icons.Outlined.Close, contentDescription = "Close") }
+                GlassRoundButton(Icons.Outlined.Close, "Close", onDismiss, Modifier.padding(end = 8.dp), size = 40.dp, iconSize = 18.dp)
             }
             Row(Modifier.padding(start = 16.dp, end = 16.dp, bottom = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 for (option in PhotoSort.entries) {
@@ -547,8 +576,9 @@ private fun PhotoSheet(set: PhotoSet, thumbnails: PhotoThumbnails, onDismiss: ()
                         selected = option == sort,
                         onClick = { sort = option },
                         label = { Text(option.label) },
+                        shape = PillShape,
                         colors = FilterChipDefaults.filterChipColors(
-                            containerColor = AppColors.Background,
+                            containerColor = Glass.Raised,
                             labelColor = AppColors.TextPrimary,
                             selectedContainerColor = AppColors.Accent,
                             selectedLabelColor = AppColors.OnAccent,
@@ -556,7 +586,7 @@ private fun PhotoSheet(set: PhotoSet, thumbnails: PhotoThumbnails, onDismiss: ()
                         border = FilterChipDefaults.filterChipBorder(
                             enabled = true,
                             selected = option == sort,
-                            borderColor = AppColors.TextSecondary,
+                            borderColor = AppColors.Border,
                             selectedBorderColor = AppColors.Accent,
                         ),
                     )
@@ -565,9 +595,9 @@ private fun PhotoSheet(set: PhotoSet, thumbnails: PhotoThumbnails, onDismiss: ()
             LazyVerticalGrid(
                 state = grid,
                 columns = GridCells.Adaptive(minSize = 104.dp),
-                horizontalArrangement = Arrangement.spacedBy(2.dp),
-                verticalArrangement = Arrangement.spacedBy(2.dp),
-                contentPadding = PaddingValues(bottom = 24.dp),
+                horizontalArrangement = Arrangement.spacedBy(4.dp),
+                verticalArrangement = Arrangement.spacedBy(4.dp),
+                contentPadding = PaddingValues(start = 8.dp, end = 8.dp, bottom = 24.dp),
                 modifier = Modifier.fillMaxSize(),
             ) {
                 items(
@@ -577,13 +607,13 @@ private fun PhotoSheet(set: PhotoSet, thumbnails: PhotoThumbnails, onDismiss: ()
                 ) { cell ->
                     when (cell) {
                         is SheetCell.Month -> Row(
-                            Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, top = 14.dp, bottom = 8.dp),
+                            Modifier.fillMaxWidth().padding(start = 8.dp, end = 8.dp, top = 14.dp, bottom = 8.dp),
                             verticalAlignment = Alignment.Bottom,
                         ) {
                             Text(cell.label, style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.SemiBold, color = AppColors.TextPrimary)
                             Text("  ${numbers.format(cell.count)}", style = MaterialTheme.typography.labelMedium, color = AppColors.TextSecondary)
                         }
-                        is SheetCell.Photo -> PhotoThumb(cell.id, thumbnails, Modifier.aspectRatio(1f), onClick = { onOpenPhoto(ordered, cell.index) })
+                        is SheetCell.Photo -> PhotoThumb(cell.id, thumbnails, Modifier.aspectRatio(1f).clip(GridShape), onClick = { onOpenPhoto(ordered, cell.index) })
                     }
                 }
             }
@@ -628,13 +658,14 @@ private fun LockedPhotos(set: PhotoSet, onUnlock: () -> Unit, modifier: Modifier
     Row(
         modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(18.dp))
-            .background(AppColors.SurfaceMuted)
+            .liquidGlass(StackShape, Glass.Raised, sheen = 0.5f)
             .clickable(onClick = onUnlock)
             .padding(16.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Icon(Icons.Outlined.Lock, contentDescription = null, tint = AppColors.TextPrimary)
+        Box(Modifier.size(40.dp).liquidGlass(CircleShape), contentAlignment = Alignment.Center) {
+            Icon(Icons.Outlined.Lock, contentDescription = null, tint = AppColors.TextPrimary, modifier = Modifier.size(20.dp))
+        }
         Column(Modifier.weight(1f).padding(start = 12.dp)) {
             Text("${NumberFormat.getIntegerInstance().format(count)} found", style = MaterialTheme.typography.titleSmall, color = AppColors.TextPrimary)
             Text("Unlock your phone to see them.", style = MaterialTheme.typography.bodySmall, color = AppColors.TextSecondary)
@@ -649,3 +680,12 @@ private const val LOADING = -1L
 
 private const val INLINE_MAX = 2
 private val INLINE_SIZE: Dp = 132.dp
+private val InlineShape = RoundedCornerShape(18.dp)
+private val StackShape = RoundedCornerShape(24.dp)
+private val PrintShape = RoundedCornerShape(12.dp)
+private val GridShape = RoundedCornerShape(8.dp)
+private val PillShape = RoundedCornerShape(50)
+private val PrintShadow = Color(0xFF18181B).copy(alpha = 0.3f)
+
+/** The frost over the blurred photo: dark text stays readable over any picture. */
+private val Frost = Brush.verticalGradient(listOf(Color.White.copy(alpha = 0.62f), Color.White.copy(alpha = 0.78f)))

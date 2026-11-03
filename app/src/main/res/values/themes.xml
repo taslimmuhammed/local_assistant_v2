@@ -3,7 +3,7 @@
     <style name="Theme.LocalAssistant" parent="android:Theme.Material.Light.NoActionBar">
         <item name="android:statusBarColor">@android:color/white</item>
         <item name="android:navigationBarColor">@android:color/white</item>
-        <item name="android:windowBackground">@android:color/white</item>
+        <item name="android:windowBackground">@drawable/window_glass</item>
     </style>
 
     <!-- The assistant overlay: see-through, so the app underneath stays in view behind its own
@@ -16,5 +16,14 @@
         <item name="android:navigationBarColor">@android:color/transparent</item>
         <item name="android:windowAnimationStyle">@null</item>
         <item name="android:windowContentOverlay">@null</item>
+    </style>
+
+    <!-- "While you were away": a floating window the size of its card, which is the glass (the
+         activity sets the blur and the rounded background), with the app behind lightly dimmed. -->
+    <style name="Theme.LocalAssistant.Brief" parent="Theme.LocalAssistant.Assist">
+        <item name="android:windowIsFloating">true</item>
+        <item name="android:backgroundDimEnabled">true</item>
+        <item name="android:backgroundDimAmount">0.16</item>
+        <item name="android:windowCloseOnTouchOutside">false</item>
     </style>
 </resources>

@@ -168,6 +168,8 @@ dependencies {
     implementation(libs.androidx.lifecycle.process)
     // Fingerprint, face or the phone's PIN before sensitive details are shown.
     implementation(libs.androidx.biometric)
+    // MainActivity is a FragmentActivity (for the prompt): see the catalog's note on the version.
+    implementation(libs.androidx.fragment)
     implementation(libs.androidx.activity.compose)
     implementation(libs.kotlinx.coroutines.android)
 

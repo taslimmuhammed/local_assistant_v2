@@ -123,6 +123,36 @@
             </intent-filter>
         </activity>
 
+        <!-- "While you were away": a pane of glass at the bottom of the screen, opened after an
+             unlock (through the assistant session, as a background app can't open a screen) or
+             from its notification. Its own task, out of Recents, like the overlay. -->
+        <activity
+            android:name=".away.BriefActivity"
+            android:exported="false"
+            android:excludeFromRecents="true"
+            android:launchMode="singleTask"
+            android:taskAffinity="com.local.assistant.away"
+            android:theme="@style/Theme.LocalAssistant.Brief"
+            android:windowSoftInputMode="adjustResize|stateHidden"
+            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboard|keyboardHidden|navigation|uiMode|density" />
+
+        <!-- Reads incoming notifications for "While you were away", once the user has turned it on
+             and given the app notification access in Android's settings. What it keeps stays on
+             the phone, in its own database, for two days. Only the system can bind it. -->
+        <service
+            android:name=".away.MessageListener"
+            android:exported="false"
+            android:label="@string/away_listener_label"
+            android:permission="android.permission.BIND_NOTIFICATION_LISTENER_SERVICE">
+            <intent-filter>
+                <action android:name="android.service.notification.NotificationListenerService" />
+            </intent-filter>
+            <!-- Music, navigation, downloads in progress: never wanted, so never sent. -->
+            <meta-data
+                android:name="android.service.notification.disabled_filter_types"
+                android:value="ongoing" />
+        </service>
+
         <!-- The digital assistant as Android runs one: holding the power button asks it for a
              session, which opens the overlay above, and the wake word asks for one too, which a
              background app couldn't otherwise do. Only the system can bind these. -->

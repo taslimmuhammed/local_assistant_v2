@@ -48,6 +48,8 @@ import com.local.assistant.model.Transfer
 import com.local.assistant.model.TransferKind
 import com.local.assistant.model.formatBytes
 import com.local.assistant.ui.theme.AppColors
+import com.local.assistant.ui.theme.glass
+import com.local.assistant.ui.theme.GlassIconButton
 import kotlinx.coroutines.launch
 
 /**
@@ -79,9 +81,7 @@ fun ModelScreen(
                 title = { Text("Model", style = MaterialTheme.typography.titleMedium) },
                 navigationIcon = {
                     if (onBack != null) {
-                        IconButton(onClick = onBack) {
-                            Icon(Icons.AutoMirrored.Outlined.ArrowBack, contentDescription = "Back")
-                        }
+                        GlassIconButton(Icons.AutoMirrored.Outlined.ArrowBack, "Back", onBack, Modifier.padding(start = 10.dp, end = 6.dp))
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(
@@ -97,15 +97,16 @@ fun ModelScreen(
                 .fillMaxSize()
                 .padding(padding)
                 .verticalScroll(rememberScrollState())
-                .padding(horizontal = 20.dp),
+                // One card of glass, as a settings page.
+                .padding(start = 12.dp, end = 12.dp, top = 8.dp, bottom = 24.dp)
+                .glass()
+                .padding(horizontal = 18.dp),
         ) {
-            HorizontalDivider(color = AppColors.Border)
-
             Text(
                 text = ModelCatalog.DISPLAY_NAME,
                 style = MaterialTheme.typography.titleMedium,
                 color = AppColors.TextPrimary,
-                modifier = Modifier.padding(top = 24.dp),
+                modifier = Modifier.padding(top = 18.dp),
             )
             Text(
                 text = "Runs fully offline on this device. " +

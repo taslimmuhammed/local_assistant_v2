@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- As values/themes.xml, plus the launch screen: the glass grey, and the app's glass mark coming
+         to life (MainActivity then fades it into the app). The overlay and brief themes build
+         on this one but are translucent, so they never show it. -->
+    <style name="Theme.LocalAssistant" parent="android:Theme.Material.Light.NoActionBar">
+        <item name="android:statusBarColor">@android:color/white</item>
+        <item name="android:navigationBarColor">@android:color/white</item>
+        <item name="android:windowBackground">@drawable/window_glass</item>
+        <item name="android:windowSplashScreenBackground">#ECEDF1</item>
+        <item name="android:windowSplashScreenAnimatedIcon">@drawable/splash_mark</item>
+        <item name="android:windowSplashScreenAnimationDuration">1000</item>
+    </style>
+</resources>

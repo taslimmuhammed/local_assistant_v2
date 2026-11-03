@@ -68,6 +68,10 @@ import com.local.assistant.gallery.PhotoLibrary
 import com.local.assistant.model.Transfer
 import com.local.assistant.model.formatBytes
 import com.local.assistant.ui.theme.AppColors
+import com.local.assistant.ui.theme.glass
+import com.local.assistant.ui.theme.glassFieldColors
+import com.local.assistant.ui.theme.GlassShapes
+import com.local.assistant.ui.theme.GlassIconButton
 import java.text.NumberFormat
 
 /**
@@ -113,7 +117,7 @@ fun GalleryScreen(viewModel: GalleryViewModel, onBack: () -> Unit) {
                 TopAppBar(
                     title = { Text("Photos", style = MaterialTheme.typography.titleMedium) },
                     navigationIcon = {
-                        IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Outlined.ArrowBack, contentDescription = "Back") }
+                        GlassIconButton(Icons.AutoMirrored.Outlined.ArrowBack, "Back", onBack, Modifier.padding(start = 10.dp, end = 6.dp))
                     },
                     colors = TopAppBarDefaults.topAppBarColors(
                         containerColor = AppColors.Background,
@@ -135,13 +139,13 @@ fun GalleryScreen(viewModel: GalleryViewModel, onBack: () -> Unit) {
                 }
                 LazyVerticalGrid(
                     columns = GridCells.Adaptive(minSize = 104.dp),
-                    contentPadding = PaddingValues(bottom = 16.dp),
-                    horizontalArrangement = Arrangement.spacedBy(2.dp),
-                    verticalArrangement = Arrangement.spacedBy(2.dp),
+                    contentPadding = PaddingValues(start = 8.dp, end = 8.dp, bottom = 16.dp),
+                    horizontalArrangement = Arrangement.spacedBy(4.dp),
+                    verticalArrangement = Arrangement.spacedBy(4.dp),
                     modifier = Modifier.fillMaxSize(),
                 ) {
                     item(span = { GridItemSpan(maxLineSpan) }, key = "header") {
-                        Column(Modifier.padding(horizontal = 16.dp)) {
+                        Column(Modifier.padding(horizontal = 8.dp)) {
                             if (installed == null) {
                                 ModelCard(viewModel)
                             } else {
@@ -155,7 +159,7 @@ fun GalleryScreen(viewModel: GalleryViewModel, onBack: () -> Unit) {
                         }
                     }
                     items(ids, key = { it }) { id ->
-                        PhotoThumb(id, viewModel.thumbnails, Modifier.aspectRatio(1f), onClick = { viewing = ids to ids.indexOf(id) })
+                        PhotoThumb(id, viewModel.thumbnails, Modifier.aspectRatio(1f).clip(RoundedCornerShape(10.dp)), onClick = { viewing = ids to ids.indexOf(id) })
                     }
                 }
             }
@@ -213,8 +217,7 @@ private fun ModelCard(viewModel: GalleryViewModel) {
         Modifier
             .fillMaxWidth()
             .padding(vertical = 8.dp)
-            .clip(RoundedCornerShape(16.dp))
-            .background(AppColors.SurfaceMuted)
+            .glass(RoundedCornerShape(18.dp))
             .padding(16.dp),
     ) {
         Text("Turn on photo search", style = MaterialTheme.typography.titleSmall, color = AppColors.TextPrimary)
@@ -275,7 +278,8 @@ private fun SearchField(query: String, onChange: (String) -> Unit) {
         },
         keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
         keyboardActions = KeyboardActions(onSearch = { focus.clearFocus() }),
-        shape = RoundedCornerShape(12.dp),
+        shape = GlassShapes.Field,
+        colors = glassFieldColors(),
         modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp),
     )
 }

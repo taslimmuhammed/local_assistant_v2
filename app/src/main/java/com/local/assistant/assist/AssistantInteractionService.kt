@@ -44,13 +44,23 @@ class AssistantInteractionService : VoiceInteractionService() {
          * Opens the overlay for the wake word. False when the app isn't the phone's assistant (the
          * system then doesn't run this service) or the system refused.
          */
-        fun showForWakeWord(): Boolean {
+        fun showForWakeWord(): Boolean = show(Bundle().apply { putBoolean(AssistActivity.EXTRA_WAKE_WORD, true) })
+
+        /**
+         * Opens "While you were away" by itself, just after an unlock, the way the wake word opens
+         * the overlay. False when the app isn't the phone's assistant or the system refused.
+         */
+        fun showBrief(): Boolean = show(Bundle().apply { putBoolean(EXTRA_BRIEF, true) })
+
+        private fun show(args: Bundle): Boolean {
             val service = running ?: return false
             return runCatching {
-                service.showSession(Bundle().apply { putBoolean(AssistActivity.EXTRA_WAKE_WORD, true) }, 0)
+                service.showSession(args, 0)
                 true
             }.onFailure { Log.w(TAG, "Could not show the assistant", it) }.getOrDefault(false)
         }
+
+        internal const val EXTRA_BRIEF = "com.local.assistant.extra.BRIEF"
     }
 }
 
@@ -73,6 +83,11 @@ class AssistantSession(context: Context) : VoiceInteractionSession(context) {
 
     override fun onShow(args: Bundle?, showFlags: Int) {
         super.onShow(args, showFlags)
+        if (args?.getBoolean(AssistantInteractionService.EXTRA_BRIEF, false) == true) {
+            startAssistantActivity(com.local.assistant.away.BriefActivity.intent(context, newOnly = true))
+            hide()
+            return
+        }
         val wakeWord = args?.getBoolean(AssistActivity.EXTRA_WAKE_WORD, false) == true
         startAssistantActivity(
             Intent(Intent.ACTION_ASSIST)

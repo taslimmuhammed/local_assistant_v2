@@ -1,6 +1,9 @@
 package com.local.assistant.ui.chat
 
+import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.foundation.border
+import androidx.compose.ui.draw.blur
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
@@ -105,6 +108,21 @@ import com.local.assistant.device.PermissionBroker
 import com.local.assistant.llm.LlmService
 import com.local.assistant.media.RecordingState
 import com.local.assistant.ui.theme.AppColors
+import com.local.assistant.ui.theme.liquidGlass
+import com.local.assistant.ui.theme.GlassRoundButton
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.graphics.Color
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.spring
+import androidx.compose.foundation.interaction.collectIsPressedAsState
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import com.local.assistant.ui.theme.Glass
+import com.local.assistant.ui.theme.GlassIconButton
+import com.local.assistant.ui.theme.GlassNotice
+import com.local.assistant.ui.theme.GlassSnackbarHost
+import com.local.assistant.ui.theme.fadingEdges
+import com.local.assistant.ui.theme.glass
 import kotlinx.coroutines.launch
 import kotlin.math.roundToInt
 
@@ -114,6 +132,11 @@ fun ChatScreen(
     onOpenMemory: () -> Unit,
     onOpenPhotos: () -> Unit,
     onOpenSettings: () -> Unit,
+    /** Which starter suggestions can run: the web and photo ones need setting up first. */
+    canSearchWeb: Boolean = false,
+    canFindPhotos: Boolean = false,
+    /** The user's first name, for the hello on a blank chat. */
+    userName: String? = null,
 ) {
     val chats by viewModel.chats.collectAsStateWithLifecycle()
     val activeChatId by viewModel.activeChatId.collectAsStateWithLifecycle()
@@ -211,15 +234,20 @@ fun ChatScreen(
         }
     }
 
+    // The chat behind the drawer blurs as it opens, so the drawer reads as glass over it.
+    val behindDrawer by animateDpAsState(if (drawerState.targetValue == DrawerValue.Open) DRAWER_BLUR else 0.dp, label = "drawer blur")
     ModalNavigationDrawer(
         drawerState = drawerState,
+        scrimColor = Glass.Scrim,
         drawerContent = {
             // 85% of the screen, so the chat stays in sight behind it: the sheet's own cap
             // (360dp) is the whole width of a ~360dp phone.
             val drawerWidth = (LocalConfiguration.current.screenWidthDp * DRAWER_FRACTION).dp
             ModalDrawerSheet(
-                modifier = Modifier.width(drawerWidth),
-                drawerContainerColor = AppColors.Background,
+                // Glass over the blurred chat: clearer than a sheet, lit from above.
+                modifier = Modifier.width(drawerWidth).liquidGlass(DrawerShape, DrawerGlass, sheen = 0.5f),
+                drawerShape = DrawerShape,
+                drawerContainerColor = Color.Transparent,
                 drawerContentColor = AppColors.TextPrimary,
             ) {
                 ChatDrawer(
@@ -252,8 +280,9 @@ fun ChatScreen(
         },
     ) {
         Scaffold(
+            modifier = Modifier.blur(behindDrawer),
             containerColor = AppColors.Background,
-            snackbarHost = { SnackbarHost(snackbarHostState) },
+            snackbarHost = { GlassSnackbarHost(snackbarHostState) },
             topBar = {
                 ChatTopBar(
                     title = chats.firstOrNull { it.id == activeChatId }?.title
@@ -276,13 +305,29 @@ fun ChatScreen(
                 if (memoryPaused) QuietBanner("Memory is paused: nothing new is remembered")
                 if (busyElsewhere) QuietBanner("Finishing an answer from the assistant…")
 
+                // While the model loads, a message can still be sent: it waits for the engine.
+                // Not while the overlay's reply is running, though: one turn at a time.
+                val canSend = !busyElsewhere && (
+                    engineState is LlmService.State.Ready ||
+                        engineState is LlmService.State.Loading ||
+                        engineState is LlmService.State.Idle
+                    )
+
                 Box(Modifier.weight(1f).fillMaxWidth()) {
                     if (messages.isEmpty() && streamingText == null) {
-                        EmptyState(Modifier.align(Alignment.Center))
+                        StarterPanel(
+                            chatKey = activeChatId,
+                            name = userName,
+                            web = canSearchWeb,
+                            photos = canFindPhotos,
+                            enabled = canSend && !isGenerating,
+                            onPick = viewModel::send,
+                            modifier = Modifier.fillMaxSize(),
+                        )
                     } else {
                         LazyColumn(
                             state = listState,
-                            modifier = Modifier.fillMaxSize(),
+                            modifier = Modifier.fillMaxSize().fadingEdges(top = 20.dp, bottom = 12.dp),
                             contentPadding = PaddingValues(vertical = 12.dp),
                         ) {
                             if (droppedFromContext > 0) {
@@ -335,13 +380,7 @@ fun ChatScreen(
                 if (speaking && recording == null) SpeakingBar(onStop = viewModel::stopSpeaking)
 
                 Composer(
-                    // While the model loads, a message can still be sent: it waits for the engine.
-                    // Not while the overlay's reply is running, though: one turn at a time.
-                    enabled = !busyElsewhere && (
-                        engineState is LlmService.State.Ready ||
-                            engineState is LlmService.State.Loading ||
-                            engineState is LlmService.State.Idle
-                        ),
+                    enabled = canSend,
                     isGenerating = isGenerating,
                     supportsImages = supportsImages,
                     supportsAudio = supportsAudio,
@@ -382,49 +421,34 @@ private fun ChatTopBar(
     onOpenDrawer: () -> Unit,
     onNewChat: () -> Unit,
 ) {
-    Column {
-        TopAppBar(
-            title = {
-                Text(
-                    // Titled after the first message, which may have been a card number.
-                    text = com.local.assistant.ui.privacy.rememberShown(title).text,
-                    style = MaterialTheme.typography.titleMedium,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-            },
-            navigationIcon = {
-                IconButton(onClick = onOpenDrawer) {
-                    Icon(Icons.Outlined.Menu, contentDescription = "Chats")
-                }
-            },
-            actions = {
-                IconButton(onClick = onNewChat) {
-                    Icon(Icons.Outlined.Add, contentDescription = "New chat")
-                }
-            },
-            colors = TopAppBarDefaults.topAppBarColors(
-                containerColor = AppColors.Background,
-                titleContentColor = AppColors.TextPrimary,
-                navigationIconContentColor = AppColors.TextPrimary,
-                actionIconContentColor = AppColors.TextPrimary,
-            ),
-        )
-        HorizontalDivider(color = AppColors.Border)
-    }
+    TopAppBar(
+        title = {
+            Text(
+                // Titled after the first message, which may have been a card number.
+                text = com.local.assistant.ui.privacy.rememberShown(title).text,
+                style = MaterialTheme.typography.titleMedium,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        },
+        navigationIcon = {
+            GlassIconButton(Icons.Outlined.Menu, "Chats", onOpenDrawer, Modifier.padding(start = 10.dp, end = 6.dp))
+        },
+        actions = {
+            GlassIconButton(Icons.Outlined.Add, "New chat", onNewChat, Modifier.padding(end = 10.dp))
+        },
+        colors = TopAppBarDefaults.topAppBarColors(
+            containerColor = AppColors.Background,
+            titleContentColor = AppColors.TextPrimary,
+            navigationIconContentColor = AppColors.TextPrimary,
+            actionIconContentColor = AppColors.TextPrimary,
+        ),
+    )
 }
 
 @Composable
 private fun QuietBanner(text: String) {
-    Text(
-        text = text,
-        style = MaterialTheme.typography.bodyMedium,
-        color = AppColors.TextSecondary,
-        modifier = Modifier
-            .fillMaxWidth()
-            .background(AppColors.SurfaceMuted)
-            .padding(horizontal = 16.dp, vertical = 8.dp),
-    )
+    GlassNotice(text)
 }
 
 @Composable
@@ -437,16 +461,7 @@ private fun EngineBanner(state: LlmService.State, onRetry: () -> Unit) {
         else -> null
     } ?: return
 
-    Text(
-        text = message,
-        style = MaterialTheme.typography.bodyMedium,
-        color = if (failed) AppColors.Danger else AppColors.TextSecondary,
-        modifier = Modifier
-            .fillMaxWidth()
-            .then(if (failed) Modifier.clickable(onClick = onRetry) else Modifier)
-            .background(AppColors.SurfaceMuted)
-            .padding(horizontal = 16.dp, vertical = 8.dp),
-    )
+    GlassNotice(message, color = if (failed) AppColors.Danger else AppColors.TextSecondary, onClick = if (failed) onRetry else null)
 }
 
 /**
@@ -486,15 +501,6 @@ private fun TrimmedNotice(droppedCount: Int) {
     )
 }
 
-@Composable
-private fun EmptyState(modifier: Modifier = Modifier) {
-    Text(
-        text = "Ask anything",
-        style = MaterialTheme.typography.titleMedium,
-        color = AppColors.TextSecondary,
-        modifier = modifier,
-    )
-}
 
 /** What the round button at the end of the composer does right now. */
 private enum class ComposerAction { STOP, MIC, SEND, SEND_RECORDING }
@@ -523,8 +529,6 @@ private fun Composer(
     var slide by remember { mutableFloatStateOf(0f) }
 
     Column(Modifier.navigationBarsPadding()) {
-        HorizontalDivider(color = AppColors.Border)
-
         if (recording == null) pendingAttachment?.let { PendingAttachmentChip(it, onDiscardAttachment) }
 
         // WhatsApp's rule: the mic turns into send as soon as there is something to send.
@@ -536,59 +540,54 @@ private fun Composer(
             else -> ComposerAction.SEND
         }
 
+        // Three pieces of glass, as in Apple's Liquid Glass: photos, the message, and the voice
+        // button (send, once there is something to send).
         Row(
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 10.dp),
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(start = 12.dp, end = 12.dp, top = 6.dp, bottom = 10.dp),
             verticalAlignment = Alignment.Bottom,
-            horizontalArrangement = Arrangement.spacedBy(4.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            if (recording != null) {
-                RecordingInfo(recording, holding, slide, onCancelRecording, Modifier.weight(1f))
-            } else {
-                if (supportsImages) {
-                    IconButton(
-                        onClick = onPickImage,
-                        enabled = enabled && !isGenerating,
-                        modifier = Modifier.size(44.dp),
-                    ) {
-                        Icon(
-                            Icons.Outlined.Image,
-                            contentDescription = "Attach image",
-                            tint = if (enabled && !isGenerating) AppColors.TextSecondary else AppColors.Border,
+            if (recording == null && supportsImages) {
+                GlassRoundButton(Icons.Outlined.Image, "Attach image", onPickImage, enabled = enabled && !isGenerating, size = COMPOSER_HEIGHT)
+            }
+            Box(
+                modifier = Modifier
+                    .weight(1f)
+                    .heightIn(min = COMPOSER_HEIGHT)
+                    .liquidGlass(ComposerShape),
+                contentAlignment = Alignment.CenterStart,
+            ) {
+                if (recording != null) {
+                    RecordingInfo(recording, holding, slide, onCancelRecording, Modifier.fillMaxWidth().padding(end = 12.dp))
+                } else {
+                    Box(Modifier.fillMaxWidth().padding(horizontal = 18.dp, vertical = 12.dp)) {
+                        if (text.isEmpty()) {
+                            Text(
+                                text = "Message",
+                                style = MaterialTheme.typography.bodyLarge,
+                                color = AppColors.TextSecondary,
+                            )
+                        }
+                        BasicTextField(
+                            value = text,
+                            onValueChange = {
+                                text = it
+                                onTyping()
+                            },
+                            enabled = enabled,
+                            textStyle = MaterialTheme.typography.bodyLarge.merge(
+                                TextStyle(color = AppColors.TextPrimary),
+                            ),
+                            cursorBrush = SolidColor(AppColors.TextPrimary),
+                            keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(
+                                imeAction = ImeAction.Default,
+                            ),
+                            maxLines = 6,
+                            modifier = Modifier.fillMaxWidth(),
                         )
                     }
-                }
-
-                Box(
-                    modifier = Modifier
-                        .weight(1f)
-                        .clip(RoundedCornerShape(24.dp))
-                        .background(AppColors.SurfaceMuted)
-                        .padding(horizontal = 16.dp, vertical = 12.dp),
-                ) {
-                    if (text.isEmpty()) {
-                        Text(
-                            text = "Message",
-                            style = MaterialTheme.typography.bodyLarge,
-                            color = AppColors.TextSecondary,
-                        )
-                    }
-                    BasicTextField(
-                        value = text,
-                        onValueChange = {
-                            text = it
-                            onTyping()
-                        },
-                        enabled = enabled,
-                        textStyle = MaterialTheme.typography.bodyLarge.merge(
-                            TextStyle(color = AppColors.TextPrimary),
-                        ),
-                        cursorBrush = SolidColor(AppColors.TextPrimary),
-                        keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(
-                            imeAction = ImeAction.Default,
-                        ),
-                        maxLines = 6,
-                        modifier = Modifier.fillMaxWidth(),
-                    )
                 }
             }
 
@@ -670,13 +669,13 @@ private fun ComposerButton(
     Box(
         contentAlignment = Alignment.Center,
         modifier = Modifier
-            .size(44.dp)
+            .size(COMPOSER_HEIGHT)
             .graphicsLayer {
                 scaleX = scale
                 scaleY = scale
             }
             .clip(CircleShape)
-            .background(if (enabled) AppColors.Accent else AppColors.Border)
+            .then(if (enabled) Modifier.background(Glass.Mine).liquidGlass(CircleShape, Color.Transparent, sheen = 0.22f) else Modifier.liquidGlass(CircleShape))
             .semantics {
                 role = SemanticsRole.Button
                 contentDescription = label
@@ -734,8 +733,8 @@ private fun ComposerButton(
                 else -> Icons.AutoMirrored.Outlined.Send
             },
             contentDescription = null,
-            tint = AppColors.OnAccent,
-            modifier = Modifier.size(20.dp),
+            tint = if (enabled) AppColors.OnAccent else AppColors.TextSecondary,
+            modifier = Modifier.size(22.dp),
         )
     }
 }
@@ -859,3 +858,13 @@ private const val TRIMMED_NOTICE_KEY = "trimmed-notice"
 
 /** How much of the screen the chat history drawer takes. */
 private const val DRAWER_FRACTION = 0.85f
+
+/** How much the chat behind the open drawer is blurred. */
+private val DRAWER_BLUR = 20.dp
+
+private val DrawerShape = RoundedCornerShape(topEnd = 28.dp, bottomEnd = 28.dp)
+private val DrawerGlass = Color.White.copy(alpha = 0.76f)
+private val ComposerShape = RoundedCornerShape(24.dp)
+
+/** The message bar's height, and the size of its round buttons. */
+private val COMPOSER_HEIGHT = 48.dp

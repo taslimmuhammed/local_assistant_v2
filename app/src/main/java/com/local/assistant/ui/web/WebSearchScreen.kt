@@ -51,6 +51,9 @@ import com.local.assistant.data.prefs.SecretStore
 import com.local.assistant.memory.tools.WebSearch
 import com.local.assistant.memory.tools.WebSearchError
 import com.local.assistant.ui.theme.AppColors
+import com.local.assistant.ui.theme.GlassShapes
+import com.local.assistant.ui.theme.glassFieldColors
+import com.local.assistant.ui.theme.GlassIconButton
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -139,7 +142,7 @@ fun WebSearchScreen(viewModel: WebSearchViewModel, onBack: () -> Unit, onboardin
             if (!onboarding) TopAppBar(
                 title = { Text("Web search", style = MaterialTheme.typography.titleMedium) },
                 navigationIcon = {
-                    IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Outlined.ArrowBack, contentDescription = "Back") }
+                    GlassIconButton(Icons.AutoMirrored.Outlined.ArrowBack, "Back", onBack, Modifier.padding(start = 10.dp, end = 6.dp))
                 },
                 colors = TopAppBarDefaults.topAppBarColors(
                     containerColor = AppColors.Background,
@@ -206,7 +209,8 @@ fun WebSearchScreen(viewModel: WebSearchViewModel, onBack: () -> Unit, onboardin
                         Icon(if (reveal) Icons.Outlined.VisibilityOff else Icons.Outlined.Visibility, contentDescription = if (reveal) "Hide" else "Show")
                     }
                 },
-                shape = RoundedCornerShape(12.dp),
+                shape = GlassShapes.Field,
+                colors = glassFieldColors(),
                 modifier = Modifier.fillMaxWidth(),
             )
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {

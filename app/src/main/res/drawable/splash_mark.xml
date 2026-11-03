@@ -1,0 +1,132 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The launch screen's mark (Android 12+), as GlassMark: the chat bubble on a lens of glass,
+     a clear outer ring around a brighter disc, on a soft shadow. It pops in while a glint of
+     light sweeps round the rim. 288dp, inside the 192dp circle the system shows an icon without
+     a background in. -->
+<animated-vector xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:aapt="http://schemas.android.com/aapt">
+    <aapt:attr name="android:drawable">
+        <vector
+            android:width="288dp"
+            android:height="288dp"
+            android:viewportWidth="288"
+            android:viewportHeight="288">
+            <group
+                android:name="lens"
+                android:pivotX="144"
+                android:pivotY="144">
+                <!-- The shadow under it, soft-edged, a little below. -->
+                <path android:pathData="M144,50 A96,96 0 1,1 144,242 A96,96 0 1,1 144,50 Z">
+                    <aapt:attr name="android:fillColor">
+                        <gradient
+                            android:type="radial"
+                            android:centerX="144"
+                            android:centerY="150"
+                            android:gradientRadius="96">
+                            <item android:offset="0.8" android:color="#2618181B" />
+                            <item android:offset="1" android:color="#0018181B" />
+                        </gradient>
+                    </aapt:attr>
+                </path>
+                <!-- The outer ring: clear glass, lit from above, with a bright rim. -->
+                <path android:pathData="M144,56 A88,88 0 1,1 144,232 A88,88 0 1,1 144,56 Z">
+                    <aapt:attr name="android:fillColor">
+                        <gradient
+                            android:type="linear"
+                            android:startX="144"
+                            android:startY="56"
+                            android:endX="144"
+                            android:endY="232">
+                            <item android:offset="0" android:color="#F2FFFFFF" />
+                            <item android:offset="0.5" android:color="#8CFFFFFF" />
+                            <item android:offset="1" android:color="#B3FFFFFF" />
+                        </gradient>
+                    </aapt:attr>
+                </path>
+                <path
+                    android:pathData="M144,56 A88,88 0 1,1 144,232 A88,88 0 1,1 144,56 Z"
+                    android:strokeColor="#FFFFFFFF"
+                    android:strokeWidth="2" />
+                <!-- The disc: brighter glass. -->
+                <path android:pathData="M144,74 A70,70 0 1,1 144,214 A70,70 0 1,1 144,74 Z">
+                    <aapt:attr name="android:fillColor">
+                        <gradient
+                            android:type="linear"
+                            android:startX="144"
+                            android:startY="74"
+                            android:endX="144"
+                            android:endY="214">
+                            <item android:offset="0" android:color="#FFFFFFFF" />
+                            <item android:offset="1" android:color="#E6FFFFFF" />
+                        </gradient>
+                    </aapt:attr>
+                </path>
+                <path
+                    android:pathData="M144,74 A70,70 0 1,1 144,214 A70,70 0 1,1 144,74 Z"
+                    android:strokeColor="#1A18181B"
+                    android:strokeWidth="1" />
+                <!-- ic_launcher_foreground's bubble, 1.2×, centred. -->
+                <group
+                    android:scaleX="1.2"
+                    android:scaleY="1.2"
+                    android:translateX="79.2"
+                    android:translateY="74.4">
+                    <path
+                        android:fillColor="#18181B"
+                        android:pathData="M34,32h40a10,10 0 0 1 10,10v22a10,10 0 0 1 -10,10H52l-14,10v-10h-4a10,10 0 0 1 -10,-10V42a10,10 0 0 1 10,-10z" />
+                </group>
+                <!-- The glint: a short arc of light on the outer ring. -->
+                <group
+                    android:name="glint"
+                    android:pivotX="144"
+                    android:pivotY="144">
+                    <path
+                        android:pathData="M67.8,100 A88,88 0 0,1 188,67.8"
+                        android:strokeLineCap="round"
+                        android:strokeWidth="4">
+                        <aapt:attr name="android:strokeColor">
+                            <gradient
+                                android:type="linear"
+                                android:startX="67.8"
+                                android:startY="100"
+                                android:endX="188"
+                                android:endY="67.8">
+                                <item android:offset="0" android:color="#00FFFFFF" />
+                                <item android:offset="0.5" android:color="#FFFFFFFF" />
+                                <item android:offset="1" android:color="#00FFFFFF" />
+                            </gradient>
+                        </aapt:attr>
+                    </path>
+                </group>
+            </group>
+        </vector>
+    </aapt:attr>
+    <target android:name="glint">
+        <aapt:attr name="android:animation">
+            <objectAnimator
+                android:duration="1000"
+                android:interpolator="@android:interpolator/decelerate_cubic"
+                android:propertyName="rotation"
+                android:valueFrom="-180"
+                android:valueTo="180" />
+        </aapt:attr>
+    </target>
+    <target android:name="lens">
+        <aapt:attr name="android:animation">
+            <set>
+                <objectAnimator
+                    android:duration="550"
+                    android:interpolator="@android:interpolator/overshoot"
+                    android:propertyName="scaleX"
+                    android:valueFrom="0.6"
+                    android:valueTo="1" />
+                <objectAnimator
+                    android:duration="550"
+                    android:interpolator="@android:interpolator/overshoot"
+                    android:propertyName="scaleY"
+                    android:valueFrom="0.6"
+                    android:valueTo="1" />
+            </set>
+        </aapt:attr>
+    </target>
+</animated-vector>

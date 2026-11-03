@@ -1,6 +1,7 @@
 package com.local.assistant
 
 import android.content.Intent
+import android.os.Build
 import android.os.Bundle
 import androidx.fragment.app.FragmentActivity
 import androidx.activity.compose.setContent
@@ -10,6 +11,7 @@ import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
@@ -33,6 +35,7 @@ import com.local.assistant.ui.setup.PreparingScreen
 import com.local.assistant.ui.web.WebSearchScreen
 import com.local.assistant.ui.web.WebSearchViewModel
 import com.local.assistant.ui.theme.LocalAssistantTheme
+import com.local.assistant.ui.theme.installGlassBackdrop
 
 /** A [FragmentActivity] (a ComponentActivity underneath) for the fingerprint prompt. */
 class MainActivity : FragmentActivity() {
@@ -46,6 +49,13 @@ class MainActivity : FragmentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         enableEdgeToEdge()
         super.onCreate(savedInstanceState)
+        // The launch screen doesn't cut to the app: the mark swells a little as it fades away.
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            splashScreen.setOnExitAnimationListener { splash ->
+                splash.iconView?.animate()?.scaleX(1.18f)?.scaleY(1.18f)?.setDuration(SPLASH_EXIT_MS)?.start()
+                splash.animate().alpha(0f).setDuration(SPLASH_EXIT_MS).withEndAction { splash.remove() }.start()
+            }
+        }
         if (savedInstanceState == null) {
             chatToOpen.value = chatIdIn(intent)
             settingsToOpen.value = settingsIn(intent)
@@ -66,6 +76,7 @@ class MainActivity : FragmentActivity() {
                 }
             }
         }
+        installGlassBackdrop(this)
     }
 
     override fun onNewIntent(intent: Intent) {
@@ -214,6 +225,7 @@ private fun AppRoot(
             voicePacks = container.voicePacks,
             webSearchOn = container.webSearch.enabled,
             memory = memoryViewModel,
+            awayBrief = container.awayBrief,
             section = settingsSection,
             onSection = { settingsSection = it },
             onBack = {
@@ -241,6 +253,10 @@ private fun AppRoot(
         return
     }
 
+    // For the blank chat's hello; read again on coming back from Settings, where it is edited.
+    val userName by produceState<String?>(null, showSettings) {
+        value = container.memoryControls.profile()["name"]?.trim()?.substringBefore(' ')?.takeIf { it.isNotEmpty() }
+    }
     val viewModel: ChatViewModel = viewModel(factory = ChatViewModel.factory(container))
     LaunchedEffect(chatToOpen) {
         chatToOpen?.let {
@@ -253,5 +269,11 @@ private fun AppRoot(
         onOpenMemory = { showMemoryScreen = true },
         onOpenPhotos = { showPhotosScreen = true },
         onOpenSettings = { showSettings = true },
+        // Read again each time a screen closes: a key added or photos allowed shows up here.
+        canSearchWeb = container.webSearch.enabled,
+        canFindPhotos = container.photoSearchReady(),
+        userName = userName,
     )
 }
+
+private const val SPLASH_EXIT_MS = 280L

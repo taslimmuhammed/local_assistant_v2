@@ -28,6 +28,8 @@ class ModelScheduler(private val clock: () -> Long = System::currentTimeMillis) 
         QUERY_EMBEDDING,
         /** A conversation made ready for the next new chat: the user is probably about to ask. */
         WARM_UP,
+        /** Sorting what came in while the user was away, so the brief is ready when they're back. */
+        BRIEF,
         COMPACTION,
         EMBEDDING_BACKLOG,
         NIGHTLY,

@@ -21,7 +21,9 @@ import com.local.assistant.MainActivity
 import com.local.assistant.appContainer
 import com.local.assistant.ui.gallery.LocalPhotoAccess
 import com.local.assistant.ui.gallery.PhotoAccess
+import androidx.compose.ui.unit.dp
 import com.local.assistant.ui.theme.LocalAssistantTheme
+import com.local.assistant.ui.theme.blurBehind
 
 /**
  * The assistant overlay: what opens when the power button is held (once this app is the phone's
@@ -53,6 +55,9 @@ class AssistActivity : FragmentActivity() {
 
     /** The unlock prompt is up: the overlay stays while it is. */
     private var awaitingUnlock = false
+
+    /** The system is blurring what's behind the panel. */
+    private val blurred = mutableStateOf(false)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         enableEdgeToEdge(
@@ -90,6 +95,7 @@ class AssistActivity : FragmentActivity() {
                 CompositionLocalProvider(LocalPhotoAccess provides photos, com.local.assistant.ui.privacy.LocalSensitive provides sensitive) {
                     AssistOverlay(
                         viewModel = viewModel,
+                        blurred = blurred.value,
                         lockedOut = lockedOut.value,
                         openCancelled = openCancelled.intValue,
                         onClosed = ::close,
@@ -99,6 +105,8 @@ class AssistActivity : FragmentActivity() {
                 }
             }
         }
+        // What's behind the panel, the app or the lock screen, frosted, as behind the brief.
+        blurBehind(this, OVERLAY_BLUR) { blurred.value = it }
     }
 
     /**
@@ -111,7 +119,13 @@ class AssistActivity : FragmentActivity() {
         if (!lockedOut.value && micGranted() && (wakeWord || viewModel.input.value == AssistViewModel.Input.VOICE)) viewModel.startListening()
     }
 
+    override fun onStart() {
+        super.onStart()
+        inView = true
+    }
+
     override fun onStop() {
+        inView = false
         super.onStop()
         // Out of sight, out of the way: an overlay left behind would sit in its own task.
         if (!isChangingConfigurations && !awaitingUnlock && !isFinishing) close()
@@ -204,6 +218,13 @@ class AssistActivity : FragmentActivity() {
     companion object {
         /** Opened by the wake word (wake/WakeWatch) rather than the power button. */
         const val EXTRA_WAKE_WORD = "com.local.assistant.extra.WAKE_WORD"
+
+        /** The overlay is on screen: the brief doesn't pop up over it at an unlock it asked for. */
+        @Volatile
+        var inView: Boolean = false
+            private set
+
+        private val OVERLAY_BLUR = 40.dp
     }
 
     private fun skipTransition(opening: Boolean) {

@@ -1,29 +1,35 @@
 package com.local.assistant.ui.chat
 
+import android.text.format.DateFormat
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.outlined.ArrowBack
 import androidx.compose.material.icons.outlined.Add
+import androidx.compose.material.icons.outlined.ChatBubbleOutline
+import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material.icons.outlined.DeleteOutline
 import androidx.compose.material.icons.outlined.PhotoLibrary
 import androidx.compose.material.icons.outlined.Psychology
 import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -37,12 +43,35 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import com.local.assistant.data.db.ChatEntity
 import com.local.assistant.ui.theme.AppColors
+import com.local.assistant.ui.theme.Glass
+import com.local.assistant.ui.theme.GlassMark
+import com.local.assistant.ui.theme.GlassRoundButton
+import com.local.assistant.ui.theme.fadingEdges
+import com.local.assistant.ui.theme.liquidGlass
+import java.time.Instant
+import java.time.LocalDate
+import java.time.ZoneId
+import java.time.format.DateTimeFormatter
+import java.time.temporal.ChronoUnit
+import java.util.Date
+import java.util.Locale
 
+/**
+ * The chat history, on a sheet of glass: the app's mark and a count, a dark "New chat" button,
+ * the chats under Today, Yesterday and further back with when each was last used, and the rest
+ * of the app (photos, memory, settings) as three tiles at the foot.
+ */
 @Composable
 fun ChatDrawer(
     chats: List<ChatEntity>,
@@ -78,120 +107,132 @@ fun ChatDrawer(
         )
     }
 
+    val zone = remember { ZoneId.systemDefault() }
+    val today = remember(chats) { LocalDate.now(zone) }
+    val sections = remember(chats, today) { chats.groupBy { HistoryPeriod.of(it.updatedAt, today, zone) } }
+
     Column(
         modifier = modifier
             .fillMaxSize()
-            .background(AppColors.Background)
             .statusBarsPadding()
             .navigationBarsPadding(),
     ) {
-        // A way back that doesn't depend on knowing to swipe or tap outside.
         Row(
-            modifier = Modifier.fillMaxWidth().padding(start = 4.dp, end = 16.dp, top = 4.dp),
+            modifier = Modifier.fillMaxWidth().padding(start = 18.dp, end = 14.dp, top = 14.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            IconButton(onClick = onClose) {
-                Icon(Icons.AutoMirrored.Outlined.ArrowBack, contentDescription = "Close chat history", tint = AppColors.TextPrimary)
+            GlassMark(size = 46.dp)
+            Spacer(Modifier.width(12.dp))
+            Column(Modifier.weight(1f)) {
+                Text("Chats", style = TitleStyle, color = AppColors.TextPrimary)
+                Text(
+                    when (chats.size) {
+                        0 -> "Nothing here yet"
+                        1 -> "1 conversation"
+                        else -> "${chats.size} conversations"
+                    },
+                    style = MaterialTheme.typography.bodySmall,
+                    color = AppColors.TextSecondary,
+                )
             }
-            Text("Chats", style = MaterialTheme.typography.titleMedium, color = AppColors.TextPrimary)
+            // A way back that doesn't depend on knowing to swipe or tap outside.
+            GlassRoundButton(Icons.Outlined.Close, "Close chat history", onClose, size = 40.dp, iconSize = 18.dp)
         }
+
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 12.dp, vertical = 12.dp)
-                .clip(RoundedCornerShape(12.dp))
-                .clickable(onClick = onNewChat)
-                .padding(horizontal = 8.dp, vertical = 10.dp),
+                .padding(horizontal = 16.dp, vertical = 16.dp)
+                .height(52.dp)
+                .clip(PillShape)
+                .background(Glass.Mine)
+                .liquidGlass(PillShape, Color.Transparent, sheen = 0.22f)
+                .clickable(role = Role.Button, onClick = onNewChat),
             verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.Center,
         ) {
-            Icon(Icons.Outlined.Add, contentDescription = null, tint = AppColors.TextPrimary)
-            Text(
-                text = "New chat",
-                style = MaterialTheme.typography.labelLarge,
-                color = AppColors.TextPrimary,
-                modifier = Modifier.padding(start = 12.dp),
-            )
+            Icon(Icons.Outlined.Add, contentDescription = null, tint = AppColors.OnAccent, modifier = Modifier.size(20.dp))
+            Spacer(Modifier.width(8.dp))
+            Text("New chat", style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.SemiBold), color = AppColors.OnAccent)
         }
-
-        HorizontalDivider(color = AppColors.Border)
 
         if (chats.isEmpty()) {
             Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
                 Text(
-                    text = "No chats yet",
+                    text = "Your chats will show up here",
                     style = MaterialTheme.typography.bodyMedium,
                     color = AppColors.TextSecondary,
                 )
             }
         } else {
             LazyColumn(
-                modifier = Modifier.weight(1f),
-                contentPadding = androidx.compose.foundation.layout.PaddingValues(
-                    horizontal = 12.dp,
-                    vertical = 8.dp,
-                ),
+                modifier = Modifier.weight(1f).fadingEdges(top = 12.dp, bottom = 16.dp),
+                contentPadding = PaddingValues(start = 12.dp, end = 12.dp, top = 0.dp, bottom = 12.dp),
                 verticalArrangement = Arrangement.spacedBy(2.dp),
             ) {
-                items(chats, key = { it.id }) { chat ->
-                    ChatRow(
-                        chat = chat,
-                        selected = chat.id == activeChatId,
-                        onClick = { onSelectChat(chat.id) },
-                        onDelete = { deleting = chat },
-                    )
+                sections.forEach { (period, inPeriod) ->
+                    item(key = "period-${period.name}") {
+                        Text(
+                            period.label.uppercase(Locale.getDefault()),
+                            style = MaterialTheme.typography.labelSmall.copy(letterSpacing = 1.2.sp, fontWeight = FontWeight.SemiBold),
+                            color = AppColors.TextSecondary,
+                            modifier = Modifier.padding(start = 14.dp, top = 14.dp, bottom = 6.dp),
+                        )
+                    }
+                    items(inPeriod, key = { it.id }) { chat ->
+                        ChatRow(
+                            chat = chat,
+                            selected = chat.id == activeChatId,
+                            time = whenUsed(chat.updatedAt, period, zone),
+                            onClick = { onSelectChat(chat.id) },
+                            onDelete = { deleting = chat },
+                        )
+                    }
                 }
             }
         }
 
-        HorizontalDivider(color = AppColors.Border)
-
         Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .clickable(onClick = onOpenPhotos)
-                .padding(horizontal = 20.dp, vertical = 16.dp),
-            verticalAlignment = Alignment.CenterVertically,
+            Modifier.fillMaxWidth().padding(start = 12.dp, end = 12.dp, top = 6.dp, bottom = 12.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            Icon(Icons.Outlined.PhotoLibrary, contentDescription = null, tint = AppColors.TextSecondary)
-            Text(
-                text = "Photos",
-                style = MaterialTheme.typography.labelLarge,
-                color = AppColors.TextSecondary,
-                modifier = Modifier.padding(start = 12.dp),
-            )
+            DockTile(Icons.Outlined.PhotoLibrary, "Photos", Glass.Ink[0], onOpenPhotos, Modifier.weight(1f))
+            // A brain: what the assistant knows about the user.
+            DockTile(Icons.Outlined.Psychology, "About you", Glass.Ink[1], onOpenMemory, Modifier.weight(1f))
+            DockTile(Icons.Outlined.Settings, "Settings", Glass.Ink[4], onOpenSettings, Modifier.weight(1f))
         }
+    }
+}
 
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .clickable(onClick = onOpenMemory)
-                .padding(horizontal = 20.dp, vertical = 16.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            // A brain, beside the photo and settings icons.
-            Icon(Icons.Outlined.Psychology, contentDescription = null, tint = AppColors.TextSecondary)
-            Text(
-                text = "What I know about you",
-                style = MaterialTheme.typography.labelLarge,
-                color = AppColors.TextSecondary,
-                modifier = Modifier.padding(start = 12.dp),
-            )
-        }
+/** When a chat was last used, said as briefly as its section allows: "08:12", "Mon", "28 Oct". */
+@Composable
+private fun whenUsed(at: Long, period: HistoryPeriod, zone: ZoneId): String {
+    val context = LocalContext.current
+    return when (period) {
+        HistoryPeriod.TODAY, HistoryPeriod.YESTERDAY -> DateFormat.getTimeFormat(context).format(Date(at))
+        HistoryPeriod.WEEK -> DayFormat.format(Instant.ofEpochMilli(at).atZone(zone))
+        else -> DateFormat.format(DateFormat.getBestDateTimePattern(Locale.getDefault(), "dMMM"), at).toString()
+    }
+}
 
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .clickable(onClick = onOpenSettings)
-                .padding(horizontal = 20.dp, vertical = 16.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Icon(Icons.Outlined.Settings, contentDescription = null, tint = AppColors.TextSecondary)
-            Text(
-                text = "Settings",
-                style = MaterialTheme.typography.labelLarge,
-                color = AppColors.TextSecondary,
-                modifier = Modifier.padding(start = 12.dp),
-            )
+/** The chat list's sections, by the day a chat was last used. */
+internal enum class HistoryPeriod(val label: String) {
+    TODAY("Today"),
+    YESTERDAY("Yesterday"),
+    WEEK("Previous 7 days"),
+    MONTH("Previous 30 days"),
+    OLDER("Older");
+
+    companion object {
+        fun of(at: Long, today: LocalDate, zone: ZoneId): HistoryPeriod {
+            val days = ChronoUnit.DAYS.between(Instant.ofEpochMilli(at).atZone(zone).toLocalDate(), today)
+            return when {
+                days <= 0 -> TODAY
+                days == 1L -> YESTERDAY
+                days < 7 -> WEEK
+                days < 30 -> MONTH
+                else -> OLDER
+            }
         }
     }
 }
@@ -200,28 +241,37 @@ fun ChatDrawer(
 private fun ChatRow(
     chat: ChatEntity,
     selected: Boolean,
+    time: String,
     onClick: () -> Unit,
     onDelete: () -> Unit,
 ) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(10.dp))
-            .background(if (selected) AppColors.SurfaceMuted else AppColors.Background)
+            .then(if (selected) Modifier.liquidGlass(RowShape, Glass.Raised, sheen = 0.4f) else Modifier.clip(RowShape))
             .clickable(onClick = onClick)
-            .padding(start = 12.dp, end = 4.dp, top = 10.dp, bottom = 10.dp),
+            .padding(start = 14.dp, end = 2.dp, top = 6.dp, bottom = 6.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
+        Icon(
+            Icons.Outlined.ChatBubbleOutline,
+            contentDescription = null,
+            tint = if (selected) Glass.Ink[0] else AppColors.TextSecondary,
+            modifier = Modifier.size(17.dp),
+        )
+        Spacer(Modifier.width(12.dp))
         Text(
             text = com.local.assistant.ui.privacy.rememberShown(chat.title).text,
-            style = MaterialTheme.typography.bodyMedium,
-            fontWeight = if (selected) FontWeight.Medium else FontWeight.Normal,
+            style = MaterialTheme.typography.bodyLarge,
+            fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
             color = AppColors.TextPrimary,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
             modifier = Modifier.weight(1f),
         )
-        IconButton(onClick = onDelete, modifier = Modifier.size(32.dp)) {
+        Spacer(Modifier.width(8.dp))
+        Text(time, style = MaterialTheme.typography.labelSmall, color = AppColors.TextSecondary)
+        IconButton(onClick = onDelete, modifier = Modifier.size(36.dp)) {
             Icon(
                 Icons.Outlined.DeleteOutline,
                 contentDescription = "Delete chat",
@@ -231,3 +281,27 @@ private fun ChatRow(
         }
     }
 }
+
+/** One of the three ways on from the drawer: a tile of glass with a tinted icon. */
+@Composable
+private fun DockTile(icon: ImageVector, label: String, accent: Color, onClick: () -> Unit, modifier: Modifier = Modifier) {
+    Column(
+        modifier
+            .liquidGlass(TileShape, Glass.Pane, sheen = 0.45f)
+            .clickable(role = Role.Button, onClick = onClick)
+            .padding(vertical = 12.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        Box(Modifier.size(36.dp).clip(CircleShape).background(accent.copy(alpha = 0.16f)), contentAlignment = Alignment.Center) {
+            Icon(icon, contentDescription = null, tint = accent, modifier = Modifier.size(19.dp))
+        }
+        Spacer(Modifier.height(6.dp))
+        Text(label, style = MaterialTheme.typography.labelMedium, color = AppColors.TextPrimary, maxLines = 1)
+    }
+}
+
+private val DayFormat = DateTimeFormatter.ofPattern("EEE", Locale.getDefault())
+private val TitleStyle = TextStyle(fontSize = 26.sp, lineHeight = 30.sp, fontWeight = FontWeight.SemiBold, letterSpacing = (-0.4).sp)
+private val PillShape = RoundedCornerShape(26.dp)
+private val RowShape = RoundedCornerShape(16.dp)
+private val TileShape = RoundedCornerShape(20.dp)

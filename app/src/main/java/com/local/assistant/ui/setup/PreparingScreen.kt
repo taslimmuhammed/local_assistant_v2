@@ -5,7 +5,6 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -17,6 +16,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.local.assistant.llm.LlmService
 import com.local.assistant.ui.theme.AppColors
+import com.local.assistant.ui.theme.GlassMark
 
 /**
  * Between the model arriving (downloaded or imported) and the first chat: the model loads into
@@ -31,12 +31,7 @@ fun PreparingScreen(llmService: LlmService) {
         verticalArrangement = Arrangement.Center,
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-        CircularProgressIndicator(
-            color = AppColors.Accent,
-            trackColor = AppColors.Border,
-            strokeWidth = 3.dp,
-            modifier = Modifier.size(40.dp),
-        )
+        GlassMark(size = 96.dp)
         Text(
             text = "Getting ready",
             style = MaterialTheme.typography.titleMedium,

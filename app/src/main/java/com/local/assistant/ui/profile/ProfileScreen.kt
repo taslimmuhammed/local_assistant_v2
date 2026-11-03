@@ -44,6 +44,9 @@ import com.local.assistant.data.prefs.SettingsStore
 import com.local.assistant.memory.MemoryControls
 import com.local.assistant.memory.core.UserProfile
 import com.local.assistant.ui.theme.AppColors
+import com.local.assistant.ui.theme.GlassShapes
+import com.local.assistant.ui.theme.glassFieldColors
+import com.local.assistant.ui.theme.GlassIconButton
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -120,7 +123,7 @@ fun ProfileScreen(viewModel: ProfileViewModel, onboarding: Boolean, onDone: () -
                 TopAppBar(
                     title = { Text("Your profile", style = MaterialTheme.typography.titleMedium) },
                     navigationIcon = {
-                        IconButton(onClick = onDone) { Icon(Icons.AutoMirrored.Outlined.ArrowBack, contentDescription = "Back") }
+                        GlassIconButton(Icons.AutoMirrored.Outlined.ArrowBack, "Back", onDone, Modifier.padding(start = 10.dp, end = 6.dp))
                     },
                     colors = TopAppBarDefaults.topAppBarColors(
                         containerColor = AppColors.Background,
@@ -166,7 +169,8 @@ fun ProfileScreen(viewModel: ProfileViewModel, onboarding: Boolean, onDone: () -
                     supportingText = problem?.let { { Text(it) } },
                     singleLine = true,
                     enabled = state.loaded,
-                    shape = RoundedCornerShape(12.dp),
+                    shape = GlassShapes.Field,
+                    colors = glassFieldColors(),
                     keyboardOptions = KeyboardOptions(
                         keyboardType = if (field.numeric) KeyboardType.Number else KeyboardType.Text,
                         capitalization = if (field.numeric) KeyboardCapitalization.None else KeyboardCapitalization.Sentences,

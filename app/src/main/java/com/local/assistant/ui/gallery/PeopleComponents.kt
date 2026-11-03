@@ -72,6 +72,8 @@ import com.local.assistant.gallery.FaceEntity
 import com.local.assistant.gallery.PhotoThumbnails
 import com.local.assistant.gallery.faces.FaceIndex
 import com.local.assistant.ui.theme.AppColors
+import com.local.assistant.ui.theme.glass
+import com.local.assistant.ui.theme.Glass
 import java.text.NumberFormat
 
 /**
@@ -93,8 +95,7 @@ fun PeopleSection(viewModel: GalleryViewModel, onOpen: (PeopleTarget) -> Unit) {
             Modifier
                 .fillMaxWidth()
                 .padding(top = 8.dp)
-                .clip(RoundedCornerShape(16.dp))
-                .background(AppColors.SurfaceMuted)
+                .glass(RoundedCornerShape(18.dp))
                 .padding(16.dp),
         ) {
             Text("Find people in your photos", style = MaterialTheme.typography.titleSmall, color = AppColors.TextPrimary)
@@ -242,7 +243,7 @@ fun PersonSheet(target: PeopleTarget, viewModel: GalleryViewModel, onDismiss: ()
     ModalBottomSheet(
         onDismissRequest = onDismiss,
         sheetState = state,
-        containerColor = AppColors.Background,
+        containerColor = Glass.Sheet,
         // Never moved by a drag, as the photo results sheet (PhotoSheet). Here a swipe while the
         // photos were still loading also dragged the sheet shut, the grid being empty.
         sheetGesturesEnabled = false,
@@ -480,7 +481,7 @@ private fun SecondaryAction(label: String, danger: Boolean = false, onClick: () 
         selected = false,
         onClick = onClick,
         label = { Text(label, color = if (danger) AppColors.Danger else AppColors.TextPrimary) },
-        colors = FilterChipDefaults.filterChipColors(containerColor = AppColors.Background),
+        colors = FilterChipDefaults.filterChipColors(containerColor = Glass.Raised),
         border = FilterChipDefaults.filterChipBorder(enabled = true, selected = false, borderColor = AppColors.TextSecondary),
     )
 }

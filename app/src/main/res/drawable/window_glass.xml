@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The window before the app draws, and behind it where the wallpaper can't be blurred: the
+     glass backdrop's own light grey (Glass.SOLID), not plain white. -->
+<shape xmlns:android="http://schemas.android.com/apk/res/android">
+    <gradient
+        android:angle="270"
+        android:startColor="#F4F4F6"
+        android:endColor="#E6E6EB" />
+</shape>

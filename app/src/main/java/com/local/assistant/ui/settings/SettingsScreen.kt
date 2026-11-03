@@ -8,6 +8,8 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -26,6 +28,7 @@ import androidx.compose.material.icons.outlined.History
 import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material.icons.outlined.Memory
 import androidx.compose.material.icons.outlined.Mic
+import androidx.compose.material.icons.outlined.NotificationsNone
 import androidx.compose.material.icons.outlined.Person
 import androidx.compose.material.icons.outlined.Public
 import androidx.compose.material.icons.outlined.RecordVoiceOver
@@ -75,12 +78,19 @@ import androidx.lifecycle.repeatOnLifecycle
 import com.local.assistant.assist.AssistantRole
 import com.local.assistant.assist.KeepReadyService
 import com.local.assistant.assist.LockScreenNotice
+import com.local.assistant.away.AwayBrief
 import com.local.assistant.data.prefs.SettingsStore
 import com.local.assistant.llm.LlmService
 import com.local.assistant.model.ModelCatalog
 import com.local.assistant.model.formatBytes
 import com.local.assistant.ui.memory.MemoryViewModel
 import com.local.assistant.ui.theme.AppColors
+import com.local.assistant.ui.theme.Glass
+import com.local.assistant.ui.theme.GlassCard
+import com.local.assistant.ui.theme.GlassIconButton
+import com.local.assistant.ui.theme.GlassSnackbarHost
+import com.local.assistant.ui.theme.fadingEdges
+import com.local.assistant.ui.theme.glass
 import com.local.assistant.ui.theme.AppSwitch
 import com.local.assistant.voice.Speaker
 import com.local.assistant.voice.NaturalVoices
@@ -98,6 +108,7 @@ import java.time.LocalDate
 enum class SettingsSection(val title: String) {
     CALLING("Calling the assistant"),
     VOICE("Voice"),
+    AWAY("While you were away"),
     MODEL("Model"),
     MEMORY("Memory and history"),
     ABOUT("About"),
@@ -120,6 +131,7 @@ fun SettingsScreen(
     voicePacks: List<VoicePackInstaller>,
     webSearchOn: Boolean,
     memory: MemoryViewModel,
+    awayBrief: AwayBrief,
     section: SettingsSection?,
     onSection: (SettingsSection?) -> Unit,
     onBack: () -> Unit,
@@ -134,14 +146,17 @@ fun SettingsScreen(
 
     Scaffold(
         containerColor = AppColors.Background,
-        snackbarHost = { SnackbarHost(snackbar) },
+        snackbarHost = { GlassSnackbarHost(snackbar) },
         topBar = {
             TopAppBar(
                 title = { Text(section?.title ?: "Settings", style = MaterialTheme.typography.titleMedium) },
                 navigationIcon = {
-                    IconButton(onClick = { if (section != null) onSection(null) else onBack() }) {
-                        Icon(Icons.AutoMirrored.Outlined.ArrowBack, contentDescription = "Back")
-                    }
+                    GlassIconButton(
+                        Icons.AutoMirrored.Outlined.ArrowBack,
+                        "Back",
+                        { if (section != null) onSection(null) else onBack() },
+                        Modifier.padding(start = 10.dp, end = 6.dp),
+                    )
                 },
                 colors = TopAppBarDefaults.topAppBarColors(
                     containerColor = AppColors.Background,
@@ -153,11 +168,14 @@ fun SettingsScreen(
     ) { padding ->
         // Each page scrolls on its own, from its top.
         key(section) {
-            Column(Modifier.fillMaxSize().padding(padding).verticalScroll(rememberScrollState())) {
+            Column(Modifier.fillMaxSize().padding(padding).fadingEdges(top = 12.dp, bottom = 0.dp).verticalScroll(rememberScrollState())) {
+                // Each page is one card of glass, the brief's.
+                GlassCard(Modifier.padding(start = 12.dp, end = 12.dp, top = 8.dp), padding = 6.dp) {
                 when (section) {
                     null -> MainPage(settings, webSearchOn, memory, onSection, onOpenProfile, onOpenWebSearch)
                     SettingsSection.CALLING -> CallingSettings(settings)
                     SettingsSection.VOICE -> VoiceSettings(settings, speaker, voicePacks)
+                    SettingsSection.AWAY -> AwaySettings(settings, awayBrief)
                     SettingsSection.MODEL -> {
                         val state by llmService.state.collectAsStateWithLifecycle()
                         NavRow(
@@ -174,6 +192,7 @@ fun SettingsScreen(
                     SettingsSection.MEMORY -> MemorySettings(memory)
                     SettingsSection.ABOUT -> LicenceEntries()
                     SettingsSection.TEST_BUILD -> TestBuildSettings()
+                }
                 }
                 Spacer(Modifier.height(32.dp))
             }
@@ -194,7 +213,6 @@ private fun MainPage(
     val context = LocalContext.current
     val paused by memory.memoryPaused.collectAsStateWithLifecycle()
     val retention by memory.retentionDays.collectAsStateWithLifecycle()
-    Spacer(Modifier.height(8.dp))
     SectionRow(Icons.Outlined.Person, "Your profile", "Name, age, work and more, kept in mind in every chat", onOpenProfile)
     SectionRow(
         Icons.Outlined.Mic,
@@ -218,6 +236,7 @@ private fun MainPage(
             SettingsStore.SPEECH_RATES.firstOrNull { it.first == settings.speechRate }?.second?.let { "$it pace" },
         ).joinToString(" \u00b7 "),
     ) { onSection(SettingsSection.VOICE) }
+    SectionRow(Icons.Outlined.NotificationsNone, SettingsSection.AWAY.title, awaySummary(settings, context)) { onSection(SettingsSection.AWAY) }
     SectionRow(
         Icons.Outlined.Memory,
         SettingsSection.MODEL.title,
@@ -440,7 +459,7 @@ private fun VoiceSettings(settings: SettingsStore, speaker: Speaker, voicePacks:
                     },
                     label = { Text(label) },
                     colors = FilterChipDefaults.filterChipColors(
-                        containerColor = AppColors.Background,
+                        containerColor = Glass.Raised,
                         labelColor = AppColors.TextPrimary,
                         selectedContainerColor = AppColors.Accent,
                         selectedLabelColor = AppColors.OnAccent,
@@ -809,7 +828,7 @@ private fun WakeSampleRecorder() {
                     onClick = { onPick(option) },
                     label = { Text(label(option)) },
                     colors = FilterChipDefaults.filterChipColors(
-                        containerColor = AppColors.Background,
+                        containerColor = Glass.Raised,
                         labelColor = AppColors.TextPrimary,
                         selectedContainerColor = AppColors.Accent,
                         selectedLabelColor = AppColors.OnAccent,
@@ -1007,7 +1026,9 @@ private fun SectionRow(icon: ImageVector, title: String, subtitle: String, onCli
         Modifier.fillMaxWidth().clickable(onClick = onClick).padding(horizontal = 16.dp, vertical = 14.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Icon(icon, contentDescription = null, tint = AppColors.TextPrimary, modifier = Modifier.padding(end = 16.dp))
+        Box(Modifier.padding(end = 14.dp).size(38.dp).glass(CircleShape, Glass.Raised), contentAlignment = Alignment.Center) {
+            Icon(icon, contentDescription = null, tint = AppColors.TextPrimary, modifier = Modifier.size(20.dp))
+        }
         Column(Modifier.weight(1f)) {
             Text(title, style = MaterialTheme.typography.bodyLarge, color = AppColors.TextPrimary)
             Text(subtitle, style = MaterialTheme.typography.bodySmall, color = AppColors.TextSecondary)
@@ -1018,7 +1039,7 @@ private fun SectionRow(icon: ImageVector, title: String, subtitle: String, onCli
 
 /** A setting that is on or off: its name, what it does, and the switch. */
 @Composable
-private fun SwitchRow(title: String, subtitle: String, checked: Boolean, onCheckedChange: (Boolean) -> Unit) {
+internal fun SwitchRow(title: String, subtitle: String, checked: Boolean, onCheckedChange: (Boolean) -> Unit) {
     Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
         Column(Modifier.weight(1f).padding(end = 16.dp)) {
             Text(title, style = MaterialTheme.typography.bodyLarge, color = AppColors.TextPrimary)
@@ -1029,7 +1050,7 @@ private fun SwitchRow(title: String, subtitle: String, checked: Boolean, onCheck
 }
 
 @Composable
-private fun NavRow(title: String, subtitle: String, onClick: () -> Unit) {
+internal fun NavRow(title: String, subtitle: String, onClick: () -> Unit) {
     Row(
         Modifier.fillMaxWidth().clickable(onClick = onClick).padding(horizontal = 16.dp, vertical = 12.dp),
         verticalAlignment = Alignment.CenterVertically,

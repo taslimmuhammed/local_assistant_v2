@@ -33,6 +33,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
@@ -86,7 +87,14 @@ import androidx.compose.ui.draw.drawWithCache
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.geometry.center
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.ShaderBrush
+import androidx.compose.ui.graphics.drawOutline
+import androidx.compose.ui.graphics.drawscope.DrawScope
+import androidx.compose.ui.graphics.drawscope.translate
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.SolidColor
@@ -124,8 +132,13 @@ import com.local.assistant.ui.chat.ThinkingIndicator
 import com.local.assistant.ui.privacy.HiddenDetails
 import com.local.assistant.ui.privacy.rememberShown
 import com.local.assistant.ui.theme.AppColors
+import com.local.assistant.ui.theme.GlassRoundButton
+import com.local.assistant.ui.theme.liquidGlass
+import com.local.assistant.ui.theme.GlassShapes
+import com.local.assistant.ui.theme.Glass
 import kotlinx.coroutines.launch
 import kotlin.math.PI
+import kotlin.math.cos
 import kotlin.math.sin
 import kotlin.math.sqrt
 
@@ -138,6 +151,8 @@ import kotlin.math.sqrt
 @Composable
 fun AssistOverlay(
     viewModel: AssistViewModel,
+    /** The system blurs what's behind: the panel can be frosted glass rather than near-solid. */
+    blurred: Boolean,
     /** On the lock screen with talking there turned off: the panel only says how to turn it on. */
     lockedOut: Boolean,
     /** Goes up each time opening the app waited for an unlock that was cancelled. */
@@ -307,7 +322,7 @@ fun AssistOverlay(
                     // A tap on the panel stays on the panel, rather than reaching the scrim and closing it.
                     .pointerInput(Unit) { detectTapGestures { } },
             ) {
-                GlowPanel(energy) {
+                GlowPanel(energy, blurred) {
                     // The handle and the header: down to close, up to open the app.
                     val grab = Modifier.pointerInput(Unit) {
                         detectVerticalDragGestures(
@@ -426,14 +441,18 @@ fun AssistOverlay(
 
 private enum class OrbMode { LISTENING, BUSY, IDLE }
 
-/** The panel, and the light that runs around its edge (and, from Android 12, glows past it). */
+/**
+ * The panel: frosted glass, lit from above, with a bright inner rim, and a band of colour that
+ * runs around its edge (and, from Android 12, glows past it). Behind the controls, soft colour
+ * drifts like light through the glass; it brightens while the assistant listens, thinks or speaks.
+ */
 @Composable
-private fun GlowPanel(energy: State<Float>, content: @Composable ColumnScope.() -> Unit) {
+private fun GlowPanel(energy: State<Float>, blurred: Boolean, content: @Composable ColumnScope.() -> Unit) {
     val transition = rememberInfiniteTransition(label = "glow")
     val angle = transition.animateFloat(
         initialValue = 0f,
         targetValue = 360f,
-        animationSpec = infiniteRepeatable(tween(durationMillis = 4200, easing = LinearEasing)),
+        animationSpec = infiniteRepeatable(tween(durationMillis = 6000, easing = LinearEasing)),
         label = "angle",
     )
     Box {
@@ -441,16 +460,15 @@ private fun GlowPanel(energy: State<Float>, content: @Composable ColumnScope.() 
             Box(
                 Modifier
                     .matchParentSize()
-                    .graphicsLayer { alpha = 0.1f + 0.45f * energy.value }
-                    .blur(24.dp, BlurredEdgeTreatment.Unbounded)
+                    .graphicsLayer { alpha = 0.2f + 0.6f * energy.value }
+                    .blur(22.dp, BlurredEdgeTreatment.Unbounded)
                     .drawWithCache {
                         val outline = PanelShape.createOutline(size, layoutDirection, this)
-                        val path = Path().apply { addOutline(outline) }
-                        val brush = Brush.sweepGradient(Sheen, size.center)
+                        val light = TurningSweep(Iris, size.center)
+                        val stroke = Stroke(width = 8.dp.toPx())
                         onDrawBehind {
-                            clipPath(path) {
-                                rotate(angle.value) { drawCircle(brush, radius = size.maxDimension, center = center) }
-                            }
+                            light.turn(angle.value)
+                            drawOutline(outline, light.brush, style = stroke)
                         }
                     },
             )
@@ -459,21 +477,67 @@ private fun GlowPanel(energy: State<Float>, content: @Composable ColumnScope.() 
             Modifier
                 .fillMaxWidth()
                 .clip(PanelShape)
-                .background(AppColors.Border)
+                .background(if (blurred) Frosted else Solid)
                 .drawWithCache {
-                    val brush = Brush.sweepGradient(Sheen, size.center)
+                    val outline = PanelShape.createOutline(size, layoutDirection, this)
+                    val inset = RING_WIDTH.toPx()
+                    val inner = InnerShape.createOutline(Size(size.width - 2 * inset, size.height - 2 * inset), layoutDirection, this)
+                    val light = TurningSweep(Iris, size.center)
+                    // Half of the stroke falls outside the clip: twice the ring's width shows one.
+                    val ring = Stroke(width = 2 * inset)
+                    val rim = Stroke(width = 1.dp.toPx())
+                    val rimLight = Brush.verticalGradient(listOf(Color.White, Color.White.copy(alpha = 0.2f)))
+                    val sheen = Brush.verticalGradient(
+                        0f to Color.White.copy(alpha = 0.6f),
+                        0.4f to Color.White.copy(alpha = 0f),
+                        endY = minOf(size.height, SHEEN_DEPTH.toPx()),
+                    )
                     onDrawBehind {
-                        rotate(angle.value) {
-                            drawCircle(brush, radius = size.maxDimension, center = center, alpha = 0.35f + 0.65f * energy.value)
-                        }
+                        aurora(angle.value, energy.value)
+                        drawRect(sheen)
+                        translate(inset, inset) { drawOutline(inner, rimLight, style = rim) }
+                        light.turn(angle.value)
+                        drawOutline(outline, light.brush, style = ring, alpha = 0.45f + 0.55f * energy.value)
                     }
                 }
                 .padding(RING_WIDTH)
-                .clip(InnerShape)
-                .background(AppColors.Background)
                 .animateContentSize(spring(stiffness = Spring.StiffnessMediumLow)),
             content = content,
         )
+    }
+}
+
+/**
+ * Three soft pools of colour low in the panel, drifting slowly round, where the orb and the
+ * voice are: the glass catching light. Stronger with [energy].
+ */
+private fun DrawScope.aurora(degrees: Float, energy: Float) {
+    val turn = Math.toRadians(degrees.toDouble())
+    val radius = size.width * 0.5f
+    val strength = 0.1f + 0.22f * energy
+    for (i in 0 until 3) {
+        val phase = turn + i * 2.1
+        val center = Offset(
+            x = size.width * (0.2f + 0.3f * i) + (sin(phase) * size.width * 0.08).toFloat(),
+            y = size.height - radius * 0.3f + (cos(phase) * radius * 0.12).toFloat(),
+        )
+        drawCircle(
+            Brush.radialGradient(listOf(Iris[i * 2].copy(alpha = strength), Color.Transparent), center, radius),
+            radius = radius,
+            center = center,
+        )
+    }
+}
+
+/** A sweep of [colors] around [center] that turns without being rebuilt: one shader, its matrix moved. */
+private class TurningSweep(colors: List<Color>, private val center: Offset) {
+    private val shader = android.graphics.SweepGradient(center.x, center.y, colors.map { it.toArgb() }.toIntArray(), null)
+    private val matrix = android.graphics.Matrix()
+    val brush = ShaderBrush(shader)
+
+    fun turn(degrees: Float) {
+        matrix.setRotate(degrees, center.x, center.y)
+        shader.setLocalMatrix(matrix)
     }
 }
 
@@ -486,29 +550,27 @@ private fun Header(
     onOpenApp: () -> Unit,
 ) {
     Row(
-        Modifier.fillMaxWidth().padding(start = 16.dp, end = 4.dp, top = 2.dp),
+        Modifier.fillMaxWidth().padding(start = 16.dp, end = 12.dp, top = 4.dp, bottom = 2.dp),
         verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
         AssistantMark(energy)
-        Spacer(Modifier.width(10.dp))
         Text("Assistant", style = MaterialTheme.typography.titleMedium, color = AppColors.TextPrimary)
         Spacer(Modifier.weight(1f))
         if (showMute) {
-            IconButton(onClick = onToggleMute) {
-                Icon(
-                    if (muted) Icons.AutoMirrored.Outlined.VolumeOff else Icons.AutoMirrored.Outlined.VolumeUp,
-                    contentDescription = if (muted) "Read answers aloud" else "Don't read answers aloud",
-                    tint = AppColors.TextSecondary,
-                )
-            }
+            GlassRoundButton(
+                if (muted) Icons.AutoMirrored.Outlined.VolumeOff else Icons.AutoMirrored.Outlined.VolumeUp,
+                if (muted) "Read answers aloud" else "Don't read answers aloud",
+                onToggleMute,
+                size = HEADER_BUTTON,
+                iconSize = 18.dp,
+            )
         }
-        IconButton(onClick = onOpenApp) {
-            Icon(Icons.AutoMirrored.Outlined.OpenInNew, contentDescription = "Open in app", tint = AppColors.TextSecondary)
-        }
+        GlassRoundButton(Icons.AutoMirrored.Outlined.OpenInNew, "Open in app", onOpenApp, size = HEADER_BUTTON, iconSize = 18.dp)
     }
 }
 
-/** The app's dot, alive: it breathes, and brightens a ring around itself with the light. */
+/** The app's dot, alive: a dark glass bead that breathes, haloed while the assistant works. */
 @Composable
 private fun AssistantMark(energy: State<Float>) {
     val transition = rememberInfiniteTransition(label = "mark")
@@ -518,10 +580,11 @@ private fun AssistantMark(energy: State<Float>) {
         animationSpec = infiniteRepeatable(tween(1100, easing = FastOutSlowInEasing), RepeatMode.Reverse),
         label = "breath",
     )
-    Canvas(Modifier.size(18.dp)) {
+    Canvas(Modifier.size(20.dp)) {
         val r = size.minDimension / 2
-        drawCircle(AppColors.TextPrimary.copy(alpha = 0.12f * energy.value), radius = r * breath.value)
-        drawCircle(AppColors.TextPrimary, radius = r * 0.45f)
+        drawCircle(AppColors.TextPrimary.copy(alpha = 0.08f + 0.14f * energy.value), radius = r * breath.value)
+        drawCircle(Brush.radialGradient(listOf(Color(0xFF52525B), AppColors.TextPrimary), center = center - Offset(r * 0.15f, r * 0.2f), radius = r * 0.6f), radius = r * 0.5f)
+        drawCircle(Brush.verticalGradient(listOf(Color.White.copy(alpha = 0.55f), Color.Transparent), startY = center.y - r * 0.5f, endY = center.y), radius = r * 0.5f)
     }
 }
 
@@ -652,22 +715,22 @@ private fun Question(text: String, voice: Boolean, durationMs: Long?) {
             Column(
                 Modifier
                     .widthIn(max = 280.dp)
-                    .clip(RoundedCornerShape(20.dp))
-                    .background(AppColors.SurfaceMuted)
+                    .clip(GlassShapes.Mine)
+                    .background(Glass.Mine)
                     .padding(horizontal = 14.dp, vertical = 8.dp),
             ) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Icon(Icons.Outlined.Mic, contentDescription = null, tint = AppColors.TextPrimary, modifier = Modifier.size(16.dp))
+                    Icon(Icons.Outlined.Mic, contentDescription = null, tint = Color.White, modifier = Modifier.size(16.dp))
                     Spacer(Modifier.width(6.dp))
                     Text(
                         listOfNotNull("Voice message", durationMs?.let(::formatSeconds)).joinToString(" · "),
                         style = MaterialTheme.typography.bodyMedium,
-                        color = AppColors.TextPrimary,
+                        color = Color.White.copy(alpha = 0.75f),
                     )
                 }
                 if (text.isNotBlank()) {
                     Spacer(Modifier.height(4.dp))
-                    com.local.assistant.ui.chat.TranscribedWords(text)
+                    com.local.assistant.ui.chat.TranscribedWords(text, color = Color.White)
                 }
             }
         }
@@ -677,12 +740,12 @@ private fun Question(text: String, voice: Boolean, durationMs: Long?) {
                 Text(
                     text = shown.text,
                     style = MaterialTheme.typography.bodyLarge,
-                    color = AppColors.TextPrimary,
+                    color = Color.White,
                     modifier = Modifier
                         .padding(top = if (voice) 4.dp else 0.dp)
                         .widthIn(max = 280.dp)
-                        .clip(RoundedCornerShape(20.dp))
-                        .background(AppColors.SurfaceMuted)
+                        .clip(GlassShapes.Mine)
+                        .background(Glass.Mine)
                         .padding(horizontal = 14.dp, vertical = 8.dp),
                 )
             }
@@ -743,7 +806,8 @@ private fun VoiceWave(level: Float, speaking: Boolean, modifier: Modifier = Modi
             }
             drawPath(
                 path = path,
-                color = AppColors.TextPrimary.copy(alpha = wave.alpha),
+                brush = WaveInk,
+                alpha = wave.alpha,
                 style = Stroke(width = wave.width.dp.toPx(), cap = StrokeCap.Round),
             )
         }
@@ -809,7 +873,8 @@ private fun Orb(mode: OrbMode, level: Float, onClick: () -> Unit) {
                 for (i in 0 until 2) {
                     val t = (ripple.value + i * 0.5f) % 1f
                     drawCircle(
-                        color = AppColors.TextPrimary.copy(alpha = (1f - t) * 0.22f),
+                        brush = Brush.sweepGradient(Iris, center),
+                        alpha = (1f - t) * 0.5f,
                         radius = core + (reach - core) * t,
                         style = Stroke(width = 1.5.dp.toPx()),
                     )
@@ -818,9 +883,9 @@ private fun Orb(mode: OrbMode, level: Float, onClick: () -> Unit) {
             if (mode == OrbMode.BUSY) {
                 rotate(spin.value) {
                     drawCircle(
-                        brush = Brush.sweepGradient(listOf(Color.Transparent, AppColors.TextSecondary, AppColors.TextPrimary), center),
+                        brush = Brush.sweepGradient(listOf(Color.Transparent) + Iris.take(4), center),
                         radius = core + 5.dp.toPx(),
-                        style = Stroke(width = 2.dp.toPx(), cap = StrokeCap.Round),
+                        style = Stroke(width = 2.5.dp.toPx(), cap = StrokeCap.Round),
                     )
                 }
             }
@@ -835,6 +900,8 @@ private fun Orb(mode: OrbMode, level: Float, onClick: () -> Unit) {
                 }
                 .clip(CircleShape)
                 .background(Brush.radialGradient(listOf(Color(0xFF3F3F46), AppColors.Accent), radius = 90f))
+                // Dark glass: lit from above, a bright rim.
+                .liquidGlass(CircleShape, Color.Transparent, sheen = 0.3f)
                 .clickable(onClick = onClick),
             contentAlignment = Alignment.Center,
         ) {
@@ -850,16 +917,7 @@ private fun Orb(mode: OrbMode, level: Float, onClick: () -> Unit) {
 
 @Composable
 private fun RoundAction(icon: ImageVector, label: String, onClick: () -> Unit) {
-    Box(
-        Modifier
-            .size(48.dp)
-            .clip(CircleShape)
-            .background(AppColors.SurfaceMuted)
-            .clickable(onClick = onClick),
-        contentAlignment = Alignment.Center,
-    ) {
-        Icon(icon, contentDescription = label, tint = AppColors.TextPrimary, modifier = Modifier.size(22.dp))
-    }
+    GlassRoundButton(icon, label, onClick, size = 52.dp)
 }
 
 /** Typing instead: the app's composer, with the mic to go back to talking. */
@@ -894,9 +952,9 @@ private fun TextControls(
         Box(
             Modifier
                 .weight(1f)
-                .clip(RoundedCornerShape(24.dp))
-                .background(AppColors.SurfaceMuted)
-                .padding(horizontal = 16.dp, vertical = 12.dp),
+                .heightIn(min = 52.dp)
+                .liquidGlass(RoundedCornerShape(26.dp))
+                .padding(horizontal = 18.dp, vertical = 14.dp),
         ) {
             if (text.isEmpty()) {
                 Text("Ask anything", style = MaterialTheme.typography.bodyLarge, color = AppColors.TextSecondary)
@@ -913,18 +971,21 @@ private fun TextControls(
             )
         }
         val enabled = busy || text.isNotBlank()
-        IconButton(
-            onClick = { if (busy) onStop() else submit() },
-            enabled = enabled,
-            modifier = Modifier
-                .size(48.dp)
+        Box(
+            Modifier
+                .size(52.dp)
                 .clip(CircleShape)
-                .background(if (enabled) AppColors.Accent else AppColors.Border),
+                .then(
+                    if (enabled) Modifier.background(Glass.Mine).liquidGlass(CircleShape, Color.Transparent, sheen = 0.22f)
+                    else Modifier.liquidGlass(CircleShape),
+                )
+                .clickable(enabled = enabled) { if (busy) onStop() else submit() },
+            contentAlignment = Alignment.Center,
         ) {
             Icon(
                 if (busy) Icons.Outlined.Stop else Icons.AutoMirrored.Outlined.Send,
                 contentDescription = if (busy) "Stop" else "Send",
-                tint = AppColors.OnAccent,
+                tint = if (enabled) AppColors.OnAccent else AppColors.TextSecondary,
                 modifier = Modifier.size(20.dp),
             )
         }
@@ -955,18 +1016,19 @@ private val Waves = listOf(
     Wave(cycles = 3.1f, speed = 3, offset = 2.4f, scale = 0.45f, alpha = 0.2f, width = 1.2f),
 )
 
-/** Graphite to white and back: the app's own greys, as light moving over metal. */
-private val Sheen = listOf(
-    Color(0xFF18181B),
-    Color(0xFF52525B),
-    Color(0xFFD4D4D8),
-    Color(0xFFFFFFFF),
-    Color(0xFFA1A1AA),
-    Color(0xFF27272A),
-    Color(0xFF18181B),
-)
+private val Iris = Glass.Iris
 
-private val Scrim = Color(0x47000000)
+/** The voice's lines: the same colours, deepened to read on the white glass. */
+private val WaveInk = Brush.horizontalGradient(listOf(Color(0xFF3B6BF0), Color(0xFF8B4FEF), Color(0xFFE5468F), Color(0xFF3B6BF0)))
+
+/** Lighter than before: the blurred screen behind is part of the glass's look, not a shadow. */
+private val Scrim = Color(0x2E000000)
+
+/** The panel's glass: white over the blurred screen, bright at the top; near-solid where nothing is blurred. */
+private val Frosted = Brush.verticalGradient(listOf(Color.White.copy(alpha = 0.74f), Color.White.copy(alpha = 0.6f)))
+private val Solid = SolidColor(Color.White.copy(alpha = 0.97f))
+private val SHEEN_DEPTH = 220.dp
+private val HEADER_BUTTON = 38.dp
 private val RING_WIDTH = 2.dp
 private val PanelShape = RoundedCornerShape(30.dp)
 private val InnerShape = RoundedCornerShape(28.dp)

@@ -34,7 +34,11 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.graphics.Color
 import com.local.assistant.ui.theme.AppColors
+import com.local.assistant.ui.theme.Glass
+import com.local.assistant.ui.theme.GlassShapes
+import com.local.assistant.ui.theme.glass
 import java.io.File
 
 /** Decodes at a bounded size: these are already downscaled on import, but never trust that. */
@@ -64,6 +68,8 @@ fun AudioAttachment(
     path: String,
     durationMs: Long?,
     modifier: Modifier = Modifier,
+    /** The user's own, in a sent message: dark, like their other messages. */
+    mine: Boolean = false,
     /** Drawn under the player in the same box: what was said, when it was written down. */
     below: (@Composable () -> Unit)? = null,
 ) {
@@ -82,11 +88,12 @@ fun AudioAttachment(
         }
     }
 
+    val ink = if (mine) Color.White else AppColors.TextPrimary
+    val quiet = if (mine) Color.White.copy(alpha = 0.7f) else AppColors.TextSecondary
     Column(
         modifier = modifier
             .widthIn(max = 300.dp)
-            .clip(RoundedCornerShape(20.dp))
-            .background(AppColors.SurfaceMuted),
+            .then(if (mine) Modifier.clip(GlassShapes.Mine).background(Glass.Mine) else Modifier.glass(RoundedCornerShape(20.dp), Glass.Raised)),
     ) {
     Row(
         modifier = Modifier.padding(start = 4.dp, end = 14.dp, top = 4.dp, bottom = 4.dp),
@@ -122,20 +129,20 @@ fun AudioAttachment(
             Icon(
                 imageVector = if (playing) Icons.Filled.Stop else Icons.Filled.PlayArrow,
                 contentDescription = if (playing) "Stop" else "Play",
-                tint = AppColors.TextPrimary,
+                tint = ink,
                 modifier = Modifier.size(20.dp),
             )
         }
         Icon(
             Icons.Outlined.GraphicEq,
             contentDescription = null,
-            tint = AppColors.TextSecondary,
+            tint = quiet,
             modifier = Modifier.size(18.dp),
         )
         Text(
             text = formatDuration(durationMs),
             style = MaterialTheme.typography.bodyMedium,
-            color = AppColors.TextSecondary,
+            color = quiet,
             modifier = Modifier.padding(start = 8.dp),
         )
     }

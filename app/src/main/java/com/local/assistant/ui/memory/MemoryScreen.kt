@@ -89,6 +89,16 @@ import com.local.assistant.ui.privacy.HiddenDetails
 import com.local.assistant.ui.privacy.LocalSensitive
 import com.local.assistant.ui.privacy.rememberShown
 import com.local.assistant.ui.theme.AppColors
+import com.local.assistant.ui.theme.GlassShapes
+import com.local.assistant.ui.theme.glassFieldColors
+import androidx.compose.ui.graphics.Color
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.ui.platform.LocalDensity
+import com.local.assistant.ui.theme.glass
+import com.local.assistant.ui.theme.GlassSnackbarHost
+import com.local.assistant.ui.theme.Glass
+import com.local.assistant.ui.theme.GlassIconButton
 import kotlinx.coroutines.launch
 import java.time.Instant
 import java.time.LocalDate
@@ -125,7 +135,7 @@ fun MemoryScreen(viewModel: MemoryViewModel, onBack: () -> Unit) {
 
     Scaffold(
         containerColor = AppColors.Background,
-        snackbarHost = { SnackbarHost(snackbar) },
+        snackbarHost = { GlassSnackbarHost(snackbar) },
         floatingActionButton = {
             // The same as sending a photo and saying "remember this": the model names and
             // describes it, and it is kept with what it wrote.
@@ -149,7 +159,7 @@ fun MemoryScreen(viewModel: MemoryViewModel, onBack: () -> Unit) {
             TopAppBar(
                 title = { Text("What I know about you", style = MaterialTheme.typography.titleMedium) },
                 navigationIcon = {
-                    IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Outlined.ArrowBack, contentDescription = "Back") }
+                    GlassIconButton(Icons.AutoMirrored.Outlined.ArrowBack, "Back", onBack, Modifier.padding(start = 10.dp, end = 6.dp))
                 },
                 colors = TopAppBarDefaults.topAppBarColors(
                     containerColor = AppColors.Background,
@@ -193,7 +203,8 @@ private fun FactsTab(viewModel: MemoryViewModel) {
                 placeholder = { Text("Search") },
                 leadingIcon = { Icon(Icons.Outlined.Search, contentDescription = null) },
                 singleLine = true,
-                shape = RoundedCornerShape(12.dp),
+                shape = GlassShapes.Field,
+                colors = glassFieldColors(),
             )
         }
         if (paused) item { Note("Memory is paused. Nothing new is remembered until you turn it back on below.") }
@@ -271,7 +282,7 @@ private fun FactRow(fact: FactEntity, onClick: () -> Unit, onPin: () -> Unit) {
     val shown = rememberShown(fact.value)
     val sensitive = LocalSensitive.current
     Row(
-        Modifier.fillMaxWidth().background(AppColors.Background)
+        Modifier.fillMaxWidth().glass(RowShape)
             // Editing shows the value in full: asked for first, like showing it.
             .clickable(onClick = { if (shown.hidden) sensitive?.reveal() else onClick() })
             .padding(start = 16.dp, top = 8.dp, bottom = 8.dp),
@@ -330,8 +341,8 @@ private fun EditDialog(fact: FactEntity, viewModel: MemoryViewModel, onDone: () 
 @Composable
 private fun DuplicatesCard(suggestions: List<DuplicateSuggestion>, viewModel: MemoryViewModel) {
     Column(
-        Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)
-            .background(AppColors.SurfaceMuted, RoundedCornerShape(12.dp)).padding(12.dp),
+        Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 6.dp)
+            .glass(RowShape, Glass.Raised).padding(14.dp),
     ) {
         Text("Possible duplicates", style = MaterialTheme.typography.titleSmall, color = AppColors.TextPrimary)
         for (suggestion in suggestions.take(MAX_SUGGESTIONS)) {
@@ -379,7 +390,7 @@ private fun AgendaTab(viewModel: MemoryViewModel) {
 @Composable
 private fun TaskRow(task: TaskEntity, onDone: () -> Unit) {
     Row(
-        Modifier.fillMaxWidth().background(AppColors.Background).padding(horizontal = 8.dp, vertical = 4.dp),
+        Modifier.fillMaxWidth().glass(RowShape).padding(horizontal = 8.dp, vertical = 4.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Checkbox(checked = false, onCheckedChange = { onDone() })
@@ -396,7 +407,7 @@ private fun TaskRow(task: TaskEntity, onDone: () -> Unit) {
 
 @Composable
 private fun EventRow(event: EventEntity) {
-    Column(Modifier.fillMaxWidth().background(AppColors.Background).padding(horizontal = 16.dp, vertical = 10.dp)) {
+    Column(Modifier.fillMaxWidth().glass(RowShape).padding(horizontal = 16.dp, vertical = 10.dp)) {
         Text(event.title, style = MaterialTheme.typography.bodyLarge, color = AppColors.TextPrimary)
         Text(
             listOfNotNull(formatWhen(event.startsAt, event.allDay), event.recurrence?.let { "repeats" }).joinToString(" · "),
@@ -454,7 +465,10 @@ private fun ImagesTab(viewModel: MemoryViewModel) {
 /** Where the new image will appear, while the model reads it. */
 @Composable
 private fun AddingImageRow() {
-    Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+    Row(
+        Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 3.dp).glass(RowShape).padding(horizontal = 16.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
         Box(Modifier.size(56.dp).clip(RoundedCornerShape(10.dp)).background(AppColors.SurfaceMuted), contentAlignment = Alignment.Center) {
             CircularProgressIndicator(Modifier.size(22.dp), strokeWidth = 2.dp, color = AppColors.Accent)
         }
@@ -468,7 +482,7 @@ private fun AddingImageRow() {
 @Composable
 private fun SavedImageRow(note: NoteEntity, onClick: () -> Unit, onDelete: () -> Unit) {
     Row(
-        Modifier.fillMaxWidth().background(AppColors.Background).clickable(onClick = onClick).padding(start = 16.dp, end = 4.dp, top = 8.dp, bottom = 8.dp),
+        Modifier.fillMaxWidth().glass(RowShape).clickable(onClick = onClick).padding(start = 16.dp, end = 4.dp, top = 8.dp, bottom = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         val shown = rememberShown(note.details)
@@ -531,21 +545,34 @@ private const val THUMB_SAMPLE = 4
 
 // ---- Shared ----
 
-/** Swipe left to delete; the row's own list removes it, and the snackbar offers it back. */
+/**
+ * Swipe left to delete; the row's own list removes it, and the snackbar offers it back. The row
+ * is a card of glass: the red is only where it has moved off, or it would show through the row.
+ */
 @Composable
 private fun Dismissible(onDismiss: () -> Unit, content: @Composable () -> Unit) {
     val state = rememberSwipeToDismissBoxState()
     SwipeToDismissBox(
         state = state,
+        modifier = Modifier.padding(horizontal = 12.dp, vertical = 3.dp),
         enableDismissFromStartToEnd = false,
         onDismiss = { if (it == SwipeToDismissBoxValue.EndToStart) onDismiss() },
         backgroundContent = {
-            Box(Modifier.fillMaxSize().background(AppColors.Danger).padding(horizontal = 20.dp), contentAlignment = Alignment.CenterEnd) {
-                Text("Delete", color = AppColors.Background, fontWeight = FontWeight.SemiBold)
+            val moved = -(runCatching { state.requireOffset() }.getOrDefault(0f))
+            val revealed = with(LocalDensity.current) { moved.coerceAtLeast(0f).toDp() }
+            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.CenterEnd) {
+                Box(
+                    Modifier.fillMaxHeight().width(revealed).clip(RowShape).background(AppColors.Danger).padding(end = 20.dp),
+                    contentAlignment = Alignment.CenterEnd,
+                ) {
+                    Text("Delete", color = Color.White, fontWeight = FontWeight.SemiBold, maxLines = 1, softWrap = false)
+                }
             }
         },
     ) { content() }
 }
+
+private val RowShape = RoundedCornerShape(18.dp)
 
 @Composable
 private fun Note(text: String) {
