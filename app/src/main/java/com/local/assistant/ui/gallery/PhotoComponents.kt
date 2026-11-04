@@ -12,6 +12,7 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -45,6 +46,7 @@ import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material.icons.outlined.Lock
 import androidx.compose.material.icons.outlined.PhotoLibrary
+import androidx.compose.material.icons.outlined.Share
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
@@ -124,7 +126,7 @@ val LocalPhotoAccess = staticCompositionLocalOf<PhotoAccess?> { null }
 
 /** One photo, cropped to fill its box; a grey box while it loads, or if it's gone. A video shows its length. */
 @Composable
-fun PhotoThumb(mediaId: Long, thumbnails: PhotoThumbnails, modifier: Modifier = Modifier, onClick: (() -> Unit)? = null) {
+fun PhotoThumb(mediaId: Long, thumbnails: PhotoThumbnails, modifier: Modifier = Modifier, onClick: (() -> Unit)? = null, onLongClick: (() -> Unit)? = null) {
     val bitmap by produceState<ImageBitmap?>(null, mediaId) { value = thumbnails.thumbnail(mediaId) }
     val length by produceState<Long?>(null, mediaId) { value = thumbnails.videoLength(mediaId) }
     val hidden = rememberDocumentHidden(mediaId, thumbnails)
@@ -132,7 +134,13 @@ fun PhotoThumb(mediaId: Long, thumbnails: PhotoThumbnails, modifier: Modifier = 
     Box(
         modifier
             .background(AppColors.SurfaceMuted)
-            .then(if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier),
+            .then(
+                when {
+                    onLongClick != null -> Modifier.combinedClickable(onClick = onClick ?: {}, onLongClick = onLongClick)
+                    onClick != null -> Modifier.clickable(onClick = onClick)
+                    else -> Modifier
+                },
+            ),
     ) {
         shown?.let { Image(it, contentDescription = null, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize()) }
         if (hidden) DocumentLock(Modifier.align(Alignment.Center))
@@ -241,6 +249,10 @@ fun PhotoViewer(ids: List<Long>, start: Int, thumbnails: PhotoThumbnails, onClos
                 val sensitive = LocalSensitive.current
                 val documents by thumbnails.documents.collectAsState()
                 val revealed = sensitiveRevealed()
+                val share = rememberPhotoShare(thumbnails)
+                IconButton(onClick = { share(listOf(ids[pager.currentPage])) }) {
+                    Icon(Icons.Outlined.Share, contentDescription = "Share", tint = Color.White)
+                }
                 IconButton(onClick = {
                     val id = ids[pager.currentPage]
                     // Another app would show a hidden document in full: asked for first.
@@ -397,6 +409,9 @@ private fun VideoPage(uri: Uri, lengthMs: Long, startMs: Long, poster: ImageBitm
  *
  * One or two show right there as small photos. More than that would crowd the chat, so they
  * become a card, a little fanned stack with the count, that opens them all in a sheet.
+ *
+ * Any of them can be shared: the share button beside them (or a long press on one) starts
+ * picking, then the share sheet sends the picked ones to WhatsApp or any other app.
  */
 @Composable
 fun PhotoResults(set: PhotoSet, modifier: Modifier = Modifier) {
@@ -404,34 +419,63 @@ fun PhotoResults(set: PhotoSet, modifier: Modifier = Modifier) {
     // Chips written by the build that split results in two (25 Oct 2026) have no ids; skip them.
     @Suppress("SENSELESS_COMPARISON")
     if (set.ids == null || set.ids.isEmpty()) return
-    var sheetOpen by remember { mutableStateOf(false) }
+    // The sheet is open (null when not), and whether it opened to pick photos.
+    var sheet by remember { mutableStateOf<Boolean?>(null) }
     var viewing by remember { mutableStateOf<Pair<List<Long>, Int>?>(null) }
+    // Picking from the one or two shown here; null when not picking.
+    var selection by remember(set) { mutableStateOf<PhotoSelection?>(null) }
 
     if (access.hidden()) {
         LockedPhotos(set, access.onUnlock, modifier)
         return
     }
     if (set.ids.size <= INLINE_MAX) {
-        Row(modifier, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-            set.ids.forEachIndexed { index, id ->
-                PhotoThumb(
-                    id,
-                    access.thumbnails,
-                    Modifier
-                        .size(INLINE_SIZE)
-                        .shadow(6.dp, InlineShape, ambientColor = PrintShadow, spotColor = PrintShadow)
-                        .clip(InlineShape)
-                        .border(BorderStroke(2.dp, Glass.Rim), InlineShape),
-                    onClick = { viewing = set.ids to index },
+        val share = rememberPhotoShare(access.thumbnails)
+        Column(modifier, verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.Bottom) {
+                set.ids.forEachIndexed { index, id ->
+                    SelectablePhoto(
+                        id,
+                        access.thumbnails,
+                        selection,
+                        InlineShape,
+                        onOpen = { viewing = set.ids to index },
+                        onSelection = { selection = it },
+                        ids = set.ids,
+                        modifier = Modifier
+                            .size(INLINE_SIZE)
+                            .shadow(6.dp, InlineShape, ambientColor = PrintShadow, spotColor = PrintShadow)
+                            .clip(InlineShape)
+                            .border(BorderStroke(2.dp, Glass.Rim), InlineShape),
+                    )
+                }
+                // Only one or two: picking starts with them all, one tap from the share sheet.
+                if (selection == null) {
+                    GlassRoundButton(Icons.Outlined.Share, "Share photos", { selection = PhotoSelection.all(set.ids) }, size = 36.dp, iconSize = 16.dp)
+                }
+            }
+            selection?.let { picking ->
+                SelectionBar(
+                    picking,
+                    onSelection = { selection = it },
+                    onShare = { share(picking.inOrder()) },
+                    onCancel = { selection = null },
+                    modifier = Modifier.fillMaxWidth(),
                 )
             }
         }
     } else {
-        StackCard(set, access.thumbnails, onOpen = { sheetOpen = true }, modifier = modifier)
+        StackCard(set, access.thumbnails, onOpen = { sheet = false }, onShare = { sheet = true }, modifier = modifier)
     }
 
-    if (sheetOpen) {
-        PhotoSheet(set, access.thumbnails, onDismiss = { sheetOpen = false }, onOpenPhoto = { ids, index -> viewing = ids to index })
+    sheet?.let { picking ->
+        PhotoSheet(
+            set,
+            access.thumbnails,
+            picking = picking,
+            onDismiss = { sheet = null },
+            onOpenPhoto = { ids, index -> viewing = ids to index },
+        )
     }
     viewing?.let { (ids, start) -> PhotoViewer(ids, start, access.thumbnails, onClose = { viewing = null }, moments = set.moments.orEmpty()) }
 }
@@ -441,7 +485,7 @@ fun PhotoResults(set: PhotoSet, modifier: Modifier = Modifier) {
  * glass over the photos themselves: the best match, blurred out of focus, tints it from behind.
  */
 @Composable
-private fun StackCard(set: PhotoSet, thumbnails: PhotoThumbnails, onOpen: () -> Unit, modifier: Modifier) {
+private fun StackCard(set: PhotoSet, thumbnails: PhotoThumbnails, onOpen: () -> Unit, onShare: () -> Unit, modifier: Modifier) {
     val videos by produceState(0, set) { value = thumbnails.videoCount(set.ids) }
     Box(
         modifier
@@ -472,17 +516,20 @@ private fun StackCard(set: PhotoSet, thumbnails: PhotoThumbnails, onOpen: () -> 
                     maxLines = 2,
                     overflow = TextOverflow.Ellipsis,
                 )
-                Row(
-                    Modifier
-                        .padding(top = 12.dp)
-                        .clip(PillShape)
-                        .background(Glass.Mine)
-                        .liquidGlass(PillShape, Color.Transparent, sheen = 0.22f)
-                        .padding(start = 14.dp, end = 10.dp, top = 7.dp, bottom = 7.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Text("View all", style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.SemiBold, color = AppColors.OnAccent)
-                    Icon(Icons.AutoMirrored.Outlined.ArrowForward, contentDescription = null, tint = AppColors.OnAccent, modifier = Modifier.padding(start = 4.dp).size(16.dp))
+                Row(Modifier.padding(top = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Row(
+                        Modifier
+                            .clip(PillShape)
+                            .background(Glass.Mine)
+                            .liquidGlass(PillShape, Color.Transparent, sheen = 0.22f)
+                            .padding(start = 14.dp, end = 10.dp, top = 7.dp, bottom = 7.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text("View all", style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.SemiBold, color = AppColors.OnAccent)
+                        Icon(Icons.AutoMirrored.Outlined.ArrowForward, contentDescription = null, tint = AppColors.OnAccent, modifier = Modifier.padding(start = 4.dp).size(16.dp))
+                    }
+                    // Opens them all, ready to pick the ones to share.
+                    GlassRoundButton(Icons.Outlined.Share, "Share photos", onShare, Modifier.padding(start = 8.dp), size = 34.dp, iconSize = 16.dp)
                 }
             }
         }
@@ -527,11 +574,12 @@ private sealed interface SheetCell {
 
 /**
  * All of them, best match first, or by date with a heading for each month. The viewer pages
- * through them in the order shown.
+ * through them in the order shown. Opened to share ([picking]), or after the share button or a
+ * long press, a tap picks photos instead, and a bar at the bottom shares them in that order.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun PhotoSheet(set: PhotoSet, thumbnails: PhotoThumbnails, onDismiss: () -> Unit, onOpenPhoto: (List<Long>, Int) -> Unit) {
+private fun PhotoSheet(set: PhotoSet, thumbnails: PhotoThumbnails, picking: Boolean, onDismiss: () -> Unit, onOpenPhoto: (List<Long>, Int) -> Unit) {
     // Straight to full height: a gallery wants the room, and a half-open sheet only adds a step.
     val state = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val numbers = NumberFormat.getIntegerInstance()
@@ -547,6 +595,8 @@ private fun PhotoSheet(set: PhotoSet, thumbnails: PhotoThumbnails, onDismiss: ()
     val cells = remember(ordered, sort, dates) { cells(ordered, sort, dates) }
     val grid = rememberLazyGridState()
     LaunchedEffect(sort) { grid.scrollToItem(0) }
+    var selection by remember { mutableStateOf(if (picking) PhotoSelection(set.ids) else null) }
+    val share = rememberPhotoShare(thumbnails)
 
     ModalBottomSheet(
         onDismissRequest = onDismiss,
@@ -565,7 +615,14 @@ private fun PhotoSheet(set: PhotoSet, thumbnails: PhotoThumbnails, onDismiss: ()
                 }
                 Column(Modifier.weight(1f).padding(start = 12.dp)) {
                     Text(set.query.replaceFirstChar { it.titlecase(Locale.getDefault()) }, style = MaterialTheme.typography.titleMedium, color = AppColors.TextPrimary)
-                    Text("${itemCount(set.ids.size, videos)}, ${sort.subtitle}", style = MaterialTheme.typography.bodySmall, color = AppColors.TextSecondary)
+                    Text(
+                        if (selection != null) "Tap photos to pick them" else "${itemCount(set.ids.size, videos)}, ${sort.subtitle}",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = AppColors.TextSecondary,
+                    )
+                }
+                if (selection == null) {
+                    GlassRoundButton(Icons.Outlined.Share, "Share photos", { selection = PhotoSelection(set.ids) }, Modifier.padding(end = 8.dp), size = 40.dp, iconSize = 18.dp)
                 }
                 GlassRoundButton(Icons.Outlined.Close, "Close", onDismiss, Modifier.padding(end = 8.dp), size = 40.dp, iconSize = 18.dp)
             }
@@ -592,29 +649,55 @@ private fun PhotoSheet(set: PhotoSet, thumbnails: PhotoThumbnails, onDismiss: ()
                     )
                 }
             }
-            LazyVerticalGrid(
-                state = grid,
-                columns = GridCells.Adaptive(minSize = 104.dp),
-                horizontalArrangement = Arrangement.spacedBy(4.dp),
-                verticalArrangement = Arrangement.spacedBy(4.dp),
-                contentPadding = PaddingValues(start = 8.dp, end = 8.dp, bottom = 24.dp),
-                modifier = Modifier.fillMaxSize(),
-            ) {
-                items(
-                    cells,
-                    key = { cell -> if (cell is SheetCell.Month) "month-${cell.label}" else (cell as SheetCell.Photo).id },
-                    span = { cell -> GridItemSpan(if (cell is SheetCell.Month) maxLineSpan else 1) },
-                ) { cell ->
-                    when (cell) {
-                        is SheetCell.Month -> Row(
-                            Modifier.fillMaxWidth().padding(start = 8.dp, end = 8.dp, top = 14.dp, bottom = 8.dp),
-                            verticalAlignment = Alignment.Bottom,
-                        ) {
-                            Text(cell.label, style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.SemiBold, color = AppColors.TextPrimary)
-                            Text("  ${numbers.format(cell.count)}", style = MaterialTheme.typography.labelMedium, color = AppColors.TextSecondary)
+            Box(Modifier.fillMaxSize()) {
+                LazyVerticalGrid(
+                    state = grid,
+                    columns = GridCells.Adaptive(minSize = 104.dp),
+                    horizontalArrangement = Arrangement.spacedBy(4.dp),
+                    verticalArrangement = Arrangement.spacedBy(4.dp),
+                    // Room under the last row for the bar while picking.
+                    contentPadding = PaddingValues(start = 8.dp, end = 8.dp, bottom = if (selection != null) 88.dp else 24.dp),
+                    modifier = Modifier.fillMaxSize(),
+                ) {
+                    items(
+                        cells,
+                        key = { cell -> if (cell is SheetCell.Month) "month-${cell.label}" else (cell as SheetCell.Photo).id },
+                        span = { cell -> GridItemSpan(if (cell is SheetCell.Month) maxLineSpan else 1) },
+                    ) { cell ->
+                        when (cell) {
+                            is SheetCell.Month -> Row(
+                                Modifier.fillMaxWidth().padding(start = 8.dp, end = 8.dp, top = 14.dp, bottom = 8.dp),
+                                verticalAlignment = Alignment.Bottom,
+                            ) {
+                                Text(cell.label, style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.SemiBold, color = AppColors.TextPrimary)
+                                Text("  ${numbers.format(cell.count)}", style = MaterialTheme.typography.labelMedium, color = AppColors.TextSecondary)
+                            }
+                            is SheetCell.Photo -> SelectablePhoto(
+                                cell.id,
+                                thumbnails,
+                                selection,
+                                GridShape,
+                                onOpen = { onOpenPhoto(ordered, cell.index) },
+                                onSelection = { selection = it },
+                                ids = set.ids,
+                                modifier = Modifier.aspectRatio(1f).clip(GridShape),
+                            )
                         }
-                        is SheetCell.Photo -> PhotoThumb(cell.id, thumbnails, Modifier.aspectRatio(1f).clip(GridShape), onClick = { onOpenPhoto(ordered, cell.index) })
                     }
+                }
+                selection?.let { picking ->
+                    SelectionBar(
+                        picking,
+                        onSelection = { selection = it },
+                        onShare = { share(picking.inOrder(ordered)) },
+                        onCancel = { selection = null },
+                        modifier = Modifier
+                            .align(Alignment.BottomCenter)
+                            .fillMaxWidth()
+                            .navigationBarsPadding()
+                            .padding(horizontal = 12.dp, vertical = 12.dp)
+                            .shadow(10.dp, PillShape, ambientColor = PrintShadow, spotColor = PrintShadow),
+                    )
                 }
             }
         }

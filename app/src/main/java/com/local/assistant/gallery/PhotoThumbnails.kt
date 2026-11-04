@@ -39,6 +39,10 @@ class PhotoThumbnails(private val library: PhotoLibrary) {
     /** The type to open it in another app with: any image, or any video. */
     fun mimeType(mediaId: Long): String = library.mimeType(mediaId)
 
+    /** [mediaIds] still on the phone, in order, each with its type to share it as. */
+    suspend fun shareTypes(mediaIds: List<Long>): List<Pair<Long, String>> =
+        withContext(Dispatchers.IO) { mediaIds.mapNotNull { id -> library.shareType(id)?.let { id to it } } }
+
     /** How long [mediaId] runs if it's a video; null for a photo. */
     suspend fun videoLength(mediaId: Long): Long? = withContext(Dispatchers.IO) { library.videoLength(mediaId) }
 

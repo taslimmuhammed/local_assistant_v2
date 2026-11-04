@@ -106,6 +106,14 @@ class PhotoLibrary(private val context: Context) {
     /** The type to open it in another app with: any image, or any video. */
     fun mimeType(mediaId: Long): String = if (videoLength(mediaId) != null) "video/*" else "image/*"
 
+    /** Its own type to share it as ("image/jpeg", "video/mp4"); null when it's no longer on the phone. */
+    fun shareType(mediaId: Long): String? = try {
+        resolver.getType(uri(mediaId))
+    } catch (e: Exception) {
+        Log.w(TAG, "No type for $mediaId", e)
+        null
+    }
+
     /**
      * Whether photos' locations can be read. Since Android 10 they come stripped unless the app
      * holds ACCESS_MEDIA_LOCATION; before that, photo access was enough.
