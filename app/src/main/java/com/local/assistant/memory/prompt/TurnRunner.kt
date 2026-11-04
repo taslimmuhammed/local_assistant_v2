@@ -4,6 +4,7 @@ import android.util.Log
 import com.local.assistant.data.db.AttachmentKind
 import com.local.assistant.llm.GenStats
 import com.local.assistant.llm.PromptAttachment
+import com.local.assistant.memory.retrieval.QueryText
 import com.local.assistant.memory.tools.LoopEvent
 import com.local.assistant.memory.tools.MemoryChip
 import com.local.assistant.memory.tools.NumberGrounding
@@ -65,11 +66,17 @@ class TurnRunner(
         userText: String,
         attachment: PromptAttachment? = null,
         locked: Boolean = false,
+        /** A screenshot of the screen the assistant was opened over ([com.local.assistant.assist.ScreenCapture]). */
+        screen: String? = null,
     ): Flow<TurnEvent> = flow {
+        // Never over the lock screen; shown to the model only for a message about it ("share
+        // this with Anjali"), though the tools may still send it or save it either way.
+        val screenshot = screen?.takeIf { !locked && java.io.File(it).isFile }
+        val showScreen = screenshot != null && QueryText.asksAboutScreen(userText)
         // A message that is nothing but a sum is answered here: the model would only misread its
         // digits (see NumberGrounding). The live conversation never saw the exchange, so it goes;
         // the next message rebuilds it with this one in its history.
-        if (attachment == null) {
+        if (attachment == null && !showScreen) {
             NumberGrounding.directAnswer(userText)?.let { answer ->
                 conversations.forget(chatId)
                 emit(TurnEvent.Text(answer))
@@ -83,7 +90,7 @@ class TurnRunner(
             var rebuiltForPhotos = false
             while (true) {
                 val preparing = android.os.SystemClock.elapsedRealtime()
-                val turn = conversations.prepareTurn(chatId, userMessageId, userText, locked) { emit(TurnEvent.Step(it)) }
+                val turn = conversations.prepareTurn(chatId, userMessageId, userText, locked, screen = showScreen) { emit(TurnEvent.Step(it)) }
                 android.util.Log.i("TurnTiming", "turn prepared in ${android.os.SystemClock.elapsedRealtime() - preparing} ms (${if (turn.fresh) "fresh" else "carried on"}, ${turn.recalledImages.size} images, ${turn.envelope.tokens} tokens)")
                 emit(TurnEvent.Step(ToolSteps.THINKING))
                 var overflowed = false
@@ -94,8 +101,9 @@ class TurnRunner(
                 val reply = StringBuilder()
                 // A saved image the message is about is looked at again, as if sent with it, and so
                 // are photos from the gallery a question may be about.
-                val sent = attachment?.let(::listOf) ?: turn.recalledImages.map { PromptAttachment(it, AttachmentKind.IMAGE) }
-                val context = ToolContext(chatId, userMessageId, userText, locked)
+                val sent = listOfNotNull(screenshot?.takeIf { showScreen }?.let { PromptAttachment(it, AttachmentKind.IMAGE) }) +
+                    (attachment?.let(::listOf) ?: turn.recalledImages.map { PromptAttachment(it, AttachmentKind.IMAGE) })
+                val context = ToolContext(chatId, userMessageId, userText, locked, screenshot)
                 tools.run(turn.session, turn.envelope.text, sent, context, sources = listOf(turn.prefix), canRebuild = !turn.fresh && !rebuiltForPhotos).collect { event ->
                     when (event) {
                         is LoopEvent.Text -> {

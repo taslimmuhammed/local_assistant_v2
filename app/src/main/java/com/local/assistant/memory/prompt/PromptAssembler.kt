@@ -141,8 +141,10 @@ class PromptAssembler(
             }
         }
 
-        val text = (header() + listOfNotNull(imageLine, photosLine) + inputs.userText).joinToString("\n")
+        val screenLine = SCREEN.takeIf { inputs.screen }
+        val text = (header() + listOfNotNull(imageLine, photosLine, screenLine) + inputs.userText).joinToString("\n")
         val attachments = inputs.attachmentTokens +
+            (if (inputs.screen) visionTokensPerImage else 0) +
             (if (imageLine != null && inputs.savedImage.attached) visionTokensPerImage else 0) +
             inputs.photos.count { it.attached } * visionTokensPerImage
         return Envelope(
@@ -363,6 +365,13 @@ class PromptAssembler(
          */
         const val SEARCH_PHOTOS = "[They ask to see photos: call find_photos for this message; only that shows them, " +
             "even if an earlier search was like it.]"
+
+        /**
+         * Before a message sent from the assistant over another app, with the screenshot of it.
+         * Told nothing, the model read a news page fine but had no way to know it was the screen
+         * the user meant by "this" (MultiStepEvalTest).
+         */
+        const val SCREEN = "[The image is a screenshot of the screen they were on when they called you: \"this\" means what's on it.]"
 
         const val DEFAULT_VISION_TOKENS = 256
         private const val MIN_SUMMARY_TOKENS = 50

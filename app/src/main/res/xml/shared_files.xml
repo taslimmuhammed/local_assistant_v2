@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- What the file provider may hand out (AndroidManifest): only copies made for sharing. -->
+<paths>
+    <files-path name="shared" path="shared/" />
+</paths>

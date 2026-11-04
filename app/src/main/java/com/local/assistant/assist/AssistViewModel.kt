@@ -78,6 +78,10 @@ class AssistViewModel(
     private val onLockScreen: () -> Boolean = { false },
     /** Writes what is said down as it's said; nothing when the phone can't. */
     private val transcriber: com.local.assistant.voice.Transcriber? = null,
+    /** The screenshot of the screen the overlay was opened over, if Android gave one ([ScreenCapture]). */
+    private val screen: () -> String? = { null },
+    /** The overlay is gone: [screen] is forgotten, once no reply is still using it. */
+    private val releaseScreen: (String) -> Unit = {},
 ) : ViewModel() {
 
     /** Says [sentence], with its sensitive details said as how they end, unless they're being shown. */
@@ -384,8 +388,10 @@ class AssistViewModel(
                 chunker = if (speak) SpeechChunker() else null
                 // Not in the chat list; stored, and learned from, like any other chat.
                 unlockForVoice = speak
+                val locked = onLockScreen()
                 started = sender.send(
-                    _chatId.value, text, attachment, owner = this@AssistViewModel, listener = listener, hidden = true, locked = onLockScreen(),
+                    _chatId.value, text, attachment, owner = this@AssistViewModel, listener = listener, hidden = true, locked = locked,
+                    screen = if (locked) null else screen(),
                 )
             } finally {
                 if (!started) {
@@ -455,6 +461,7 @@ class AssistViewModel(
 
     override fun onCleared() {
         closed = true
+        screen()?.let(releaseScreen)
         endOfSpeech?.cancel()
         if (_listening.value) recorder.cancel()
         chunker = null
@@ -487,6 +494,14 @@ class AssistViewModel(
                     sensitive = container.sensitiveLock,
                     onLockScreen = onLockScreen,
                     transcriber = container.transcriber,
+                    screen = ScreenCapture::current,
+                    // A reply may still be sending it on (the overlay closes as WhatsApp opens).
+                    releaseScreen = { path ->
+                        container.appScope.launch {
+                            container.chatSender.live.first { it == null }
+                            ScreenCapture.forget(path)
+                        }
+                    },
                 )
             }
         }

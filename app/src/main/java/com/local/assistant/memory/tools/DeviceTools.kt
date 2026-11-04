@@ -1,5 +1,6 @@
 package com.local.assistant.memory.tools
 
+import java.io.File
 import java.time.ZonedDateTime
 import java.time.format.DateTimeFormatter
 import java.util.Locale
@@ -29,10 +30,12 @@ class DeviceTools(
         return ActionResult(
             ok("dialer" to "open with ${person.name} (${person.address}); not called yet, the user taps call"),
             MemoryChip(MemoryChip.Kind.CALL, "Call", "${person.name} · ${person.address}", note = "Tap call in the dialer"),
+            ready = "The dialer is open with ${person.name}'s number; tap call.",
         )
     }
 
-    internal suspend fun sendMessage(args: Args): ActionResult {
+    /** [screen]: the screenshot the assistant was opened with, sent along when asked for. */
+    internal suspend fun sendMessage(args: Args, screen: String? = null): ActionResult {
         val to = args.required("to")
         val text = args.text("text")
         val app = when (args.text("app")?.lowercase(Locale.ROOT)?.replace(Regex("[^a-z]"), "")) {
@@ -41,18 +44,42 @@ class DeviceTools(
             "sms", "text", "message", "messages", null -> if ('@' in to) MessageApp.EMAIL else MessageApp.SMS
             else -> throw ToolError("app must be sms, whatsapp or email.")
         }
+        val image = if (args.bool("screenshot") == true) screenshot(screen) else null
         val person = find(to, if (app == MessageApp.EMAIL) Need.EMAIL else Need.PHONE)
         val appName = APP_NAMES.getValue(app)
-        val handoff = phone.compose(app, person.address, text)
+        val handoff = phone.compose(app, person.address, text, image)
         if (handoff == Handoff.NO_APP) {
             throw ToolError("$appName isn't installed. Offer ${if (app == MessageApp.WHATSAPP) "an SMS" else "another way"} instead.")
         }
         check(handoff, appName)
+        val what = if (image != null) "the screenshot" + (text?.let { " and the message" } ?: "") else "the message"
         return ActionResult(
-            ok("ready" to "$appName open to ${person.name} with the message written; not sent yet, the user taps send"),
-            MemoryChip(MemoryChip.Kind.MESSAGE, appName, person.name + (text?.let { ": ${it.take(CHIP_TEXT)}" } ?: ""), note = "Tap send in $appName"),
+            ok("ready" to "$appName open to ${person.name} with $what; not sent yet, the user taps send"),
+            MemoryChip(
+                MemoryChip.Kind.MESSAGE,
+                appName,
+                person.name + (if (image != null) ": screenshot" else "") + (text?.let { "${if (image != null) ", " else ": "}${it.take(CHIP_TEXT)}" } ?: ""),
+                note = "Tap send in $appName",
+            ),
+            ready = "$appName is open with ${if (image != null && text == null) "the screenshot" else if (image != null) "the screenshot and your message" else "your message"} to ${person.name}; tap send.",
         )
     }
+
+    /** Keeps the screen the assistant was opened over in the gallery. */
+    internal fun takeScreenshot(screen: String?): ActionResult {
+        when (phone.saveScreenshot(screenshot(screen))) {
+            Handoff.DONE -> Unit
+            else -> throw ToolError("The screenshot couldn't be saved to the gallery.")
+        }
+        return ActionResult(
+            ok("saved" to "the screenshot, in the gallery's Screenshots"),
+            MemoryChip(MemoryChip.Kind.SCREENSHOT, "Screenshot", "Saved to your gallery"),
+        )
+    }
+
+    /** The screenshot's file; with none, what to tell the user. */
+    private fun screenshot(screen: String?): File =
+        screen?.let { File(it) }?.takeIf { it.isFile } ?: throw ToolError(NO_SCREENSHOT)
 
     internal fun setTimer(args: Args): ActionResult {
         val words = args.required("duration")
@@ -255,6 +282,12 @@ class DeviceTools(
         const val MAX_TIMER_SECONDS = 24 * 60 * 60
         private const val MIN_DIGITS = 3
         private const val CHIP_TEXT = 60
+
+        /**
+         * There is a screenshot only when the assistant is opened over another app, by holding
+         * the power button or by the wake word: Android hands it the screen then, and no other time.
+         */
+        const val NO_SCREENSHOT = "There's no screenshot: you only get one when the user calls you over another app, by holding the power button or saying Hey Luna, and not on the lock screen. Tell them that."
         private val POSSESSIVE = Regex("^(?i)(my|the)\\s+")
         private val EMAIL = Regex("[^@\\s]+@[^@\\s]+\\.[^@\\s]+")
         private val TIME = DateTimeFormatter.ofPattern("HH:mm", Locale.ENGLISH)

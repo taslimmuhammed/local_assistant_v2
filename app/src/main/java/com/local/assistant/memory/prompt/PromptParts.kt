@@ -97,6 +97,8 @@ data class EnvelopeInputs(
     val asksForPhotos: Boolean = false,
     /** What files sent with the message cost: the user's own, and a recalled image. */
     val attachmentTokens: Int = 0,
+    /** A screenshot of the screen the assistant was opened over goes with the message. */
+    val screen: Boolean = false,
     val userText: String,
 )
 

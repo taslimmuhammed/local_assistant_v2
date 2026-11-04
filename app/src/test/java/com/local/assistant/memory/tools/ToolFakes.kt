@@ -197,11 +197,15 @@ class FakePhone(var foreground: Boolean = true) : PhoneActions {
     var silentNeedsAccess = false
     var volumeLevel = 40
 
-    private fun act(what: String): Handoff = if (!foreground) Handoff.IN_BACKGROUND else Handoff.DONE.also { done += what }
+    /** Another app came to the front: what a call or message does on the phone. */
+    var onHandoff: () -> Unit = {}
+
+    private fun act(what: String): Handoff = if (!foreground) Handoff.IN_BACKGROUND else Handoff.DONE.also { done += what; onHandoff() }
 
     override fun dial(number: String) = act("dial $number")
-    override fun compose(app: MessageApp, to: String, text: String?) =
-        if (app == MessageApp.WHATSAPP && !whatsapp) Handoff.NO_APP else act("$app $to: $text")
+    override fun compose(app: MessageApp, to: String, text: String?, image: java.io.File?) =
+        if (app == MessageApp.WHATSAPP && !whatsapp) Handoff.NO_APP else act("$app $to: $text" + (image?.let { " + ${it.name}" } ?: ""))
+    override fun saveScreenshot(image: java.io.File) = Handoff.DONE.also { done += "saved ${image.name}" }
     override fun installedApps() = apps
     override fun open(target: AppTarget) = act("open $target")
     override fun torch(on: Boolean) = Handoff.DONE.also { done += "torch $on" }

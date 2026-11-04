@@ -88,6 +88,28 @@ object QueryText {
         return words.any { it in PHOTO_WORDS } && words.any { it in SEE_WORDS }
     }
 
+    /**
+     * "Summarise this", "take a screenshot", "share this page with Anjali", "what's on my
+     * screen": about the screen the assistant was opened over, so its screenshot goes with the
+     * message. Generous on purpose: a screenshot sent for nothing costs a second, while one held
+     * back leaves the model guessing at what "this" is.
+     */
+    fun asksAboutScreen(text: String): Boolean {
+        val lower = text.lowercase(Locale.ROOT).replace('’', '\'')
+        return SCREEN.any { it.containsMatchIn(lower) }
+    }
+
+    private val SCREEN = listOf(
+        Regex("\\bscreen\\s?shots?\\b|\\bscreen\\b|\\bss\\b"),
+        Regex(
+            "\\b(this|that)\\s+(page|article|post|tweet|reel|message|chat|email|mail|photo|picture|pic|image|video|recipe|product|" +
+                "list|text|document|doc|ticket|bill|receipt|form|link|site|website|app|story|news|offer|deal|item|one|thing)\\b",
+        ),
+        // Doing something to "this" or "it" with nothing else named: "summarise this", "send it to Priya".
+        Regex("\\b(summari[sz]e|summary of|explain|translate|read|describe|share|forward|send|e-?mail|mail|whatsapp|text|save|remember|copy|reply to|check)\\s+(this|that|it)\\b"),
+        Regex("\\bwhat(?:'s| is| does| do)\\s+(this|that|it say)\\b|\\bwhat am i (looking at|seeing|reading)\\b|\\bwho is this\\b"),
+    )
+
     private val PHOTO_WORDS = setOf("photo", "photos", "pic", "pics", "picture", "pictures", "video", "videos", "selfie", "selfies")
     private val SEE_WORDS = setOf("show", "find", "get", "fetch", "pull", "see", "give", "search")
 

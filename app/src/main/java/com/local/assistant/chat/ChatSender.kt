@@ -93,10 +93,12 @@ class ChatSender(
         listener: Listener,
         hidden: Boolean = false,
         locked: Boolean = false,
+        /** The screenshot of the screen the assistant overlay was opened over, if it was. */
+        screen: String? = null,
     ): Boolean {
         val prompt = text.trim()
         if ((prompt.isEmpty() && attachment == null) || isBusy) return false
-        return start(chatId, prompt, attachment, owner, listener, hidden, locked, storedUserMessageId = null)
+        return start(chatId, prompt, attachment, owner, listener, hidden, locked, storedUserMessageId = null, screen = screen)
     }
 
     /**
@@ -117,6 +119,7 @@ class ChatSender(
         hidden: Boolean,
         locked: Boolean,
         storedUserMessageId: Long?,
+        screen: String? = null,
     ): Boolean {
         stopRequested = false
         _live.value = Live(chatId, "", owner)
@@ -169,7 +172,7 @@ class ChatSender(
                 } else {
                     attachment?.let { ContextWindow.sentAttachment(it.kind, text)?.let { kind -> PromptAttachment(it.path, kind) } }
                 }
-                turns.run(chat, asked, text, promptAttachment, locked).collect { event ->
+                turns.run(chat, asked, text, promptAttachment, locked, screen).collect { event ->
                     when (event) {
                         is TurnEvent.Text -> {
                             reply.append(event.delta)

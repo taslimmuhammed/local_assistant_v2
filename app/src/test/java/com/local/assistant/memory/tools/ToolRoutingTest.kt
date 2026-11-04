@@ -978,6 +978,155 @@ class ToolRoutingTest {
         assertTrue(result(text)["ready"].toString().contains("not sent yet"))
     }
 
+    // ---- Several things in one message ----
+
+    @Test
+    fun `an alarm asked for beside a message is set before WhatsApp opens`() {
+        // Once WhatsApp is in front, this app is in the background and the clock app can't be opened.
+        phone.onHandoff = { clock.reachable = false }
+        val (session, _) = replies(
+            ScriptedSession.calls(call("send_message", "to" to "amma", "text" to "Reached home", "app" to "whatsapp"), call("set_alarm", "when" to "6:30am")),
+            ScriptedSession.says("Done."),
+        )
+        assertEquals(1, clock.set.size)
+        assertTrue(phone.done.single().startsWith("WHATSAPP"))
+        // Answered in the order asked.
+        assertEquals(listOf("send_message", "set_alarm"), session.sentResults.single().map { it.name })
+        assertTrue(session.sentResults.single().all { Gson().fromJson(it.json, Map::class.java)["ok"] == true })
+    }
+
+    @Test
+    fun `a reminder asked for beside a sum waits for its answer`() {
+        val (session, _) = replies(
+            ScriptedSession.calls(
+                call("calculate", "expression" to "2450*18%"),
+                call("add_task", "title" to "Pay that much to Ravi", "when" to "Friday"),
+            ),
+            ScriptedSession.calls(call("add_task", "title" to "Pay 441 to Ravi", "when" to "Friday")),
+            ScriptedSession.says("Done."),
+        )
+        val held = Gson().fromJson(session.sentResults.first()[1].json, Map::class.java)
+        assertEquals(false, held["ok"])
+        assertTrue(held["error"].toString().contains("calculate"))
+        assertEquals("Pay 441 to Ravi", store.tasks.values.single().title)
+    }
+
+    @Test
+    fun `a reminder held for a sum and not asked for again is set as first asked`() {
+        val (_, events) = replies(
+            ScriptedSession.calls(
+                call("calculate", "expression" to "2450*18%"),
+                call("add_task", "title" to "Pay Ravi", "when" to "Friday"),
+            ),
+            ScriptedSession.says("It's 441, and I'll remind you on Friday."),
+        )
+        assertEquals("Pay Ravi", store.tasks.values.single().title)
+        assertTrue((events.last() as LoopEvent.Done).staleConversation)
+    }
+
+    @Test
+    fun `things asked for together with no sum among them all run at once`() {
+        val (session, _) = replies(
+            ScriptedSession.calls(call("set_alarm", "when" to "6:30am"), call("add_task", "title" to "Pay rent", "when" to "tomorrow at 9")),
+            ScriptedSession.says("Done."),
+        )
+        assertEquals(1, session.sentResults.size)
+        assertEquals(1, clock.set.size)
+        assertEquals(1, store.tasks.size)
+    }
+
+    @Test
+    fun `a reply saying the message was sent says what is really open instead`() {
+        val (_, events) = replies(
+            ScriptedSession.calls(call("send_message", "to" to "amma", "text" to "Reached home", "app" to "whatsapp"), call("set_alarm", "when" to "6:30am")),
+            ScriptedSession.says("I have sent the message to Amma on WhatsApp and set an alarm for 6:30 a.m."),
+        )
+        assertEquals("WhatsApp is open with your message to Amma; tap send. I've also set an alarm for 6:30 a.m.", shown(events))
+    }
+
+    @Test
+    fun `a reply that already says the message is ready is left alone`() {
+        val (_, events) = replies(
+            ScriptedSession.calls(call("send_message", "to" to "amma", "text" to "Reached home", "app" to "whatsapp")),
+            ScriptedSession.says("The message is ready in WhatsApp; tap send."),
+        )
+        assertEquals("The message is ready in WhatsApp; tap send.", shown(events))
+    }
+
+    @Test
+    fun `an alarm set and nothing said about it is confirmed all the same`() {
+        val (_, events) = replies(ScriptedSession.calls(call("set_alarm", "when" to "6:30am")), ScriptedSession.says(""))
+        assertEquals(ToolLoop.REPAIRED_REPLY, shown(events))
+    }
+
+    @Test
+    fun `a message got ready and nothing said about it says what is open`() {
+        val (_, events) = replies(
+            ScriptedSession.calls(call("send_message", "to" to "amma", "text" to "Reached home", "app" to "whatsapp")),
+            ScriptedSession.says(""),
+        )
+        assertEquals("WhatsApp is open with your message to Amma; tap send.", shown(events))
+    }
+
+    @Test
+    fun `nothing said after a call that failed is not made into done`() {
+        val (_, events) = replies(ScriptedSession.calls(call("take_screenshot")), ScriptedSession.says(""))
+        assertEquals("", shown(events))
+    }
+
+    // ---- Screenshots ----
+
+    private fun screenshotFile() = java.io.File.createTempFile("screen", ".png").apply { writeText("png"); deleteOnExit() }
+
+    private fun withScreen(screen: String?, vararg calls: ToolCall): Pair<ScriptedSession, List<LoopEvent>> {
+        val session = ScriptedSession(ArrayDeque(listOf(ScriptedSession.calls(*calls), ScriptedSession.says("Done."))))
+        val events = runBlocking { loop.run(session, "envelope", emptyList(), context.copy(screen = screen)).toList() }
+        return session to events
+    }
+
+    @Test
+    fun `take_screenshot saves the screen the assistant was opened over`() {
+        val screen = screenshotFile()
+        val (session, events) = withScreen(screen.path, call("take_screenshot"))
+        assertEquals(true, result(session)["ok"])
+        assertEquals(listOf("saved ${screen.name}"), phone.done)
+        assertEquals(MemoryChip.Kind.SCREENSHOT, events.filterIsInstance<LoopEvent.Memory>().single().chip.kind)
+    }
+
+    @Test
+    fun `with no screen to save, take_screenshot says how to get one`() {
+        val (session, _) = withScreen(null, call("take_screenshot"))
+        assertEquals(false, result(session)["ok"])
+        assertTrue(result(session)["error"].toString().contains("power button"))
+        assertTrue(phone.done.isEmpty())
+    }
+
+    @Test
+    fun `a screenshot goes with a message when asked for`() {
+        val screen = screenshotFile()
+        val (session, _) = withScreen(
+            screen.path,
+            call("send_message", "to" to "amma", "text" to "Rain alert on Thursday", "app" to "whatsapp", "screenshot" to true),
+        )
+        assertEquals("WHATSAPP +91 98450 11111: Rain alert on Thursday + ${screen.name}", phone.done.single())
+        assertTrue(result(session)["ready"].toString().contains("the screenshot and the message"))
+    }
+
+    @Test
+    fun `a message asked to carry a screenshot there isn't opens nothing`() {
+        val (session, _) = withScreen(null, call("send_message", "to" to "amma", "app" to "whatsapp", "screenshot" to true))
+        assertEquals(false, result(session)["ok"])
+        assertTrue(phone.done.isEmpty())
+    }
+
+    @Test
+    fun `remember_image keeps the screen when nothing was sent`() {
+        val screen = screenshotFile()
+        val (session, _) = withScreen(screen.path, call("remember_image", "title" to "Train ticket", "details" to "Kochi to Bengaluru"))
+        assertEquals(true, result(session)["ok"])
+        assertEquals(screen.path, images.saved.values.single().third.path)
+    }
+
     /** A quote left unescaped in a description once made the app crash as it started. */
     @Test
     fun `every declaration is valid JSON with a name and a description`() {

@@ -31,7 +31,7 @@ data class MemoryChip(
     /** find_photos: the photos it found, drawn as thumbnails or a card instead of a text row. */
     val photos: PhotoSet? = null,
 ) {
-    enum class Kind { FACT, TASK, EVENT, FORGET, ALARM, IMAGE, CALL, MESSAGE, TIMER, APP, SETTING, WEB, PHOTOS }
+    enum class Kind { FACT, TASK, EVENT, FORGET, ALARM, IMAGE, CALL, MESSAGE, TIMER, APP, SETTING, WEB, PHOTOS, SCREENSHOT }
 }
 
 /**
@@ -83,7 +83,14 @@ data class ToolRecord(
  * that message as typed, which numbers in the call's arguments are checked against.
  */
 /** [locked]: the phone is locked, so only [ToolCatalog.LOCKED] tools run (see [ToolLoop]). */
-data class ToolContext(val chatId: Long, val userMessageId: Long, val userText: String = "", val locked: Boolean = false)
+data class ToolContext(
+    val chatId: Long,
+    val userMessageId: Long,
+    val userText: String = "",
+    val locked: Boolean = false,
+    /** A screenshot of the screen the assistant was opened over, when it was ([com.local.assistant.assist.ScreenCapture]). */
+    val screen: String? = null,
+)
 
 /** Persists tool calls as TOOL rows in the chat. */
 interface ToolLog {

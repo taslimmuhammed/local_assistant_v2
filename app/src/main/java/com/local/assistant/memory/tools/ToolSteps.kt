@@ -38,6 +38,7 @@ object ToolSteps {
         ToolCatalog.OPEN_APP -> "Opening the app…"
         ToolCatalog.PHONE_SETTING -> "Changing the setting…"
         ToolCatalog.CALCULATE -> "Calculating…"
+        ToolCatalog.TAKE_SCREENSHOT -> "Saving the screenshot…"
         else -> "Working on it…"
     }
 }

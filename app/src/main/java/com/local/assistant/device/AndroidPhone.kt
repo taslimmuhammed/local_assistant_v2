@@ -3,6 +3,8 @@ package com.local.assistant.device
 import android.app.NotificationManager
 import android.app.SearchManager
 import android.content.ActivityNotFoundException
+import android.content.ClipData
+import android.content.ContentValues
 import android.content.Context
 import android.content.Intent
 import android.hardware.camera2.CameraAccessException
@@ -11,11 +13,14 @@ import android.hardware.camera2.CameraManager
 import android.media.AudioManager
 import android.net.Uri
 import android.os.Build
+import android.os.Environment
 import android.provider.MediaStore
 import android.provider.Settings
+import android.provider.Telephony
 import android.telephony.PhoneNumberUtils
 import android.telephony.TelephonyManager
 import android.util.Log
+import androidx.core.content.FileProvider
 import com.local.assistant.memory.tools.AppTarget
 import com.local.assistant.memory.tools.Handoff
 import com.local.assistant.memory.tools.InstalledApp
@@ -24,6 +29,7 @@ import com.local.assistant.memory.tools.PhoneActions
 import com.local.assistant.memory.tools.RingerMode
 import com.local.assistant.memory.tools.SettingsPanel
 import com.local.assistant.memory.tools.VolumeChange
+import java.io.File
 import java.util.Locale
 import kotlin.math.roundToInt
 
@@ -46,7 +52,10 @@ class AndroidPhone(
     override fun dial(number: String): Handoff =
         start(Intent(Intent.ACTION_DIAL, Uri.fromParts("tel", number, null)))
 
-    override fun compose(app: MessageApp, to: String, text: String?): Handoff = when (app) {
+    override fun compose(app: MessageApp, to: String, text: String?, image: File?): Handoff =
+        if (image != null) share(app, to, text, image) else compose(app, to, text)
+
+    private fun compose(app: MessageApp, to: String, text: String?): Handoff = when (app) {
         MessageApp.SMS -> start(
             Intent(Intent.ACTION_SENDTO, Uri.fromParts("smsto", to, null)).apply { text?.let { putExtra("sms_body", it) } },
         )
@@ -67,6 +76,82 @@ class AndroidPhone(
                     ).setPackage(whatsapp),
                 )
             }
+        }
+    }
+
+    /**
+     * [text] with a picture: the share intent, aimed at the person as far as each app allows.
+     * WhatsApp opens their chat with the picture, [text] as its caption (the "jid" extra, which
+     * WhatsApp has long honoured though it doesn't document it; ignored, it asks who to send to).
+     * Email goes to an email app only (the mailto selector), with the address filled in.
+     */
+    private fun share(app: MessageApp, to: String, text: String?, image: File): Handoff {
+        val uri = shareable(image) ?: return Handoff.FAILED
+        val intent = Intent(Intent.ACTION_SEND)
+            .setType(IMAGE_TYPE)
+            .putExtra(Intent.EXTRA_STREAM, uri)
+            .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            .apply {
+                clipData = ClipData.newRawUri(null, uri)
+                text?.let { putExtra(Intent.EXTRA_TEXT, it) }
+            }
+        when (app) {
+            MessageApp.WHATSAPP -> {
+                val whatsapp = WHATSAPP_PACKAGES.firstOrNull { packages.getLaunchIntentForPackage(it) != null } ?: return Handoff.NO_APP
+                val number = international(to) ?: return Handoff.FAILED
+                intent.setPackage(whatsapp).putExtra("jid", "$number@s.whatsapp.net")
+            }
+            MessageApp.EMAIL -> {
+                intent.putExtra(Intent.EXTRA_EMAIL, arrayOf(to)).putExtra(Intent.EXTRA_SUBJECT, SCREENSHOT_SUBJECT)
+                intent.selector = Intent(Intent.ACTION_SENDTO, Uri.parse("mailto:"))
+            }
+            MessageApp.SMS -> {
+                val messages = Telephony.Sms.getDefaultSmsPackage(context) ?: return Handoff.NO_APP
+                intent.setPackage(messages).putExtra("address", to)
+                text?.let { intent.putExtra("sms_body", it) }
+            }
+        }
+        return start(intent)
+    }
+
+    /**
+     * A copy of [image] another app may read, through this app's file provider. Kept a day, as
+     * the other app reads it only when the user taps send; older copies go each time.
+     */
+    private fun shareable(image: File): Uri? = try {
+        val dir = File(context.filesDir, SHARED_DIR).apply { mkdirs() }
+        val cutoff = System.currentTimeMillis() - SHARED_KEEP_MS
+        dir.listFiles()?.filter { it.lastModified() < cutoff }?.forEach { it.delete() }
+        val copy = File(dir, "screenshot-${System.currentTimeMillis()}.jpg")
+        image.copyTo(copy, overwrite = true)
+        FileProvider.getUriForFile(context, "${context.packageName}$SHARE_AUTHORITY", copy)
+    } catch (e: Exception) {
+        Log.w(TAG, "Couldn't make the screenshot shareable", e)
+        null
+    }
+
+    override fun saveScreenshot(image: File): Handoff {
+        // Before Android 10 this needs the storage permission, which the app doesn't ask for.
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return Handoff.FAILED
+        val resolver = context.contentResolver
+        val now = System.currentTimeMillis()
+        val values = ContentValues().apply {
+            put(MediaStore.Images.Media.DISPLAY_NAME, "Screenshot_${SCREENSHOT_NAME.format(java.time.LocalDateTime.now())}.jpg")
+            put(MediaStore.Images.Media.MIME_TYPE, IMAGE_TYPE)
+            put(MediaStore.Images.Media.DATE_TAKEN, now)
+            put(MediaStore.Images.Media.RELATIVE_PATH, "${Environment.DIRECTORY_PICTURES}/Screenshots")
+            put(MediaStore.Images.Media.IS_PENDING, 1)
+        }
+        val uri = resolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values) ?: return Handoff.FAILED
+        return try {
+            val out = resolver.openOutputStream(uri) ?: error("No stream for $uri")
+            out.use { stream -> image.inputStream().use { it.copyTo(stream) } }
+            resolver.update(uri, ContentValues().apply { put(MediaStore.Images.Media.IS_PENDING, 0) }, null, null)
+            Handoff.DONE
+        } catch (e: Exception) {
+            Log.w(TAG, "Couldn't save the screenshot", e)
+            resolver.delete(uri, null, null)
+            Handoff.FAILED
         }
     }
 
@@ -218,5 +303,13 @@ class AndroidPhone(
         const val VOLUME_STEPS = 5
         const val TETHER_SETTINGS = "android.settings.TETHER_SETTINGS"
         val WHATSAPP_PACKAGES = listOf("com.whatsapp", "com.whatsapp.w4b")
+        /** What [com.local.assistant.assist.ScreenCapture] keeps the screen as. */
+        const val IMAGE_TYPE = "image/jpeg"
+        const val SCREENSHOT_SUBJECT = "Screenshot"
+        /** The file provider's authority after the package name; see AndroidManifest and xml/shared_files. */
+        const val SHARE_AUTHORITY = ".share"
+        const val SHARED_DIR = "shared"
+        const val SHARED_KEEP_MS = 24 * 60 * 60 * 1000L
+        val SCREENSHOT_NAME: java.time.format.DateTimeFormatter = java.time.format.DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss", Locale.ROOT)
     }
 }

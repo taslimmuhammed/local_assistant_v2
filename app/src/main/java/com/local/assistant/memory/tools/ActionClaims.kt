@@ -46,6 +46,53 @@ object ActionClaims {
         return if (text.length >= OPENING_MAX) text.length else null
     }
 
+    /**
+     * [reply], after a call or message was only got ready, with what it says was sent or called
+     * put right. Each sentence saying so gives way to [ready], what is really open for the user
+     * ("WhatsApp is open with your message to Anjali; tap send."), and keeps what else it said
+     * was done: "I have sent the message to Anjali and set an alarm for 6:30." still says
+     * "I've also set an alarm for 6:30." The result told the model "not sent yet, the user taps
+     * send", and it said "I have sent" 4 times in 6 all the same (MultiStepEvalTest, 4 Nov 2026).
+     */
+    fun handedOff(reply: String, ready: List<String>): String {
+        if (ready.isEmpty() || SENT.none { it.containsMatchIn(reply) }) return reply
+        val out = mutableListOf<String>()
+        var placed = false
+        for (sentence in SENTENCES.split(reply.trim())) {
+            if (SENT.none { it.containsMatchIn(sentence) }) {
+                out += sentence
+                continue
+            }
+            if (!placed) {
+                out += ready
+                placed = true
+            }
+            // What else it said was done, after an "and": "…and set an alarm for 6:30 a.m."
+            for (part in AND.split(sentence).drop(1)) {
+                val rest = part.trim().trimEnd('.', '!')
+                if (rest.isEmpty() || SENT.any { it.containsMatchIn(rest) }) continue
+                when {
+                    DONE_VERB.containsMatchIn(rest) -> out += "I've also $rest."
+                    STATE.containsMatchIn(rest) -> out += rest.replaceFirstChar { it.titlecase(java.util.Locale.ROOT) } + "."
+                }
+            }
+        }
+        return out.joinToString(" ")
+    }
+
+    private val SENTENCES = Regex("(?<=[.!?])\\s+")
+    private val AND = Regex(",?\\s+and\\s+")
+    private val DONE_VERB = Regex("^(?:set|added|turned|put|switched|saved|created|scheduled|started|changed|muted)\\b", RegexOption.IGNORE_CASE)
+    private val STATE = Regex("\\b(?:is|are|was|has been|have been)\\b", RegexOption.IGNORE_CASE)
+
+    /** Says a message went or a call was made: only true once the user has pressed the button. */
+    private val SENT = listOf(
+        "$I_DID(?:sent|shared|e-?mailed|texted|messaged|whatsapped|forwarded|dial(?:l)?ed|called|rang|rung)\\b",
+        "\\b(?:has|have)\\s+been\\s+(?:successfully\\s+)?(?:sent|shared|e-?mailed|texted|forwarded|delivered|made|placed)\\b",
+        "(?:^|[.!?]\\s+)(?:your\\s+)?(?:email|e-mail|mail|message|text|sms|whatsapp|screenshot|call)\\s+(?:was\\s+|is\\s+|has\\s+been\\s+)?(?:successfully\\s+)?(?:sent|shared|made|placed)\\b",
+        "^\\s*sent\\b",
+    ).map { Regex(it, RegexOption.IGNORE_CASE) }
+
     private const val OPENING_MIN = 30
     private const val OPENING_MAX = 200
     private const val DRAFT_MAX = 200

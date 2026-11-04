@@ -121,6 +121,17 @@ class ToolLoop(
         val mustSearch = photosAvailable() && !context.locked && com.local.assistant.memory.retrieval.QueryText.asksForPhotos(context.userText)
         var searchAsked = false
         val text = if (groundNumbers()) GroundedReply(grounding, onNumberFixed) else null
+        // Calls held back for a lookup's answer ([waiting]) and not yet asked for again.
+        val unanswered = mutableListOf<ToolCall>()
+        // What calls and messages got ready for the user to send: the reply after them must not
+        // say they were sent ([ActionClaims.handedOff]).
+        val ready = mutableListOf<String>()
+        // Whether something was done this turn, and whether any call failed: see the end.
+        var acted = false
+        var failed = false
+        fun ran(call: ToolCall, outcome: ToolExecutor.Outcome) {
+            if (!outcome.ok) failed = true else if (call.name in ToolCatalog.ACTS) acted = true
+        }
 
         /** Reply text the user may see now. */
         suspend fun FlowCollector<LoopEvent>.show(delta: String) {
@@ -146,11 +157,16 @@ class ToolLoop(
             // that is never shown, and the model is asked again. Once suspect, all of it is held.
             var held: StringBuilder? = if (rounds == 0) StringBuilder() else null
             var suspect = false
+            // After a call or message was got ready, the reply is held whole: "I have sent the
+            // message to Anjali" came 4 times in 6 after send_message (MultiStepEvalTest).
+            val afterHandoff = if (ready.isNotEmpty()) StringBuilder() else null
             reply.collect { event ->
                 when (event) {
                     is GenEvent.TextDelta -> {
                         val opening = held
-                        if (opening == null) {
+                        if (afterHandoff != null) {
+                            afterHandoff.append(event.text)
+                        } else if (opening == null) {
                             show(event.text)
                         } else {
                             opening.append(event.text)
@@ -237,9 +253,23 @@ class ToolLoop(
                     show(opening.toString())
                 }
             }
+            afterHandoff?.let { show(ActionClaims.handedOff(it.toString(), ready)) }
             release()
             if (calls.isEmpty() || rounds > maxRounds) {
-                emit(LoopEvent.Done(stats, changedPrefix, rounds, staleConversation = checked))
+                // Held for a lookup's answer, and not asked for again: done as first asked rather
+                // than not at all. The runtime never sees it, so the chat is rebuilt next turn.
+                val leftOver = unanswered.isNotEmpty()
+                for (call in unanswered) {
+                    val outcome = executor.execute(call, context)
+                    mark("${call.name} ran, as first asked")
+                    ran(call, outcome)
+                    changedPrefix = changedPrefix || outcome.changedPrefix
+                    if (outcome.chip != null && outcome.recordId != null) emit(LoopEvent.Memory(outcome.recordId, outcome.chip, call.name))
+                }
+                // All done, and the model said nothing (after take_screenshot in the panel, 4 Nov
+                // 2026): the chip alone would leave the spoken panel silent, so it's said here.
+                if (!spoke && acted && !failed) emit(LoopEvent.Text(ready.joinToString(" ").ifEmpty { REPAIRED_REPLY }))
+                emit(LoopEvent.Done(stats, changedPrefix, rounds, staleConversation = checked || leftOver))
                 return@flow
             }
 
@@ -254,21 +284,35 @@ class ToolLoop(
             rounds++
             val sums = mutableListOf<String>()
             val written = mutableListOf<String>()
-            val results = calls.map { call ->
-                if (rounds > maxRounds) {
+            val wait = waiting(calls)
+            // Asked for again: the new call stands for the one held (and is held again if it must wait again).
+            unanswered.removeAll { held -> calls.any { it.name == held.name } }
+            unanswered += wait.map { calls[it] }
+            // What stays in this app goes before what opens another: once WhatsApp or the dialer
+            // is in front, Android won't let this app open the clock app to set an alarm.
+            val order = calls.indices.sortedBy { if (calls[it].name in ToolCatalog.HANDOFFS) 1 else 0 }
+            val answered = arrayOfNulls<ToolResult>(calls.size)
+            for (i in order) {
+                val call = calls[i]
+                answered[i] = if (rounds > maxRounds) {
                     ToolResult(call.name, LIMIT_REACHED)
+                } else if (i in wait) {
+                    ToolResult(call.name, waitFor(call, calls))
                 } else {
                     emit(LoopEvent.Step(ToolSteps.of(call, context.userText)))
                     val outcome = executor.execute(call, context)
                     mark("${call.name} ran")
+                    ran(call, outcome)
                     changedPrefix = changedPrefix || outcome.changedPrefix
                     if (outcome.chip != null && outcome.recordId != null) emit(LoopEvent.Memory(outcome.recordId, outcome.chip, call.name))
                     if (call.name == ToolCatalog.CALCULATE && outcome.ok) answerOf(outcome.result)?.let(sums::add)
                     outcome.reply?.let(written::add)
+                    outcome.ready?.takeIf { outcome.ok }?.let(ready::add)
                     grounding.add(outcome.result)
                     ToolResult(call.name, outcome.result, outcome.image)
                 }
             }
+            val results = answered.requireNoNulls().toList()
             // A photo question answered from the photo in a conversation of its own (PhotoReader),
             // which closed this one: the reply is that answer, and the chat is rebuilt next turn.
             if (written.isNotEmpty()) {
@@ -312,6 +356,27 @@ class ToolLoop(
     companion object {
         private val gson = com.google.gson.Gson()
         const val REPAIRED_REPLY = "Done."
+
+        /**
+         * Which of [calls] wait a round for the lookups beside them: those whose words an answer
+         * could go into, a reminder's title or a message, while a sum, web search or memory search
+         * is in the same round. Asked again, the model writes them with the answer in.
+         */
+        fun waiting(calls: List<ToolCall>): Set<Int> {
+            if (calls.none { it.name in ToolCatalog.LOOKUPS }) return emptySet()
+            return calls.indices.filter { calls[it].name in ToolCatalog.TAKES_ANSWERS }.toSet()
+        }
+
+        /** What a call held back for the lookups beside it is told ([waiting]). */
+        fun waitFor(call: ToolCall, calls: List<ToolCall>): String {
+            val lookups = calls.map { it.name }.filter { it in ToolCatalog.LOOKUPS }.distinct().joinToString(" and ")
+            return gson.toJson(
+                mapOf(
+                    "ok" to false,
+                    "error" to "Not done yet: it waits for $lookups. Call ${call.name} again now, with what $lookups returned in it where it's needed.",
+                ),
+            )
+        }
 
         private const val TIMING = "TurnTiming"
         const val LIMIT_REACHED = """{"ok":false,"error":"Tool limit reached for this message. Answer the user now."}"""

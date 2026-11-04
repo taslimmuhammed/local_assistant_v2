@@ -88,4 +88,33 @@ class QueryTextTest {
             assertFalse(question, QueryText.isCommand(question))
         }
     }
+
+    @Test
+    fun questionsAboutTheScreenAreSeenAsSuch() {
+        listOf(
+            "take a screenshot",
+            "take a screen shot and share it on WhatsApp to Anjali",
+            "summarise this",
+            "what's on my screen?",
+            "share this page with Priya",
+            "email this to my landlord",
+            "send it to amma on whatsapp",
+            "what does this say?",
+            "translate this",
+            "remember this ticket",
+        ).forEach { assertTrue(it, QueryText.asksAboutScreen(it)) }
+    }
+
+    @Test
+    fun everydayQuestionsAreNotAboutTheScreen() {
+        listOf(
+            "set an alarm for 6:30",
+            "remind me to pay rent tomorrow",
+            "what's the weather in Kochi?",
+            "call amma",
+            "show me my beach photos",
+            "WhatsApp Anjali that I'll be late",
+            "what's 18% of 2450?",
+        ).forEach { assertFalse(it, QueryText.asksAboutScreen(it)) }
+    }
 }

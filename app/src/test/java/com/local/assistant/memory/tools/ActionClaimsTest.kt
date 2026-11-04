@@ -132,4 +132,35 @@ class ActionClaimsTest {
         assertEquals(200, ActionClaims.openingEnd("a".repeat(200)))
         assertNull(ActionClaims.openingEnd("a".repeat(199)))
     }
+
+    @Test
+    fun `saying a message was sent gives way to what is ready`() {
+        val ready = listOf("WhatsApp is open with your message to Anjali; tap send.")
+        assertEquals(
+            "WhatsApp is open with your message to Anjali; tap send. I've also set an alarm for 6:30 a.m.",
+            ActionClaims.handedOff("I have sent the message to Anjali on WhatsApp and set an alarm for 6:30 a.m.", ready),
+        )
+        assertEquals(
+            "Sure! WhatsApp is open with your message to Anjali; tap send.",
+            ActionClaims.handedOff("Sure! I've sent it.", ready),
+        )
+        assertEquals(
+            "WhatsApp is open with your message to Anjali; tap send. The alarm is set for 6:30.",
+            ActionClaims.handedOff("Your message has been sent, and the alarm is set for 6:30.", ready),
+        )
+        // Names joined by "and" are not something else that was done.
+        assertEquals(
+            "WhatsApp is open with your message to Anjali; tap send.",
+            ActionClaims.handedOff("I've sent the message to Anjali and Priya.", ready),
+        )
+    }
+
+    @Test
+    fun `a reply that claims nothing is left as it is`() {
+        val ready = listOf("The dialer is open with Amma's number; tap call.")
+        for (reply in listOf("The dialer is open; tap call to ring Amma.", "Ready when you are.", "The message has been prepared for Anjali on WhatsApp.")) {
+            assertEquals(reply, ActionClaims.handedOff(reply, ready))
+        }
+        assertEquals("I've sent it.", ActionClaims.handedOff("I've sent it.", emptyList()))
+    }
 }

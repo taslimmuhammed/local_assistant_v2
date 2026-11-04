@@ -5,7 +5,14 @@ package com.local.assistant.memory.tools
  * [image]: a picture for the model to look at with [result]. [reply]: what to tell the user,
  * written by the tool, which ends the turn (a photo question answered by `PhotoReader`).
  */
-data class ActionResult(val result: Map<String, Any?>, val chip: MemoryChip? = null, val image: String? = null, val reply: String? = null)
+/** [ready]: for a call or message, what is now open for the user to send, in a sentence for them. */
+data class ActionResult(
+    val result: Map<String, Any?>,
+    val chip: MemoryChip? = null,
+    val image: String? = null,
+    val reply: String? = null,
+    val ready: String? = null,
+)
 
 /** What handing something to the phone came to. */
 enum class Handoff {
@@ -68,7 +75,11 @@ sealed interface AppTarget {
 interface PhoneActions {
     fun dial(number: String): Handoff
 
-    fun compose(app: MessageApp, to: String, text: String?): Handoff
+    /** [image]: a picture to send with [text], for the user to send along. */
+    fun compose(app: MessageApp, to: String, text: String?, image: java.io.File? = null): Handoff
+
+    /** Keeps [image] in the gallery, with the phone's own screenshots. */
+    fun saveScreenshot(image: java.io.File): Handoff
 
     fun installedApps(): List<InstalledApp>
 
@@ -110,7 +121,8 @@ fun interface PeopleMemory {
 /** No phone to hand things to: every device tool says so. */
 object NoPhone : PhoneActions {
     override fun dial(number: String) = Handoff.NO_APP
-    override fun compose(app: MessageApp, to: String, text: String?) = Handoff.NO_APP
+    override fun compose(app: MessageApp, to: String, text: String?, image: java.io.File?) = Handoff.NO_APP
+    override fun saveScreenshot(image: java.io.File) = Handoff.FAILED
     override fun installedApps(): List<InstalledApp> = emptyList()
     override fun open(target: AppTarget) = Handoff.NO_APP
     override fun torch(on: Boolean) = Handoff.NO_APP

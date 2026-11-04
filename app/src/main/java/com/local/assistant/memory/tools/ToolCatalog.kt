@@ -30,6 +30,7 @@ object ToolCatalog {
     const val WEB_SEARCH = "web_lookup"
     /** Not "search_photos", for the same reason. */
     const val FIND_PHOTOS = "find_photos"
+    const val TAKE_SCREENSHOT = "take_screenshot"
 
     /**
      * Not a tool the model calls: the TOOL row that keeps the photos shown under a reply because
@@ -42,10 +43,22 @@ object ToolCatalog {
     val WRITES = setOf(ADD_TASK, UPDATE_TASK, ADD_EVENT, SAVE_FACT, FORGET, SET_ALARM, REMEMBER_IMAGE)
 
     /** The everyday tools (`DeviceTools`): they act on the phone, never on memory. */
-    val DEVICE = setOf(CALL, SEND_MESSAGE, SET_TIMER, OPEN_APP, PHONE_SETTING, CALCULATE)
+    val DEVICE = setOf(CALL, SEND_MESSAGE, SET_TIMER, OPEN_APP, PHONE_SETTING, CALCULATE, TAKE_SCREENSHOT)
 
     /** Device tools with an effect a repeat would duplicate: a second dialer, a second timer. */
     val DEVICE_ACTIONS = DEVICE - CALCULATE
+
+    /**
+     * Tools that bring another app to the front. Once one has, this app is in the background and
+     * Android stops it opening anything else, the clock app included, so a turn runs them last.
+     */
+    val HANDOFFS = setOf(CALL, SEND_MESSAGE, OPEN_APP)
+
+    /** Tools whose answer a request may go on to use: "what's 18% of 2450? remind me to pay that much". */
+    val LOOKUPS = setOf(CALCULATE, WEB_SEARCH, SEARCH_MEMORY, GET_UPCOMING)
+
+    /** Tools that carry words a lookup's answer could go into: a reminder's title, a message. */
+    val TAKES_ANSWERS = setOf(ADD_TASK, ADD_EVENT, SEND_MESSAGE, SAVE_FACT)
 
     /** Tools that do something for the user: a turn that ran one was a command, however it was put. */
     val ACTS = WRITES + DEVICE_ACTIONS
@@ -179,11 +192,17 @@ object ToolCatalog {
         ),
         function(
             SEND_MESSAGE,
-            "Use when the user asks you to text, WhatsApp or email someone now, or to send a message you wrote for them. It opens the app with the message written; the user taps send. to: name, relation, number or email; text: the message to send; app: sms, whatsapp or email, no other apps.",
+            "Use when the user asks you to text, WhatsApp or email someone now, or to send a message you wrote for them. It opens the app with the message written; the user taps send. to: name, relation, number or email; text: the message to send; app: sms, whatsapp or email, no other apps; screenshot: true to send the screenshot of their screen with it.",
             required = listOf("to"),
             "to" to "string",
             "text" to "string",
             "app" to "string",
+            "screenshot" to "boolean",
+        ),
+        function(
+            TAKE_SCREENSHOT,
+            "Use when the user asks you to take or save a screenshot. Saves the screen they were on when they called you to their gallery.",
+            required = emptyList(),
         ),
         function(
             SET_TIMER,
@@ -220,6 +239,7 @@ object ToolCatalog {
         - Alarms ("set an alarm", "wake me up") → set_alarm, which rings in the phone's clock app.
         - "Remember this" about an image → remember_image, with everything you can read in details (not save_fact).
         - Calls, messages, timers, apps and phone settings only when asked for now: "remind me to call amma at 6" is add_task, "I should call her" is no tool.
+        - Screenshots: "take a screenshot" → take_screenshot; sending or sharing it with someone → send_message with screenshot=true, its text saying what's on it if they asked. Calls and messages only open the app: say it's ready to send, never that it was sent.
         - Any arithmetic or unit conversion → calculate.
         - Changing, finishing or moving an existing reminder → update_task.
         - Appointments, meetings, birthdays, trips → add_event.

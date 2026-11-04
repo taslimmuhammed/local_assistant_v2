@@ -192,6 +192,8 @@ class ConversationManager(
         userMessageId: Long,
         userText: String,
         locked: Boolean = false,
+        /** The screenshot of the screen the assistant was opened over goes with this message. */
+        screen: Boolean = false,
         step: suspend (String) -> Unit = {},
     ): PreparedTurn = mutex.withLock {
         // Changing mode changes the prefix, so the conversation below won't match and is rebuilt.
@@ -226,15 +228,17 @@ class ConversationManager(
         // A command (an alarm, a reminder, a call) is acted on, not answered from memory: nothing
         // is recalled for it, which only slowed it down. Over the lock screen, nothing either.
         val command = QueryText.isCommand(userText)
-        // The user's own attachment goes alone: nothing recalled is attached beside it.
-        val userAttached = userMessage?.let { ContextWindow.sentAttachment(it.attachmentKind, it.text) } != null
+        // The user's own attachment goes alone: nothing recalled is attached beside it. Nor beside
+        // the screen they're asking about.
+        val userAttached = screen || userMessage?.let { ContextWindow.sentAttachment(it.attachmentKind, it.text) } != null
         val (recall, photos) = if (locked || command) {
             Recall.NONE to RecalledPhotos.NONE
         } else {
             if (!QueryText.isTrivial(userText)) step(ToolSteps.CHECKING_MEMORY)
             // The photo search runs beside memory's: its own model, on the CPU.
             coroutineScope {
-                val search = async { photosFor(userText, current) }
+                // About the screen: what's on it, not something in the gallery.
+                val search = async { if (screen) RecalledPhotos.NONE else photosFor(userText, current) }
                 recall(chatId, userText, current.windowStartId, budget) to search.await()
             }
         }
@@ -259,6 +263,7 @@ class ConversationManager(
             attachmentTokens = userMessage?.let { ContextWindow.attachmentTokens(it, capabilities.visionTokensPerImage) } ?: 0,
             userText = userText,
             asksForPhotos = asksForPhotos,
+            screen = screen,
         )
         val liveTokens = current.session.tokenCount() ?: 0
         var envelope = assembler.fitEnvelope(liveTokens, inputs)
@@ -300,7 +305,7 @@ class ConversationManager(
             envelope,
             budget,
             recalledImages = listOfNotNull(attached?.path) + photosSent.map { it.path },
-            relatedPhotos = photos.related,
+            relatedPhotos = if (screen) emptyList() else photos.related,
             prefix = current.acknowledgedPrefix,
             fresh = carriedOn == null || current !== carriedOn,
         )

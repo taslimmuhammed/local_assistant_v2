@@ -78,6 +78,8 @@ class ToolExecutor(
         val image: String? = null,
         /** The reply itself, written by the tool; the turn ends with it ([ActionResult.reply]). */
         val reply: String? = null,
+        /** What a call or message got ready for the user to send ([ActionResult.ready]). */
+        val ready: String? = null,
     )
 
     enum class UndoResult { UNDONE, ALREADY_UNDONE, CHANGED_SINCE, NOT_UNDOABLE }
@@ -97,6 +99,7 @@ class ToolExecutor(
         val alarms: List<AlarmChange> = emptyList(),
         val image: String? = null,
         val reply: String? = null,
+        val ready: String? = null,
     )
 
     private val recentMutex = Mutex()
@@ -131,7 +134,7 @@ class ToolExecutor(
             // Outside the transaction: finding a contact can wait on the user's answer to a
             // permission dialog, a search on the network, and none of these write to memory.
             val applied = try {
-                device(call, context.userText)
+                device(call, context)
             } catch (e: ToolError) {
                 Applied(failure(e.message.orEmpty()))
             }
@@ -149,7 +152,7 @@ class ToolExecutor(
         applied.alarms.forEach(::applyAlarm)
 
         val ok = applied.result["ok"] == true
-        val outcome = Outcome(gson.toJson(applied.result), ok, recordId, applied.chip, applied.changedPrefix, applied.image, applied.reply)
+        val outcome = Outcome(gson.toJson(applied.result), ok, recordId, applied.chip, applied.changedPrefix, applied.image, applied.reply, applied.ready)
         val window = when (call.name) {
             in ToolCatalog.WRITES -> dedupeWindowMs
             // A model that repeats itself within a turn must not open the dialer twice, but
@@ -177,7 +180,8 @@ class ToolExecutor(
         return if (arguments == call.arguments) call else call.copy(arguments = arguments)
     }
 
-    private suspend fun device(call: ToolCall, userText: String): Applied {
+    private suspend fun device(call: ToolCall, context: ToolContext): Applied {
+        val userText = context.userText
         val args = Args(call.arguments)
         if (call.name == ToolCatalog.WEB_SEARCH) {
             val done = (web ?: throw ToolError("Web search isn't set up.")).search(args)
@@ -197,14 +201,15 @@ class ToolExecutor(
         val tools = device ?: throw ToolError("That isn't available in this app.")
         val done = when (call.name) {
             ToolCatalog.CALL -> tools.call(args)
-            ToolCatalog.SEND_MESSAGE -> tools.sendMessage(args)
+            ToolCatalog.SEND_MESSAGE -> tools.sendMessage(args, context.screen)
+            ToolCatalog.TAKE_SCREENSHOT -> tools.takeScreenshot(context.screen)
             ToolCatalog.SET_TIMER -> tools.setTimer(args)
             ToolCatalog.OPEN_APP -> tools.openApp(args)
             ToolCatalog.PHONE_SETTING -> tools.phoneSetting(args)
             ToolCatalog.CALCULATE -> tools.calculate(args)
             else -> throw ToolError("There is no tool called ${call.name}.")
         }
-        return Applied(done.result, done.chip)
+        return Applied(done.result, done.chip, ready = done.ready)
     }
 
     private suspend fun dispatch(call: ToolCall, context: ToolContext): Applied {
@@ -561,7 +566,9 @@ class ToolExecutor(
     private suspend fun rememberImage(args: Args, context: ToolContext): Applied {
         val title = tidyTitle(args.required("title")).take(MAX_TITLE)
         val details = args.text("details").orEmpty().take(MAX_DETAILS)
+        // With nothing sent, the screen the assistant was opened over: "remember this" over a ticket.
         val image = images.findImage(context.chatId, context.userMessageId)
+            ?: context.screen?.takeIf { java.io.File(it).isFile }?.let { FoundImage(context.chatId, context.userMessageId, it) }
             ?: throw ToolError("There is no image in this chat to remember. Ask the user to send it.")
         val id = images.save(title, details, image)
         onImageSaved(id, context.userText)
