@@ -103,6 +103,8 @@ class ConversationManager(
         val prefix: String = "",
         /** Built for this turn (rebuilt from what is stored, or made ready for a new chat), not one carried on. */
         val fresh: Boolean = false,
+        /** The voice message's recording, to send with the envelope (which says its words are the phone's hearing). */
+        val recording: String? = null,
     )
 
     private class Live(
@@ -248,6 +250,11 @@ class ConversationManager(
         // Shown whatever is attached; sent only beside nothing of the user's own.
         val found = if (userAttached || asksForPhotos) emptyList() else photos.sent
         val image = recall.image?.takeIf { !userAttached }
+        // A voice message goes as its recording too, its words as the phone heard them, when no
+        // picture goes with it (ContextWindow.heard); beside the screen or a photo, as its words.
+        val recording = userMessage?.takeIf {
+            !screen && found.isEmpty() && image == null && ContextWindow.heard(it.attachmentKind, it.text, it.attachmentDurationMs)
+        }?.attachmentPath
         // Two pictures at most: a saved image the user asked to keep comes first.
         val photoLines = found.take(MAX_RECALLED_IMAGES - if (image != null && image.noteId !in current.attachedNotes) 1 else 0)
         fun line(attach: Boolean) = image?.let { SavedImageLine(it.title, it.details, it.at, attached = attach) }
@@ -260,10 +267,15 @@ class ConversationManager(
             // long numbers on the phone. The line still points the model back at it.
             savedImage = line(attach = image != null && image.noteId !in current.attachedNotes),
             photos = photoLines,
-            attachmentTokens = userMessage?.let { ContextWindow.attachmentTokens(it, capabilities.visionTokensPerImage) } ?: 0,
+            attachmentTokens = if (recording != null) {
+                ContextWindow.audioTokens(userMessage?.attachmentDurationMs)
+            } else {
+                userMessage?.let { ContextWindow.attachmentTokens(it, capabilities.visionTokensPerImage) } ?: 0
+            },
             userText = userText,
             asksForPhotos = asksForPhotos,
             screen = screen,
+            heard = recording != null,
         )
         val liveTokens = current.session.tokenCount() ?: 0
         var envelope = assembler.fitEnvelope(liveTokens, inputs)
@@ -308,6 +320,7 @@ class ConversationManager(
             relatedPhotos = if (screen) emptyList() else photos.related,
             prefix = current.acknowledgedPrefix,
             fresh = carriedOn == null || current !== carriedOn,
+            recording = recording,
         )
     }
 

@@ -100,6 +100,8 @@ data class EnvelopeInputs(
     /** A screenshot of the screen the assistant was opened over goes with the message. */
     val screen: Boolean = false,
     val userText: String,
+    /** The message is a recording, sent with it; [userText] is what the phone's recogniser wrote of it. */
+    val heard: Boolean = false,
 )
 
 data class Envelope(

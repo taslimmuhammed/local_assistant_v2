@@ -4,6 +4,8 @@ import com.local.assistant.data.db.AttachmentKind
 import com.local.assistant.data.db.MessageEntity
 import com.local.assistant.data.db.Role
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class ContextWindowTest {
@@ -43,6 +45,20 @@ class ContextWindowTest {
         org.junit.Assert.assertNull(ContextWindow.sentAttachment(AttachmentKind.AUDIO, "set an alarm for six"))
         assertEquals(AttachmentKind.AUDIO, ContextWindow.sentAttachment(AttachmentKind.AUDIO, " "))
         assertEquals(AttachmentKind.IMAGE, ContextWindow.sentAttachment(AttachmentKind.IMAGE, "what breed is this dog"))
+    }
+
+    @Test
+    fun `a voice message being sent is heard too, up to 30 seconds, when it has words`() {
+        assertTrue(ContextWindow.heard(AttachmentKind.AUDIO, "call Umma", 8_000))
+        assertTrue(ContextWindow.heard(AttachmentKind.AUDIO, "call Umma", 30_000))
+        // Longer: the words alone, as in the history.
+        assertFalse(ContextWindow.heard(AttachmentKind.AUDIO, "a long note", 30_001))
+        // No words: it goes as the recording anyway (sentAttachment), not as a hearing of it.
+        assertFalse(ContextWindow.heard(AttachmentKind.AUDIO, " ", 8_000))
+        assertFalse(ContextWindow.heard(AttachmentKind.AUDIO, "call Umma", null))
+        assertFalse(ContextWindow.heard(AttachmentKind.IMAGE, "what is this", null))
+        assertFalse(ContextWindow.heard(null, "call Umma", null))
+        assertEquals(256, ContextWindow.audioTokens(8_000))
     }
 
     @Test

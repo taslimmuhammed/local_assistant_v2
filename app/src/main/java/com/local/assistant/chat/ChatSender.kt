@@ -166,13 +166,19 @@ class ChatSender(
                 // Resumed: the message as it was stored.
                 val stored = storedUserMessageId?.let { repository.message(it) }
                 val text = stored?.text ?: prompt
-                // A voice message written down goes as its words; the recording is for playing back.
+                // A voice message written down goes as its words, and its recording too when it
+                // isn't long (ContextWindow.heard, decided with the rest of the turn).
                 val promptAttachment = if (stored != null) {
                     stored.attachmentPath?.let { path -> ContextWindow.sentAttachment(stored.attachmentKind, text)?.let { PromptAttachment(path, it) } }
                 } else {
                     attachment?.let { ContextWindow.sentAttachment(it.kind, text)?.let { kind -> PromptAttachment(it.path, kind) } }
                 }
-                turns.run(chat, asked, text, promptAttachment, locked, screen).collect { event ->
+                val heard = if (stored != null) {
+                    ContextWindow.heard(stored.attachmentKind, text, stored.attachmentDurationMs)
+                } else {
+                    ContextWindow.heard(attachment?.kind, text, attachment?.durationMs)
+                }
+                turns.run(chat, asked, text, promptAttachment, locked, screen, heard).collect { event ->
                     when (event) {
                         is TurnEvent.Text -> {
                             reply.append(event.delta)

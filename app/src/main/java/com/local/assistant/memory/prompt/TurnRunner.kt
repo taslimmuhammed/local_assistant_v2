@@ -68,6 +68,8 @@ class TurnRunner(
         locked: Boolean = false,
         /** A screenshot of the screen the assistant was opened over ([com.local.assistant.assist.ScreenCapture]). */
         screen: String? = null,
+        /** A voice message the model may hear ([com.local.assistant.llm.ContextWindow.heard]): [userText] is the phone's hearing of it. */
+        heard: Boolean = false,
     ): Flow<TurnEvent> = flow {
         // Never over the lock screen; shown to the model only for a message about it ("share
         // this with Anjali"), though the tools may still send it or save it either way.
@@ -75,8 +77,9 @@ class TurnRunner(
         val showScreen = screenshot != null && QueryText.asksAboutScreen(userText)
         // A message that is nothing but a sum is answered here: the model would only misread its
         // digits (see NumberGrounding). The live conversation never saw the exchange, so it goes;
-        // the next message rebuilds it with this one in its history.
-        if (attachment == null && !showScreen) {
+        // the next message rebuilds it with this one in its history. Not a spoken one: its digits
+        // are the recogniser's, which wrote "two thousand four hundred and fifty" as "200450".
+        if (attachment == null && !showScreen && !heard) {
             NumberGrounding.directAnswer(userText)?.let { answer ->
                 conversations.forget(chatId)
                 emit(TurnEvent.Text(answer))
@@ -91,7 +94,7 @@ class TurnRunner(
             while (true) {
                 val preparing = android.os.SystemClock.elapsedRealtime()
                 val turn = conversations.prepareTurn(chatId, userMessageId, userText, locked, screen = showScreen) { emit(TurnEvent.Step(it)) }
-                android.util.Log.i("TurnTiming", "turn prepared in ${android.os.SystemClock.elapsedRealtime() - preparing} ms (${if (turn.fresh) "fresh" else "carried on"}, ${turn.recalledImages.size} images, ${turn.envelope.tokens} tokens)")
+                android.util.Log.i("TurnTiming", "turn prepared in ${android.os.SystemClock.elapsedRealtime() - preparing} ms (${if (turn.fresh) "fresh" else "carried on"}, ${turn.recalledImages.size} images${if (turn.recording != null) ", the recording" else ""}, ${turn.envelope.tokens} tokens)")
                 emit(TurnEvent.Step(ToolSteps.THINKING))
                 var overflowed = false
                 var unreadable = false
@@ -101,9 +104,11 @@ class TurnRunner(
                 val reply = StringBuilder()
                 // A saved image the message is about is looked at again, as if sent with it, and so
                 // are photos from the gallery a question may be about.
+                // A voice message's recording, when it goes with its words (ContextWindow.heard).
+                val recording = turn.recording?.let { PromptAttachment(it, AttachmentKind.AUDIO) }
                 val sent = listOfNotNull(screenshot?.takeIf { showScreen }?.let { PromptAttachment(it, AttachmentKind.IMAGE) }) +
-                    (attachment?.let(::listOf) ?: turn.recalledImages.map { PromptAttachment(it, AttachmentKind.IMAGE) })
-                val context = ToolContext(chatId, userMessageId, userText, locked, screenshot)
+                    (attachment?.let(::listOf) ?: recording?.let(::listOf) ?: turn.recalledImages.map { PromptAttachment(it, AttachmentKind.IMAGE) })
+                val context = ToolContext(chatId, userMessageId, userText, locked, screenshot, heard = recording != null)
                 tools.run(turn.session, turn.envelope.text, sent, context, sources = listOf(turn.prefix), canRebuild = !turn.fresh && !rebuiltForPhotos).collect { event ->
                     when (event) {
                         is LoopEvent.Text -> {

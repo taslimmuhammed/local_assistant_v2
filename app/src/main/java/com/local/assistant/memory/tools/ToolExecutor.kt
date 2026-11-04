@@ -119,7 +119,7 @@ class ToolExecutor(
     }
 
     suspend fun execute(model: ToolCall, context: ToolContext): Outcome {
-        val call = grounded(model, context.userText)
+        val call = if (context.heard) model else grounded(model, context.userText)
         if (call != model) Log.i(TAG, "Numbers or names in ${model.name} taken from the user's words: ${model.arguments} -> ${call.arguments}")
         val nowMs = nowMs()
         val key = dedupeKey(call)

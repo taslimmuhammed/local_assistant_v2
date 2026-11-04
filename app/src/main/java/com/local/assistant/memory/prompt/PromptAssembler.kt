@@ -142,7 +142,8 @@ class PromptAssembler(
         }
 
         val screenLine = SCREEN.takeIf { inputs.screen }
-        val text = (header() + listOfNotNull(imageLine, photosLine, screenLine) + inputs.userText).joinToString("\n")
+        val said = if (inputs.heard) heard(inputs.userText) else inputs.userText
+        val text = (header() + listOfNotNull(imageLine, photosLine, screenLine) + said).joinToString("\n")
         val attachments = inputs.attachmentTokens +
             (if (inputs.screen) visionTokensPerImage else 0) +
             (if (imageLine != null && inputs.savedImage.attached) visionTokensPerImage else 0) +
@@ -372,6 +373,15 @@ class PromptAssembler(
          * the user meant by "this" (MultiStepEvalTest).
          */
         const val SCREEN = "[The image is a screenshot of the screen they were on when they called you: \"this\" means what's on it.]"
+
+        /**
+         * A voice message's words, sent with its recording (`ContextWindow.heard`): what the
+         * phone wrote down, marked as a hearing that can be wrong. As the words alone, the model
+         * took them for the user's own and, with the recording, once saved the user's name as
+         * "Uma" from "and Uma"; with this line it asked what they meant (VoiceInputEvalTest).
+         */
+        fun heard(words: String) =
+            "[The phone's speech recogniser wrote this voice message down as: \"$words\". It may have misheard a name or a number.]"
 
         const val DEFAULT_VISION_TOKENS = 256
         private const val MIN_SUMMARY_TOKENS = 50

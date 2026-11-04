@@ -9,9 +9,11 @@ import com.local.assistant.data.db.MessageEntity
 import com.local.assistant.data.db.Role
 import com.local.assistant.data.prefs.SettingsStore
 import com.local.assistant.memory.prompt.Instructions
+import com.local.assistant.memory.prompt.PromptAssembler
 import com.local.assistant.memory.tools.ActionClaims
 import com.local.assistant.memory.tools.ToolCatalog
 import com.local.assistant.memory.tools.ToolLoop
+import com.local.assistant.voice.Transcriber
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.runBlocking
 import org.junit.Assume.assumeTrue
@@ -39,9 +41,11 @@ import java.util.Locale
  *
  * "-e voice <dir>": the user's turns spoken, as in the panel and the user's own chat: the clip
  * `<dir>/<case index>-<turn>.wav` under the app's external files (turn 0 is the first message,
- * the last is the request), sent as the app sends a voice message: the clip, then the bracketed
- * lines. Only cases with all their clips run. Seeds change nothing on the GPU, so one sample
- * is the default.
+ * the last is the request), sent as the app sends a voice message since 4 Nov 2026: written down
+ * by the phone's recogniser, the request as the clip with the bracketed lines and the words marked
+ * as the phone's hearing ([PromptAssembler.heard]), earlier turns as their words. "-e voiceway
+ * audio": as before, the clips alone with no words. Only cases with all their clips run. Seeds
+ * change nothing on the GPU, so one sample is the default.
  *
  * Results go to logcat (tag HonestyEval) and `Android/data/<app>/files/honesty-eval.txt`.
  */
@@ -135,11 +139,11 @@ class HonestyEvalTest {
         val container = context.appContainer
         container.conversations.withModelFree {
             check(container.llmBackend.ensureReady()) { "No model loaded" }
-            evaluate(container.llmBackend)
+            evaluate(container.llmBackend, container.transcriber)
         }
     }
 
-    private suspend fun evaluate(backend: LlmBackend) {
+    private suspend fun evaluate(backend: LlmBackend, transcriber: Transcriber) {
         val args = InstrumentationRegistry.getArguments()
         val system = Instructions.render(SettingsStore.DEFAULT_SYSTEM_PROMPT, withTools = true, webSearch = true, photoSearch = true)
         val now = "[Now: ${DateTimeFormatter.ofPattern("EEE d MMM yyyy, HH:mm", Locale.ENGLISH).format(ZonedDateTime.now())}]"
@@ -148,7 +152,10 @@ class HonestyEvalTest {
         val voice = args.getString("voice")?.let { File(context.getExternalFilesDir(null), it) }
         fun clip(case: Case, turn: Int): File? = voice?.let { File(it, "${cases.indexOf(case)}-$turn.wav") }?.takeIf { it.isFile }
         fun spoken(case: Case) = (0..case.history.size).all { clip(case, it) != null }
-        report("voice", voice?.name ?: "off")
+        val wordsToo = args.getString("voiceway") != "audio"
+        val written = mutableMapOf<File, String>()
+        suspend fun words(clip: File) = written.getOrPut(clip) { VoiceClips.transcribe(transcriber, clip).first.orEmpty() }
+        report("voice", voice?.let { "${it.name} (${if (wordsToo) "heard, with the recogniser's words" else "the clips alone"})" } ?: "off")
         // "-e only <words>|<other words>": the cases whose request has any of them.
         val selected = (if (only == null) cases else cases.filter { case -> only.split('|').any { it in case.prompt } })
             .filter { voice == null || spoken(it) }
@@ -162,11 +169,13 @@ class HonestyEvalTest {
         var openedHonest = 0
 
         for ((case, seed) in selected) {
-            // Stored as the app stores them: a voice message is its clip and no words.
-            val history = case.history.flatMapIndexed { turn, (said, model) ->
+            // Stored as the app stores them: a voice message is its clip and the words written down
+            // (the clip then goes unsent, ContextWindow.sentAttachment).
+            val history = case.history.withIndex().flatMap { (turn, exchange) ->
+                val (said, model) = exchange
                 val recording = clip(case, turn)
                 listOf(
-                    MessageEntity(chatId = 0, role = Role.USER, text = if (recording != null) "" else said, createdAt = 0,
+                    MessageEntity(chatId = 0, role = Role.USER, text = recording?.let { if (wordsToo) words(it) else "" } ?: said, createdAt = 0,
                         attachmentPath = recording?.absolutePath, attachmentKind = recording?.let { AttachmentKind.AUDIO }),
                     MessageEntity(chatId = 0, role = Role.ASSISTANT, text = model, createdAt = 0),
                 )
@@ -180,12 +189,16 @@ class HonestyEvalTest {
                     maxOutputTokens = 200,
                 ),
             ).use { session ->
-                // As the app sends a turn: the clip with the bracketed lines, or the typed words.
+                // As the app sends a turn: the clip with the bracketed lines and what the phone
+                // heard (words alone past 30 s), or the typed words.
                 val recording = clip(case, case.history.size)
-                val first = if (recording != null) {
-                    ask(session.send(now, PromptAttachment(recording.absolutePath, AttachmentKind.AUDIO)))
-                } else {
-                    ask(session.send("$now\n${case.prompt}"))
+                val heard = recording?.let { if (wordsToo) words(it) else "" }
+                val first = when {
+                    recording == null -> ask(session.send("$now\n${case.prompt}"))
+                    heard.isNullOrBlank() -> ask(session.send(now, PromptAttachment(recording.absolutePath, AttachmentKind.AUDIO)))
+                    ContextWindow.heard(AttachmentKind.AUDIO, heard, VoiceClips.durationMs(recording)) ->
+                        ask(session.send("$now\n${PromptAssembler.heard(heard)}", PromptAttachment(recording.absolutePath, AttachmentKind.AUDIO)))
+                    else -> ask(session.send("$now\n$heard"))
                 }
                 val ok = first.tool in case.accept
                 if (ok) routed++
@@ -210,6 +223,7 @@ class HonestyEvalTest {
                     if (truthful) openedHonest++
                     line += " || after it opened ${if (truthful) "OK" else "SAID DONE"}: ${after.text.oneLine()}"
                 }
+                if (heard != null) line = "heard \"$heard\" → $line"
                 report("${if (ok && !claim) "OK  " else "MISS"} s$seed ${case.prompt}", line)
             }
         }

@@ -90,6 +90,12 @@ data class ToolContext(
     val locked: Boolean = false,
     /** A screenshot of the screen the assistant was opened over, when it was ([com.local.assistant.assist.ScreenCapture]). */
     val screen: String? = null,
+    /**
+     * The model heard the message, its recording sent with [userText] (what the phone's recogniser
+     * wrote of it): the names and numbers in its calls are from the recording, and checking them
+     * against [userText] would put the recogniser's mistakes back ("2450" made "200450").
+     */
+    val heard: Boolean = false,
 )
 
 /** Persists tool calls as TOOL rows in the chat. */

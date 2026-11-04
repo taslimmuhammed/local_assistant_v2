@@ -162,6 +162,17 @@ class PromptBudgetTest {
         assertTrue(estimator.estimate(header) <= budget.envelopeCap)
     }
 
+    @Test
+    fun `a voice message heard by the model has its words marked as the phone's hearing`() {
+        val words = "call Uma"
+        val typed = assembler.buildEnvelope(EnvelopeInputs(now = now, showNow = false, userText = words))
+        val heard = assembler.buildEnvelope(EnvelopeInputs(now = now, showNow = false, userText = words, heard = true, attachmentTokens = 64))
+        assertEquals(words, typed.text)
+        assertEquals(PromptAssembler.heard(words), heard.text)
+        assertTrue(heard.text.contains("\"call Uma\"") && heard.text.contains("misheard"))
+        assertTrue(heard.tokens >= typed.tokens + 64)
+    }
+
     // ---- Shedding order ----
 
     /** Room for everything but [spare] fewer tokens, so the plan has to shed something. */

@@ -622,6 +622,27 @@ class ToolRoutingTest {
         assertTrue(phone.done.single(), phone.done.single().contains("98450 55555"))
     }
 
+    /**
+     * The model heard the recording; the words are the recogniser's, which wrote "Umma" as "Uma"
+     * and "two thousand four hundred and fifty" as "200450". Its own reading is kept.
+     */
+    @Test
+    fun `a voice message the model heard is not corrected to the recogniser's words`() {
+        contacts = contacts.orEmpty() + listOf(Contact("Uma", listOf(ContactPhone("98450 44444"))), Contact("Umma", listOf(ContactPhone("98450 55555"))))
+        val message = ScriptedSession(
+            ArrayDeque(listOf(ScriptedSession.calls(call("send_message", "to" to "Umma", "text" to "Reached", "app" to "whatsapp")), ScriptedSession.says("Done."))),
+        )
+        runBlocking { loop.run(message, "envelope", emptyList(), ToolContext(1, 13, "Send to Uma reached", heard = true)).toList() }
+        assertTrue(phone.done.single(), phone.done.single().contains("98450 55555"))
+
+        val sum = { ScriptedSession(ArrayDeque(listOf(ScriptedSession.calls(call("calculate", "expression" to "18% of 2450"))))) }
+        val heard = runBlocking { loop.run(sum(), "envelope", emptyList(), ToolContext(1, 14, "what is 18% of 200450", heard = true)).toList() }
+        assertEquals(LoopEvent.Text("18% of 2450 = 441"), heard.filterIsInstance<LoopEvent.Text>().single())
+        // Typed, the user's own digits win, as before.
+        val typed = runBlocking { loop.run(sum(), "envelope", emptyList(), ToolContext(1, 15, "what is 18% of 200450")).toList() }
+        assertTrue(typed.filterIsInstance<LoopEvent.Text>().single().delta.contains("200450"))
+    }
+
     @Test
     fun `my dentist is found by the name memory has for them`() {
         people["my dentist"] = PersonHints(names = listOf("Dr. Rao"))
