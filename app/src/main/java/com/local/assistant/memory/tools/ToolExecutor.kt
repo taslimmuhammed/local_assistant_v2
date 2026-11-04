@@ -120,7 +120,7 @@ class ToolExecutor(
 
     suspend fun execute(model: ToolCall, context: ToolContext): Outcome {
         val call = grounded(model, context.userText)
-        if (call != model) Log.i(TAG, "Numbers in ${model.name} taken from the user's words: ${model.arguments} -> ${call.arguments}")
+        if (call != model) Log.i(TAG, "Numbers or names in ${model.name} taken from the user's words: ${model.arguments} -> ${call.arguments}")
         val nowMs = nowMs()
         val key = dedupeKey(call)
         recentMutex.withLock {
@@ -174,6 +174,9 @@ class ToolExecutor(
             when {
                 value !is String -> value
                 call.name == ToolCatalog.CALCULATE && key == "expression" -> NumberGrounding.groundExpression(value, userText)
+                // Who to call or message: a name spelled as the user spelled it.
+                call.name == ToolCatalog.CALL && key == "who" || call.name == ToolCatalog.SEND_MESSAGE && key == "to" ->
+                    ContactMatcher.asSaid(NumberGrounding.ground(value, userText), userText)
                 else -> NumberGrounding.ground(value, userText)
             }
         }

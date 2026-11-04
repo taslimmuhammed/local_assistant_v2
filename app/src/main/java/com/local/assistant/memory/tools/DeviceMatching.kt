@@ -15,10 +15,23 @@ private val NAME_FILLERS = setOf(
 )
 
 /**
+ * A word of a name as it sounds, near enough: one letter for a run of the same ("Umma" and
+ * "Uma", "Jaffar" and "Jafar", "Shiyaas" and "Shiyas"). Doubled letters are what come and go
+ * when a name is written down from speech: the recogniser wrote "Umma" as "Uma" (the panel,
+ * 4 Nov 2026), and no contact matched.
+ */
+private fun soundOf(word: String): String = word.replace(REPEATED_LETTER, "$1")
+
+private val REPEATED_LETTER = Regex("(\\p{L})\\1+")
+private val NAME_WORD = Regex("[\\p{L}\\p{M}\\p{N}]+")
+
+/**
  * Finds the contact the user means. Candidates are tried in order — the words the user said, then
  * what memory knows (a name, the words the user calls them by) — and the first that matches
  * anyone decides. Within it a whole-name match beats a contact whose name merely contains the
- * words; if that still leaves more than one person, the user is asked.
+ * words; if that still leaves more than one person, the user is asked. Only when no candidate
+ * matches as written are they tried as they sound ([soundOf]): a call or message only opens the
+ * app, with the contact's own name on it, so a near miss is seen before anything is sent.
  */
 object ContactMatcher {
 
@@ -30,19 +43,38 @@ object ContactMatcher {
     }
 
     fun find(candidates: List<String>, contacts: List<Contact>): Match {
-        val indexed = contacts.map { it to nameWords(it.name) }
-        for (candidate in candidates) {
-            val words = nameWords(candidate)
-            if (words.isEmpty()) continue
-            val exact = indexed.filter { (_, name) -> name == words }.map { it.first }
-            val containing = indexed.filter { (_, name) -> name.containsAll(words) }.map { it.first }
-            val best = exact.ifEmpty { containing }.distinctBy { it.name.lowercase(Locale.ROOT) to it.phones.firstOrNull()?.number }
-            when {
-                best.size == 1 -> return Match.One(best.single())
-                best.size > 1 -> return Match.Several(best.take(MAX_LISTED).map(::label))
+        for (keyOf in listOf<(String) -> String>({ it }, ::soundOf)) {
+            val indexed = contacts.map { it to nameWords(it.name).map(keyOf) }
+            for (candidate in candidates) {
+                val words = nameWords(candidate).map(keyOf)
+                if (words.isEmpty()) continue
+                val exact = indexed.filter { (_, name) -> name == words }.map { it.first }
+                val containing = indexed.filter { (_, name) -> name.containsAll(words) }.map { it.first }
+                val best = exact.ifEmpty { containing }.distinctBy { it.name.lowercase(Locale.ROOT) to it.phones.firstOrNull()?.number }
+                when {
+                    best.size == 1 -> return Match.One(best.single())
+                    best.size > 1 -> return Match.Several(best.take(MAX_LISTED).map(::label))
+                }
             }
         }
         return Match.None
+    }
+
+    /**
+     * [name], with the user's spelling where their message has a word that sounds the same
+     * ([soundOf]) and is written otherwise. Told "Send to umma", the model still wrote "Uma", as
+     * in its calls before (4 Nov 2026); with contacts named both, that is the wrong person.
+     */
+    fun asSaid(name: String, userText: String): String {
+        val theirs = NAME_WORD.findAll(Normalizer.normalize(userText, Normalizer.Form.NFC)).map { it.value }.toList()
+        val written = theirs.map { it.lowercase(Locale.ROOT) }.toSet()
+        return NAME_WORD.replace(Normalizer.normalize(name, Normalizer.Form.NFC)) { word ->
+            val key = word.value.lowercase(Locale.ROOT)
+            if (key in written) return@replace word.value
+            theirs.filter { soundOf(it.lowercase(Locale.ROOT)) == soundOf(key) }
+                .distinctBy { it.lowercase(Locale.ROOT) }
+                .singleOrNull() ?: word.value
+        }
     }
 
     /** The number to call: the one marked default, else a mobile, else the first. */

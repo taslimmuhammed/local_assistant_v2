@@ -43,6 +43,30 @@ class DeviceMatchingTest {
         assertEquals(ContactMatcher.Match.None, find("the plumber"))
     }
 
+    /** As on 4 Nov 2026: "Umma" was heard as "Uma", and no contact matched. */
+    @Test
+    fun `a name written down with a letter too few or too many still finds them`() {
+        val book = book + listOf(contact("Umma", "98450 12121"), contact("Jaffar Khan", "98450 13131"))
+        fun one(vararg candidates: String) = (ContactMatcher.find(candidates.toList(), book) as ContactMatcher.Match.One).contact.name
+        assertEquals("Umma", one("Uma"))
+        assertEquals("Jaffar Khan", one("jafar"))
+        assertEquals("Amma", one("Ama"))
+        // Only once nothing matches as written: what memory knows still comes first.
+        assertEquals("Anjali", one("Ama", "Anjali"))
+        assertEquals(ContactMatcher.Match.None, ContactMatcher.find(listOf("Uma"), this.book))
+    }
+
+    @Test
+    fun `a name as written by the model goes back to the user's spelling`() {
+        assertEquals("umma", ContactMatcher.asSaid("Uma", "Send to umma and turn on flashlight"))
+        assertEquals("Uma", ContactMatcher.asSaid("Uma", "send it to Uma and then turn on the flashlight"))
+        assertEquals("Priyaa Sharma", ContactMatcher.asSaid("Priya Sharma", "message Priyaa"))
+        // Nothing alike in their words, or two: left as the model wrote it.
+        assertEquals("Amma", ContactMatcher.asSaid("Amma", "call mom"))
+        assertEquals("Uma", ContactMatcher.asSaid("Uma", "umma or Uuma, whoever"))
+        assertEquals("+91 98450 11111", ContactMatcher.asSaid("+91 98450 11111", "call 98450 11111"))
+    }
+
     @Test
     fun `the default number, else a mobile, else the first`() {
         assertEquals("98450 99999", ContactMatcher.number(book.single { it.name == "Ravi Kumar" }))

@@ -611,6 +611,17 @@ class ToolRoutingTest {
         assertEquals(listOf("dial 98470 12345"), phone.done)
     }
 
+    /** As on 4 Nov 2026: typed "Send to umma" after the recogniser's "Uma", the model still wrote "Uma". */
+    @Test
+    fun `the person messaged is the one the user spelled, not the model`() {
+        contacts = contacts.orEmpty() + listOf(Contact("Uma", listOf(ContactPhone("98450 44444"))), Contact("Umma", listOf(ContactPhone("98450 55555"))))
+        val session = ScriptedSession(
+            ArrayDeque(listOf(ScriptedSession.calls(call("send_message", "to" to "Uma", "text" to "Reached", "app" to "whatsapp")), ScriptedSession.says("Done."))),
+        )
+        runBlocking { loop.run(session, "envelope", emptyList(), ToolContext(1, 13, "Send to umma and turn on flashlight")).toList() }
+        assertTrue(phone.done.single(), phone.done.single().contains("98450 55555"))
+    }
+
     @Test
     fun `my dentist is found by the name memory has for them`() {
         people["my dentist"] = PersonHints(names = listOf("Dr. Rao"))
