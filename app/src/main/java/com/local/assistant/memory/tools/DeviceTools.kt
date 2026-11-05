@@ -246,6 +246,9 @@ class DeviceTools(
                 Person(match.contact.name, address)
             }
             is ContactMatcher.Match.Several -> throw ToolError("Several contacts match '$spoken': ${match.labels.joinToString(", ")}. Ask which one.")
+            is ContactMatcher.Match.Near -> throw ToolError(
+                "No contact is named '$spoken'. The closest: ${match.labels.joinToString(", ")}. Ask whether they mean ${if (match.labels.size == 1) "them" else "one of them"}.",
+            )
             ContactMatcher.Match.None -> throw ToolError(
                 "No contact matches '$spoken'. Ask the user for ${if (need == Need.PHONE) "the number" else "the email address"}.",
             )

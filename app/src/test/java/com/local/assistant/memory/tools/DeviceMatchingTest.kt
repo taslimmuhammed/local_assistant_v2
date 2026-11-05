@@ -56,6 +56,84 @@ class DeviceMatchingTest {
         assertEquals(ContactMatcher.Match.None, ContactMatcher.find(listOf("Uma"), this.book))
     }
 
+    private val spelled = book + listOf(
+        contact("Fathima Riyas", "98450 20001"),
+        contact("Shiyas", "98450 20002"),
+        contact("Winod Menon", "98450 20003"),
+        contact("Muhammad Ajmal", "98450 20004"),
+        contact("Abdulla Rahman", "98450 20005"),
+        contact("Sunit Office", "98450 20006"),
+        contact("Rani", "98450 20007"),
+        contact("José Thomas", "98450 20008"),
+    )
+
+    private fun one(vararg candidates: String) =
+        (ContactMatcher.find(candidates.toList(), spelled) as? ContactMatcher.Match.One)?.contact?.name
+
+    @Test
+    fun `a name spelled the way it sounds finds them`() {
+        assertEquals("Fathima Riyas", one("Fatima"))
+        assertEquals("Shiyas", one("Siyas"))
+        assertEquals("Winod Menon", one("vinod"))
+        assertEquals("Muhammad Ajmal", one("Mohammed Ajmal"))
+        assertEquals("Muhammad Ajmal", one("Mohd Ajmal"))
+        assertEquals("José Thomas", one("jose tomas"))
+        assertEquals("Fathima Riyas", one("Fatimah"))
+    }
+
+    @Test
+    fun `the start of a name finds them, from four letters`() {
+        assertEquals("Abdulla Rahman", one("Abdul"))
+        assertEquals("Abdulla Rahman", one("abdul rahm"))
+        assertEquals(ContactMatcher.Match.None, ContactMatcher.find(listOf("Ab"), spelled))
+        // A whole word still beats the start of one.
+        assertEquals("Amma", one("Amma"))
+    }
+
+    @Test
+    fun `a name merely like the one said is offered, never picked`() {
+        val near = ContactMatcher.find(listOf("Sunil"), spelled) as ContactMatcher.Match.Near
+        assertEquals(listOf("Sunit Office (…0006)"), near.labels)
+        assertTrue(ContactMatcher.find(listOf("Anjaly"), spelled) is ContactMatcher.Match.Near)
+        // Too far apart, or too short to tell.
+        assertEquals(ContactMatcher.Match.None, ContactMatcher.find(listOf("Ravi"), listOf(contact("Rani", "1"))))
+        assertEquals(ContactMatcher.Match.None, ContactMatcher.find(listOf("Uma"), listOf(contact("Ama", "1"))))
+        assertEquals(ContactMatcher.Match.None, ContactMatcher.find(listOf("the plumber"), spelled))
+    }
+
+    @Test
+    fun `sound keys and likeness`() {
+        assertEquals(soundKey("fathima"), soundKey("fatima"))
+        assertEquals(soundKey("shiyas"), soundKey("siyas"))
+        assertEquals(soundKey("phiroz"), soundKey("firoz"))
+        assertEquals(soundKey("deepak"), soundKey("dipak"))
+        assertEquals(soundKey("roopa"), soundKey("rupa"))
+        assertEquals("chandra", soundKey("chandra"))
+        assertTrue(soundKey("ravi") != soundKey("rani"))
+        assertEquals(1.0, jaroWinkler("anjali", "anjali"), 0.0)
+        assertTrue(jaroWinkler("sunil", "sunit") >= 0.88)
+        assertTrue(jaroWinkler("ravi", "rani") < 0.88)
+        assertEquals(0.0, jaroWinkler("abc", "xyz"), 0.0)
+    }
+
+    /** A few thousand contacts, as on a well-used phone: every way through, timed. */
+    @Test
+    fun `matching a few thousand contacts is quick`() {
+        val first = listOf("Arun", "Fathima", "Shiyas", "Priya", "Muhammad", "Anjali", "Ravi", "Suresh", "Deepa", "Jaffar", "Vinod", "Lakshmi")
+        val last = listOf("Kumar", "Nair", "Menon", "Rahman", "Sharma", "Pillai", "Khan", "Thomas", "Reddy", "Iyer")
+        val many = (0 until 3000).map { i -> contact("${first[i % first.size]} ${last[i / first.size % last.size]} ${i / 120}", "98450 ${10000 + i}") }
+        val asks = listOf("Fathima Nair 3" to "written", "Fatima Nair 3" to "sound", "Fath Nair 3" to "prefix", "Fatma Nayr 3" to "near", "Nobody Here" to "none")
+        repeat(3) { asks.forEach { (said, _) -> ContactMatcher.find(listOf(said), many) } } // warm up
+        for ((said, way) in asks) {
+            val runs = 20
+            val start = System.nanoTime()
+            repeat(runs) { ContactMatcher.find(listOf(said, "mummy"), many) }
+            val ms = (System.nanoTime() - start) / 1e6 / runs
+            println("ContactMatcher 3000 contacts, $way: %.2f ms".format(ms))
+        }
+        assertEquals("Fathima Nair 3", (ContactMatcher.find(listOf("Fatima Nair 3"), many) as ContactMatcher.Match.One).contact.name)
+    }
+
     @Test
     fun `a name as written by the model goes back to the user's spelling`() {
         assertEquals("umma", ContactMatcher.asSaid("Uma", "Send to umma and turn on flashlight"))
