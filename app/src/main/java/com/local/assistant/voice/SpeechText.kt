@@ -158,17 +158,31 @@ class SpeechChunker(private val clauses: Boolean = true) {
 
     private fun words(text: String): Int = text.split(SPACE).count { word -> word.any { it.isLetterOrDigit() } }
 
-    private companion object {
-        val FENCE = Regex("```")
-        val SPACE = Regex("\\s+")
+    companion object {
+        private val FENCE = Regex("```")
+        private val SPACE = Regex("\\s+")
 
         /** A clause shorter than this goes with what follows: "Sure," alone is too short to be worth it. */
-        const val MIN_CLAUSE_WORDS = 2
+        private const val MIN_CLAUSE_WORDS = 2
 
         /** Until this many words have been handed out, the reply is starting and clauses go at once. */
-        const val EARLY_WORDS = 8
+        private const val EARLY_WORDS = 8
 
         /** Later on, a sentence is cut at a clause only once the piece is this long. */
-        const val LONG_PIECE_WORDS = 12
+        private const val LONG_PIECE_WORDS = 12
+
+        /**
+         * A finished reply cut as it would have been while streaming, to read it aloud afterwards:
+         * the voice starts after the first piece rather than after the whole reply has been made.
+         */
+        fun pieces(reply: String): List<String> {
+            val chunker = SpeechChunker()
+            val pieces = ArrayList<String>()
+            // A word at a time, as the model wrote it.
+            for (i in reply.indices) {
+                if (reply[i].isWhitespace()) pieces += chunker.push(reply.substring(0, i + 1))
+            }
+            return pieces + chunker.finish(reply)
+        }
     }
 }

@@ -133,4 +133,27 @@ class SpeechChunkerTest {
         chunker.skip("First one. Second")
         assertEquals(listOf("Second one."), chunker.push("First one. Second one. Third"))
     }
+
+    @Test
+    fun `a finished reply is cut as it would have been while streaming`() {
+        assertEquals(
+            listOf("Sure.", "The meeting is at 3 pm,", "in room 4.", "Bring the slides."),
+            SpeechChunker.pieces("Sure. The meeting is at 3 pm, in room 4. Bring the slides."),
+        )
+    }
+
+    @Test
+    fun `a finished reply is read item by item, without its code`() {
+        assertEquals(
+            listOf("Run this:", "Then check the list.", "Fast.", "Offline."),
+            SpeechChunker.pieces("Run this:\n```\nls -la\n```\nThen check the list.\n\n- **Fast**\n- *Offline*"),
+        )
+    }
+
+    @Test
+    fun `a finished reply with nothing to say has no pieces`() {
+        assertEquals(emptyList<String>(), SpeechChunker.pieces(""))
+        assertEquals(emptyList<String>(), SpeechChunker.pieces("```\nls -la\n```"))
+        assertEquals(emptyList<String>(), SpeechChunker.pieces("👍 🎉"))
+    }
 }

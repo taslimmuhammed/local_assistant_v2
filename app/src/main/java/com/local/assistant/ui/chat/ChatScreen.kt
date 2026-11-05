@@ -1,7 +1,12 @@
 package com.local.assistant.ui.chat
 
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
 import androidx.compose.foundation.border
 import androidx.compose.ui.draw.blur
 import androidx.compose.foundation.background
@@ -65,6 +70,7 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.material3.rememberDrawerState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
@@ -151,6 +157,7 @@ fun ChatScreen(
     val pendingAttachment by viewModel.pendingAttachment.collectAsStateWithLifecycle()
     val recording by viewModel.recordingState.collectAsStateWithLifecycle()
     val speaking by viewModel.speaking.collectAsStateWithLifecycle()
+    val readingAloud by viewModel.readingAloud.collectAsStateWithLifecycle()
     val droppedFromContext by viewModel.droppedFromContext.collectAsStateWithLifecycle()
     val chips by viewModel.chips.collectAsStateWithLifecycle()
     val askForNotifications by viewModel.askForNotifications.collectAsStateWithLifecycle()
@@ -177,6 +184,11 @@ fun ChatScreen(
     val micPermission = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission(),
     ) { granted -> if (granted) viewModel.startRecording() }
+
+    // A reply read from its button stops when this screen gives way to Settings, Photos or Memory.
+    DisposableEffect(viewModel) {
+        onDispose { viewModel.stopReadingAloud() }
+    }
 
     // Keep the newest content in view while tokens stream in.
     LaunchedEffect(messages.size, streamingText) {
@@ -275,6 +287,8 @@ fun ChatScreen(
                     title = chats.firstOrNull { it.id == activeChatId }?.title
                         ?: ChatRepository.DEFAULT_TITLE,
                     onOpenDrawer = { scope.launch { drawerState.open() } },
+                    // A blank chat is already a new one: "+" comes once this one has begun.
+                    showNewChat = messages.isNotEmpty() || streamingText != null,
                     onNewChat = viewModel::startNewChat,
                 )
             },
@@ -324,7 +338,7 @@ fun ChatScreen(
                             // not under the question.
                             val asking = messages.lastOrNull()?.takeIf { streamingText != null && it.role == Role.USER }
                             items(messages, key = { it.id }) { message ->
-                                MessageRow(message)
+                                MessageRow(message, readingAloud = message.id == readingAloud, onReadAloud = viewModel::readAloud)
                                 if (message != asking) {
                                     MemoryChips(
                                         chips = chips[message.id].orEmpty(),
@@ -406,6 +420,7 @@ fun ChatScreen(
 private fun ChatTopBar(
     title: String,
     onOpenDrawer: () -> Unit,
+    showNewChat: Boolean,
     onNewChat: () -> Unit,
 ) {
     TopAppBar(
@@ -422,7 +437,9 @@ private fun ChatTopBar(
             GlassIconButton(Icons.Outlined.Menu, "Chats", onOpenDrawer, Modifier.padding(start = 10.dp, end = 6.dp))
         },
         actions = {
-            GlassIconButton(Icons.Outlined.Add, "New chat", onNewChat, Modifier.padding(end = 10.dp))
+            AnimatedVisibility(showNewChat, enter = fadeIn() + scaleIn(), exit = fadeOut() + scaleOut()) {
+                GlassIconButton(Icons.Outlined.Add, "New chat", onNewChat, Modifier.padding(end = 10.dp))
+            }
         },
         colors = TopAppBarDefaults.topAppBarColors(
             containerColor = AppColors.Background,

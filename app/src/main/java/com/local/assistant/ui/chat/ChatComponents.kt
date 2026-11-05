@@ -13,16 +13,23 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.selection.SelectionContainer
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.outlined.VolumeUp
+import androidx.compose.material.icons.outlined.StopCircle
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
@@ -37,13 +44,21 @@ import androidx.compose.ui.graphics.Color
 import com.local.assistant.ui.theme.AppColors
 import com.local.assistant.ui.theme.Glass
 import com.local.assistant.ui.theme.GlassShapes
+import com.local.assistant.voice.SpeechText
 
 /**
  * User turns sit in a dark bubble on the right; model turns run full width with no bubble, on
  * the glass, which is what makes long answers readable on a phone.
  */
 @Composable
-fun MessageRow(message: MessageEntity, modifier: Modifier = Modifier) {
+fun MessageRow(
+    message: MessageEntity,
+    modifier: Modifier = Modifier,
+    /** This reply is the one being read aloud. */
+    readingAloud: Boolean = false,
+    /** Gives a reply a speaker button that reads it aloud, and stops it while it is read. */
+    onReadAloud: ((MessageEntity) -> Unit)? = null,
+) {
     when (message.role) {
         Role.USER -> UserMessage(message, modifier)
         Role.ASSISTANT -> AssistantMessage(
@@ -51,6 +66,8 @@ fun MessageRow(message: MessageEntity, modifier: Modifier = Modifier) {
             incomplete = message.incomplete,
             tokensPerSecond = message.tokensPerSecond,
             timeToFirstTokenMs = message.timeToFirstTokenMs,
+            readingAloud = readingAloud,
+            onReadAloud = onReadAloud?.let { read -> { read(message) } },
             modifier = modifier,
         )
         // Tool calls are bookkeeping, not conversation.
@@ -123,6 +140,9 @@ fun AssistantMessage(
     incomplete: Boolean = false,
     tokensPerSecond: Double? = null,
     timeToFirstTokenMs: Long? = null,
+    readingAloud: Boolean = false,
+    /** The speaker button under the reply; none while it streams, or when it has nothing to say. */
+    onReadAloud: (() -> Unit)? = null,
     modifier: Modifier = Modifier,
 ) {
     Column(modifier = modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp)) {
@@ -137,16 +157,46 @@ fun AssistantMessage(
             tokensPerSecond?.let { "%.1f tok/s".format(it) },
             timeToFirstTokenMs?.takeIf { it > 0 }?.let { "%.1fs to first token".format(it / 1000.0) },
         )
-        if (footnote.isNotEmpty()) {
-            Text(
-                text = footnote.joinToString(" · "),
-                style = MaterialTheme.typography.bodySmall,
-                color = AppColors.TextSecondary,
-                modifier = Modifier.padding(top = 4.dp),
-            )
+        val sayable = remember(text) { SpeechText.clean(text).any(Char::isLetterOrDigit) }
+        val readButton = onReadAloud?.takeIf { !streaming && sayable }
+        if (readButton != null) {
+            // Pulled left by the button's own inset, so the speaker lines up with the reply's text.
+            Row(Modifier.offset(x = -READ_ALOUD_INSET), verticalAlignment = Alignment.CenterVertically) {
+                ReadAloudButton(readingAloud, readButton)
+                if (footnote.isNotEmpty()) Footnote(footnote)
+            }
+        } else if (footnote.isNotEmpty()) {
+            Footnote(footnote, Modifier.padding(top = 4.dp))
         }
     }
 }
+
+@Composable
+private fun Footnote(parts: List<String>, modifier: Modifier = Modifier) {
+    Text(
+        text = parts.joinToString(" · "),
+        style = MaterialTheme.typography.bodySmall,
+        color = AppColors.TextSecondary,
+        modifier = modifier,
+    )
+}
+
+/** Reads the reply aloud; while it is being read, a stop button instead. */
+@Composable
+private fun ReadAloudButton(reading: Boolean, onClick: () -> Unit) {
+    IconButton(onClick = onClick, modifier = Modifier.size(READ_ALOUD_SIZE)) {
+        Icon(
+            if (reading) Icons.Outlined.StopCircle else Icons.AutoMirrored.Outlined.VolumeUp,
+            contentDescription = if (reading) "Stop reading aloud" else "Read aloud",
+            tint = if (reading) AppColors.TextPrimary else AppColors.TextSecondary,
+            modifier = Modifier.size(READ_ALOUD_ICON),
+        )
+    }
+}
+
+private val READ_ALOUD_SIZE = 36.dp
+private val READ_ALOUD_ICON = 18.dp
+private val READ_ALOUD_INSET = (READ_ALOUD_SIZE - READ_ALOUD_ICON) / 2
 
 /** Shown between hitting send and the first token arriving — prefill can take a few seconds. */
 /**

@@ -149,7 +149,7 @@ class ChatViewModel(
 
     val engineState: StateFlow<LlmService.State> = llm.state
 
-    /** The reply to a voice message is being read aloud. */
+    /** A reply is being read aloud: one to a voice message, or one from its speaker button. */
     val speaking: StateFlow<Boolean> = speaker.speaking
 
     /** Cuts the streaming reply into sentences to speak; null when this reply isn't spoken. */
@@ -157,6 +157,11 @@ class ChatViewModel(
 
     /** A voice message is waiting for its spoken reply: other audio stays quiet until it's said. */
     private val awaitingSpeech = MutableStateFlow(false)
+
+    private val _readingAloud = MutableStateFlow<Long?>(null)
+
+    /** The reply being read aloud from its speaker button ([readAloud]); null when none is. */
+    val readingAloud: StateFlow<Long?> = _readingAloud.asStateFlow()
 
     init {
         // The chat opens at once and the model loads behind it; a message sent before it is ready
@@ -186,6 +191,16 @@ class ChatViewModel(
                     }
                 }
         }
+
+        // A reply read from its button has been read once the voice falls quiet (speak() makes it
+        // speaking at once, so this never ends one about to start).
+        viewModelScope.launch {
+            speaker.speaking.collect { speaking -> if (!speaking) _readingAloud.value = null }
+        }
+        // And it stops when its chat is left: another one, a new one, or this one deleted.
+        viewModelScope.launch {
+            _activeChatId.collect { if (_readingAloud.value != null) stopSpeaking() }
+        }
     }
 
     /** Says [sentence], with its sensitive details said as how they end, unless they're being shown. */
@@ -197,7 +212,27 @@ class ChatViewModel(
     fun stopSpeaking() {
         chunker = null
         awaitingSpeech.value = false
+        _readingAloud.value = null
         speaker.stop()
+    }
+
+    /**
+     * The speaker button under a finished reply: reads it aloud in place of anything being said,
+     * or, pressed again while it is being read, stops it.
+     */
+    fun readAloud(message: MessageEntity) {
+        val again = _readingAloud.value == message.id
+        stopSpeaking()
+        if (again) return
+        val pieces = SpeechChunker.pieces(message.text)
+        if (pieces.isEmpty()) return
+        _readingAloud.value = message.id
+        pieces.forEach(::say)
+    }
+
+    /** The chat screen was left for another (Settings, Photos…): a reply read from its button stops. */
+    fun stopReadingAloud() {
+        if (_readingAloud.value != null) stopSpeaking()
     }
 
     /** After the model failed to start: from the banner that says so. */
