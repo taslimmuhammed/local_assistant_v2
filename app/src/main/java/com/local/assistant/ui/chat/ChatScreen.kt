@@ -104,7 +104,6 @@ import androidx.lifecycle.repeatOnLifecycle
 import com.local.assistant.data.db.AttachmentKind
 import com.local.assistant.data.db.Role
 import com.local.assistant.data.repo.ChatRepository
-import com.local.assistant.device.PermissionBroker
 import com.local.assistant.llm.LlmService
 import com.local.assistant.media.RecordingState
 import com.local.assistant.ui.theme.AppColors
@@ -204,21 +203,9 @@ fun ChatScreen(
     }
 
     // A tool asking for a permission it needs now, like contacts for "call amma": answer it with
-    // the system dialog, and the tool carries on with the result.
-    var permissionRequest by remember { mutableStateOf<PermissionBroker.Request?>(null) }
-    val toolPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
-        permissionRequest?.answer?.complete(granted)
-        permissionRequest = null
-    }
-    // Only while on screen: the assistant overlay answers these when it is the one in front.
-    LaunchedEffect(viewModel, lifecycle) {
-        lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
-            viewModel.permissionRequests.collect { request ->
-                permissionRequest = request
-                toolPermission.launch(request.permission)
-            }
-        }
-    }
+    // the system dialog, and the tool carries on with the result. Only while on screen, and not
+    // while the assistant overlay is over it: the overlay answers them then.
+    ToolPermissionRequests(viewModel.permissionRequests, elsewhere = { com.local.assistant.assist.AssistActivity.inView })
 
     LaunchedEffect(offerExactAlarms) {
         if (!offerExactAlarms || Build.VERSION.SDK_INT < Build.VERSION_CODES.S) return@LaunchedEffect

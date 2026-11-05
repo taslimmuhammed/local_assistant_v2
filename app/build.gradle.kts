@@ -204,6 +204,10 @@ dependencies {
     // are parsed with it. org.json would be stubbed out in JVM unit tests.
     implementation(libs.gson)
 
+    // Steps, heart rate, sleep and workouts the phone's health apps keep in Health Connect, read
+    // only and only when asked (health/). Built into Android 14 and later.
+    implementation(libs.androidx.health.connect)
+
     // The natural voice (voice/NaturalVoice): Kokoro run by sherpa-onnx, with ONNX Runtime linked
     // into its one native library (24 MB on arm64). 1.13.8 is the last release with eSpeak NG
     // built in; 2.0 drops it and silently skips numbers and names. Not on Maven: see fetchSherpaOnnx.

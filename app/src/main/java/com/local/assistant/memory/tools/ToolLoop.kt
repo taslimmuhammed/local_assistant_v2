@@ -120,7 +120,9 @@ class ToolLoop(
         // until the model has been asked once more to search ([PHOTO_CHECK]).
         val mustSearch = photosAvailable() && !context.locked && com.local.assistant.memory.retrieval.QueryText.asksForPhotos(context.userText)
         var searchAsked = false
-        val text = if (groundNumbers()) GroundedReply(grounding, onNumberFixed) else null
+        // Health data read this turn: a number put right in the reply may be a reading, and those are never logged.
+        var readHealth = false
+        val text = if (groundNumbers()) GroundedReply(grounding) { wrote, source -> if (!readHealth) onNumberFixed(wrote, source) } else null
         // Calls held back for a lookup's answer ([waiting]) and not yet asked for again.
         val unanswered = mutableListOf<ToolCall>()
         // What calls and messages got ready for the user to send: the reply after them must not
@@ -130,6 +132,7 @@ class ToolLoop(
         var acted = false
         var failed = false
         fun ran(call: ToolCall, outcome: ToolExecutor.Outcome) {
+            if (call.name == ToolCatalog.HEALTH) readHealth = true
             if (!outcome.ok) failed = true else if (call.name in ToolCatalog.ACTS) acted = true
         }
 

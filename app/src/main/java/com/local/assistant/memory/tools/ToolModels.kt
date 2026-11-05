@@ -31,7 +31,7 @@ data class MemoryChip(
     /** find_photos: the photos it found, drawn as thumbnails or a card instead of a text row. */
     val photos: PhotoSet? = null,
 ) {
-    enum class Kind { FACT, TASK, EVENT, FORGET, ALARM, IMAGE, CALL, MESSAGE, TIMER, APP, SETTING, WEB, PHOTOS, SCREENSHOT }
+    enum class Kind { FACT, TASK, EVENT, FORGET, ALARM, IMAGE, CALL, MESSAGE, TIMER, APP, SETTING, WEB, PHOTOS, SCREENSHOT, HEALTH }
 }
 
 /**

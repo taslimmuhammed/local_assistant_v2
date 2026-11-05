@@ -56,6 +56,12 @@ class AssistActivity : FragmentActivity() {
     /** The unlock prompt is up: the overlay stays while it is. */
     private var awaitingUnlock = false
 
+    /**
+     * A tool's permission screen is up, Health Connect's over the whole panel: the overlay stays
+     * while it is, to take the answer and carry on with the turn.
+     */
+    private var awaitingPermission = false
+
     /** The system is blurring what's behind the panel. */
     private val blurred = mutableStateOf(false)
 
@@ -101,6 +107,11 @@ class AssistActivity : FragmentActivity() {
                         onClosed = ::close,
                         onOpenApp = ::openApp,
                         onOpenSettings = ::openSettings,
+                        onAskingPermission = { asking ->
+                            awaitingPermission = asking
+                            // Given up on while out of sight (the user went home from it): close, as onStop would have.
+                            if (!asking && !lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.STARTED)) close()
+                        },
                     )
                 }
             }
@@ -128,7 +139,7 @@ class AssistActivity : FragmentActivity() {
         inView = false
         super.onStop()
         // Out of sight, out of the way: an overlay left behind would sit in its own task.
-        if (!isChangingConfigurations && !awaitingUnlock && !isFinishing) close()
+        if (!isChangingConfigurations && !awaitingUnlock && !awaitingPermission && !isFinishing) close()
     }
 
     private fun isLocked(): Boolean = getSystemService(KeyguardManager::class.java)?.isKeyguardLocked == true

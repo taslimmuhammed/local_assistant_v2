@@ -76,6 +76,8 @@ class ConversationManager(
     private val webSearch: () -> Boolean = { false },
     /** Whether find_photos is among [tools], likewise. */
     private val photoSearch: () -> Boolean = { false },
+    /** Whether health_data is among [tools], likewise. */
+    private val healthData: () -> Boolean = { false },
     /** Per-turn recall of facts and archived exchanges; none when null. */
     private val retriever: Retriever? = null,
     /** Per-turn photos from the gallery a question may be about; none when null. */
@@ -729,6 +731,7 @@ class ConversationManager(
         withTools = tools().isNotEmpty() && backend.capabilities?.tools == true,
         webSearch = webSearch(),
         photoSearch = photoSearch(),
+        healthData = healthData(),
     )
 
     /** Stored turns before [beforeId], minus any that a rolling summary already covers. */

@@ -31,6 +31,8 @@ object ToolCatalog {
     /** Not "search_photos", for the same reason. */
     const val FIND_PHOTOS = "find_photos"
     const val TAKE_SCREENSHOT = "take_screenshot"
+    /** Not "get_health": beside get_upcoming the model could blend the two, as it did search tools. */
+    const val HEALTH = "health_data"
 
     /**
      * Not a tool the model calls: the TOOL row that keeps the photos shown under a reply because
@@ -55,7 +57,7 @@ object ToolCatalog {
     val HANDOFFS = setOf(CALL, SEND_MESSAGE, OPEN_APP)
 
     /** Tools whose answer a request may go on to use: "what's 18% of 2450? remind me to pay that much". */
-    val LOOKUPS = setOf(CALCULATE, WEB_SEARCH, SEARCH_MEMORY, GET_UPCOMING)
+    val LOOKUPS = setOf(CALCULATE, WEB_SEARCH, SEARCH_MEMORY, GET_UPCOMING, HEALTH)
 
     /** Tools that carry words a lookup's answer could go into: a reminder's title, a message. */
     val TAKES_ANSWERS = setOf(ADD_TASK, ADD_EVENT, SEND_MESSAGE, SAVE_FACT)
@@ -72,19 +74,34 @@ object ToolCatalog {
     val LOCKED = setOf(ADD_TASK, ADD_EVENT, SET_ALARM, SET_TIMER, PHONE_SETTING, CALCULATE, WEB_SEARCH)
 
     /** Tools that don't touch memory, run outside its transaction: they wait on apps, dialogs, the network or the photo model. */
-    val OUTSIDE_MEMORY = DEVICE + WEB_SEARCH + FIND_PHOTOS
+    val OUTSIDE_MEMORY = DEVICE + WEB_SEARCH + FIND_PHOTOS + HEALTH
 
     /**
-     * Every tool the model is given; web search only once the user has set it up, and photo
-     * search only once its model is installed and the app may see the photos.
+     * Every tool the model is given; web search only once the user has set it up, photo search
+     * only once its model is installed and the app may see the photos, and health data only on a
+     * phone with Health Connect (asking for access the first time it's used).
      */
-    fun declarations(web: Boolean, photos: Boolean = false): List<String> =
-        declarations + listOfNotNull(WEB_DECLARATION.takeIf { web }, PHOTOS_DECLARATION.takeIf { photos })
+    fun declarations(web: Boolean, photos: Boolean = false, health: Boolean = false): List<String> =
+        declarations + listOfNotNull(WEB_DECLARATION.takeIf { web }, PHOTOS_DECLARATION.takeIf { photos }, HEALTH_DECLARATION.takeIf { health })
 
     /** How to use the tools, appended to the instructions (section A) when tools are declared. */
-    fun rules(web: Boolean, photos: Boolean = false): String = RULES
+    fun rules(web: Boolean, photos: Boolean = false, health: Boolean = false): String = RULES
         .replace(WEB_SLOT, if (web) WEB_RULE + "\n" else "")
         .replace(PHOTOS_SLOT, if (photos) PHOTOS_RULE + "\n" else "")
+        .replace(HEALTH_SLOT, if (health) HEALTH_RULE + (if (web) HEALTH_OFFLINE else "") + "\n" else "")
+
+    private val HEALTH_DECLARATION = function(
+        HEALTH,
+        "Use when the user asks about their own health or fitness numbers, recorded by this phone or their watch: steps (and how many are left to their daily step goal), how far they walked, calories burned, heart rate, resting heart rate, sleep, workouts. metric: steps, distance, calories, heart_rate, resting_heart_rate, sleep or exercise. when: the user's own time words, copied exactly (today, this morning, last night, yesterday, last week); leave it out for now or the latest.",
+        required = listOf("metric"),
+        "metric" to "string",
+        "when" to "string",
+    )
+
+    private const val HEALTH_RULE =
+        "- Their own steps (or their step goal, how many are left to it), distance, calories, heart rate, sleep or workouts → health_data, once per kind asked about. Answer only from its result, with its numbers and the time they cover; when it found nothing, say so and never guess a number. The step goal is changed in Settings, under Health data, not in chat. General health questions (what's a normal heart rate, how much sleep is enough): answer yourself."
+    private const val HEALTH_OFFLINE = " Their health readings stay on the phone: never put them in a web_lookup."
+    private const val HEALTH_SLOT = "{health}\n"
 
     private val PHOTOS_DECLARATION = function(
         FIND_PHOTOS,
@@ -247,6 +264,7 @@ object ToolCatalog {
         - "What's coming up" beyond the agenda → get_upcoming. Something told before that is not above → search_memory. "Forget …" → forget.
         {web}
         {photos}
+        {health}
         After a tool succeeds, confirm in one short sentence. If it returns ok:false, ask the user for what is missing.
         You act only through these tools. Never say you did something (sent, called, booked, set, saved) unless its tool succeeded just now. If none of them can do what is asked (Teams or Slack, bookings, payments, posts, reading their inbox), say plainly that you can't, and offer what you can.
     """.trimIndent()

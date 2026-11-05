@@ -63,6 +63,8 @@ class ToolExecutor(
     private val web: WebTools? = null,
     /** find_photos; none when not wired in. */
     private val photos: com.local.assistant.gallery.PhotoTools? = null,
+    /** health_data; none when not wired in. */
+    private val health: com.local.assistant.health.HealthTools? = null,
 ) {
 
     data class Outcome(
@@ -187,7 +189,15 @@ class ToolExecutor(
         val userText = context.userText
         val args = Args(call.arguments)
         if (call.name == ToolCatalog.WEB_SEARCH) {
+            // Health data stays on the phone: a search with a reading just read out would send it off.
+            if (health?.inQuery(args.text("query").orEmpty()) == true) {
+                throw ToolError("That search has the user's health readings in it, and those stay on this phone. Search without their numbers (\"normal resting heart rate\"), or answer from what you know.")
+            }
             val done = (web ?: throw ToolError("Web search isn't set up.")).search(args)
+            return Applied(done.result, done.chip)
+        }
+        if (call.name == ToolCatalog.HEALTH) {
+            val done = (health ?: throw ToolError("Health data isn't available in this app.")).read(args.text("metric"), args.text("when"))
             return Applied(done.result, done.chip)
         }
         if (call.name == ToolCatalog.FIND_PHOTOS) {

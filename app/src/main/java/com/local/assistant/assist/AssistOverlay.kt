@@ -128,6 +128,7 @@ import com.local.assistant.device.PermissionBroker
 import com.local.assistant.llm.LlmService
 import com.local.assistant.ui.chat.MarkdownText
 import com.local.assistant.ui.chat.MemoryChips
+import com.local.assistant.ui.chat.ToolPermissionRequests
 import com.local.assistant.ui.chat.ThinkingIndicator
 import com.local.assistant.ui.privacy.HiddenDetails
 import com.local.assistant.ui.privacy.rememberShown
@@ -160,6 +161,8 @@ fun AssistOverlay(
     onClosed: () -> Unit,
     onOpenApp: (chatId: Long?) -> Unit,
     onOpenSettings: () -> Unit,
+    /** A tool's permission screen is up (Health Connect's covers the panel), or has gone. */
+    onAskingPermission: (Boolean) -> Unit = {},
 ) {
     val context = LocalContext.current
     val lifecycle = LocalLifecycleOwner.current.lifecycle
@@ -194,19 +197,8 @@ fun AssistOverlay(
         if (!lockedOut && viewModel.claimAutoStart()) listen()
     }
 
-    var permissionRequest by remember { mutableStateOf<PermissionBroker.Request?>(null) }
-    val toolPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
-        permissionRequest?.answer?.complete(granted)
-        permissionRequest = null
-    }
-    LaunchedEffect(viewModel, lifecycle) {
-        lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
-            viewModel.permissionRequests.collect { request ->
-                permissionRequest = request
-                toolPermission.launch(request.permission)
-            }
-        }
-    }
+    // Health Connect's screen covers the panel: it stays up meanwhile ([onAskingPermission]).
+    ToolPermissionRequests(viewModel.permissionRequests, onAsking = onAskingPermission)
 
     val notificationPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) {
         viewModel.notificationsAsked()

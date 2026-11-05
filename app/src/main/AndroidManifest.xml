@@ -42,6 +42,19 @@
          by default). Heard on the phone, by a small model in the APK; the audio goes nowhere. -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
 
+    <!-- "How many steps today?", "how did I sleep?": read from Health Connect, where the phone's
+         health apps (Fitbit, OHealth, a watch's app) keep them. Read only, nothing is written;
+         each kind is asked for the first time it is asked about, or from Settings → Health data.
+         What is read stays on the phone. -->
+    <uses-permission android:name="android.permission.health.READ_STEPS" />
+    <uses-permission android:name="android.permission.health.READ_DISTANCE" />
+    <uses-permission android:name="android.permission.health.READ_TOTAL_CALORIES_BURNED" />
+    <uses-permission android:name="android.permission.health.READ_ACTIVE_CALORIES_BURNED" />
+    <uses-permission android:name="android.permission.health.READ_HEART_RATE" />
+    <uses-permission android:name="android.permission.health.READ_RESTING_HEART_RATE" />
+    <uses-permission android:name="android.permission.health.READ_SLEEP" />
+    <uses-permission android:name="android.permission.health.READ_EXERCISE" />
+
     <!-- "Turn on Do Not Disturb": the user still has to allow it in Settings. -->
     <uses-permission android:name="android.permission.ACCESS_NOTIFICATION_POLICY" />
 
@@ -76,6 +89,8 @@
         </intent>
         <package android:name="com.whatsapp" />
         <package android:name="com.whatsapp.w4b" />
+        <!-- Health Connect as an app, on Android 13 and earlier. -->
+        <package android:name="com.google.android.apps.healthdata" />
     </queries>
 
     <application
@@ -122,6 +137,29 @@
                 <category android:name="android.intent.category.DEFAULT" />
             </intent-filter>
         </activity>
+
+        <!-- How health data is used: Health Connect shows its permission screen only to an app
+             with this page, and links to it from there. Android 13 and earlier open it with the
+             action below; 14 and later through the alias, which only the system may start. -->
+        <activity
+            android:name=".health.HealthPrivacyActivity"
+            android:exported="true"
+            android:excludeFromRecents="true"
+            android:theme="@style/Theme.LocalAssistant">
+            <intent-filter>
+                <action android:name="androidx.health.ACTION_SHOW_PERMISSIONS_RATIONALE" />
+            </intent-filter>
+        </activity>
+        <activity-alias
+            android:name=".health.ViewPermissionUsageActivity"
+            android:exported="true"
+            android:permission="android.permission.START_VIEW_PERMISSION_USAGE"
+            android:targetActivity=".health.HealthPrivacyActivity">
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW_PERMISSION_USAGE" />
+                <category android:name="android.intent.category.HEALTH_PERMISSIONS" />
+            </intent-filter>
+        </activity-alias>
 
         <!-- "While you were away": a pane of glass at the bottom of the screen, opened after an
              unlock (through the assistant session, as a background app can't open a screen) or

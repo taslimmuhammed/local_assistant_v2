@@ -283,6 +283,21 @@ class AppContainer(context: Context) {
     /** Tavily, with the user's own key; off (and undeclared to the model) until there is one. */
     val webSearch = TavilySearch(key = { secrets.get(SecretStore.TAVILY_KEY) })
 
+    /** Health Connect, read only: steps, heart rate, sleep and workouts the phone's health apps keep. */
+    val healthSource = com.local.assistant.health.HealthConnectSource(context)
+
+    /** health_data: declared wherever there's a Health Connect, asking for access the first time each kind is asked about. */
+    val healthTools = com.local.assistant.health.HealthTools(
+        healthSource,
+        requestAccess = { asked -> permissions.requestHealth(asked) },
+        appName = { packageName ->
+            runCatching {
+                context.packageManager.getApplicationLabel(context.packageManager.getApplicationInfo(packageName, 0)).toString()
+            }.getOrDefault(packageName)
+        },
+        stepGoal = { settings.stepGoal },
+    )
+
     val conversations = ConversationManager(
         backend = llmBackend,
         chats = chatRepository,
@@ -291,9 +306,10 @@ class AppContainer(context: Context) {
         scheduler = modelScheduler,
         scope = appScope,
         estimator = tokenEstimator,
-        tools = { ToolCatalog.declarations(web = webSearch.enabled, photos = photoSearchReady()) },
+        tools = { ToolCatalog.declarations(web = webSearch.enabled, photos = photoSearchReady(), health = healthTools.available()) },
         webSearch = { webSearch.enabled },
         photoSearch = ::photoSearchReady,
+        healthData = healthTools::available,
         retriever = retriever,
         photos = PhotoRecall(galleryIndex, photoLibrary, ready = ::photoSearchReady, cacheDir = context.cacheDir),
         summarizer = summarizer,
@@ -426,6 +442,7 @@ class AppContainer(context: Context) {
             mayRead = { context.getSystemService(android.app.KeyguardManager::class.java)?.isKeyguardLocked != true },
             reader = { path, question -> if ((llmService.capabilities.value?.visionTokensPerImage ?: 0) > 0) photoReader.answer(path, question) else null },
         ),
+        health = healthTools,
     )
 
     private val toolLoop = ToolLoop(
@@ -433,7 +450,7 @@ class AppContainer(context: Context) {
         maxRounds = MemoryBudget.SIXTEEN_K.maxToolRounds,
         isOverflow = llmBackend::isContextOverflow,
         isUnreadable = llmBackend::isUnreadableToolCall,
-        repair = ToolCallRepair(ToolCatalog.declarations(web = true, photos = true))::repair,
+        repair = ToolCallRepair(ToolCatalog.declarations(web = true, photos = true, health = true))::repair,
         onNumberFixed = { wrote, source -> Log.i("ReplyGrounding", "Reply wrote $wrote; the source has $source") },
         groundNumbers = { !llmService.exactDigits },
         seesImages = { (llmService.capabilities.value?.visionTokensPerImage ?: 0) > 0 },

@@ -39,6 +39,12 @@ object ToolSteps {
         ToolCatalog.PHONE_SETTING -> "Changing the setting…"
         ToolCatalog.CALCULATE -> "Calculating…"
         ToolCatalog.TAKE_SCREENSHOT -> "Saving the screenshot…"
+        ToolCatalog.HEALTH -> when (com.local.assistant.health.HealthMetric.parse(call.arguments["metric"]?.toString())) {
+            com.local.assistant.health.HealthMetric.SLEEP -> "Checking your sleep…"
+            com.local.assistant.health.HealthMetric.HEART_RATE, com.local.assistant.health.HealthMetric.RESTING_HEART_RATE -> "Checking your heart rate…"
+            com.local.assistant.health.HealthMetric.EXERCISE -> "Checking your workouts…"
+            else -> "Checking your activity…"
+        }
         else -> "Working on it…"
     }
 }

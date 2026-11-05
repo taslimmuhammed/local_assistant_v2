@@ -17,6 +17,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.selectable
@@ -24,6 +25,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ArrowBack
 import androidx.compose.material.icons.automirrored.outlined.KeyboardArrowRight
+import androidx.compose.material.icons.outlined.FavoriteBorder
 import androidx.compose.material.icons.outlined.History
 import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material.icons.outlined.Memory
@@ -109,6 +111,7 @@ enum class SettingsSection(val title: String) {
     CALLING("Calling the assistant"),
     VOICE("Voice"),
     AWAY("While you were away"),
+    HEALTH("Health data"),
     MODEL("Model"),
     MEMORY("Memory and history"),
     ABOUT("About"),
@@ -132,6 +135,7 @@ fun SettingsScreen(
     webSearchOn: Boolean,
     memory: MemoryViewModel,
     awayBrief: AwayBrief,
+    health: com.local.assistant.health.HealthSource,
     section: SettingsSection?,
     onSection: (SettingsSection?) -> Unit,
     onBack: () -> Unit,
@@ -168,14 +172,16 @@ fun SettingsScreen(
     ) { padding ->
         // Each page scrolls on its own, from its top.
         key(section) {
-            Column(Modifier.fillMaxSize().padding(padding).fadingEdges(top = 12.dp, bottom = 0.dp).verticalScroll(rememberScrollState())) {
+            // Above the keyboard, so a field typed in (the step goal) stays in sight.
+            Column(Modifier.fillMaxSize().padding(padding).imePadding().fadingEdges(top = 12.dp, bottom = 0.dp).verticalScroll(rememberScrollState())) {
                 // Each page is one card of glass, the brief's.
                 GlassCard(Modifier.padding(start = 12.dp, end = 12.dp, top = 8.dp), padding = 6.dp) {
                 when (section) {
-                    null -> MainPage(settings, webSearchOn, memory, onSection, onOpenProfile, onOpenWebSearch)
+                    null -> MainPage(settings, webSearchOn, memory, health, onSection, onOpenProfile, onOpenWebSearch)
                     SettingsSection.CALLING -> CallingSettings(settings)
                     SettingsSection.VOICE -> VoiceSettings(settings, speaker, voicePacks)
                     SettingsSection.AWAY -> AwaySettings(settings, awayBrief)
+                    SettingsSection.HEALTH -> HealthSettings(health, settings)
                     SettingsSection.MODEL -> {
                         val state by llmService.state.collectAsStateWithLifecycle()
                         NavRow(
@@ -206,11 +212,13 @@ private fun MainPage(
     settings: SettingsStore,
     webSearchOn: Boolean,
     memory: MemoryViewModel,
+    health: com.local.assistant.health.HealthSource,
     onSection: (SettingsSection) -> Unit,
     onOpenProfile: () -> Unit,
     onOpenWebSearch: () -> Unit,
 ) {
     val context = LocalContext.current
+    val healthAccess = rememberHealthAccess(health)
     val paused by memory.memoryPaused.collectAsStateWithLifecycle()
     val retention by memory.retentionDays.collectAsStateWithLifecycle()
     SectionRow(Icons.Outlined.Person, "Your profile", "Name, age, work and more, kept in mind in every chat", onOpenProfile)
@@ -237,6 +245,7 @@ private fun MainPage(
         ).joinToString(" \u00b7 "),
     ) { onSection(SettingsSection.VOICE) }
     SectionRow(Icons.Outlined.NotificationsNone, SettingsSection.AWAY.title, awaySummary(settings, context)) { onSection(SettingsSection.AWAY) }
+    SectionRow(Icons.Outlined.FavoriteBorder, SettingsSection.HEALTH.title, healthSummary(healthAccess)) { onSection(SettingsSection.HEALTH) }
     SectionRow(
         Icons.Outlined.Memory,
         SettingsSection.MODEL.title,

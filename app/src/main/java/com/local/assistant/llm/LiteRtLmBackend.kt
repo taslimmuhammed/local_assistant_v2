@@ -13,7 +13,6 @@ import com.google.ai.edge.litertlm.SamplerConfig
 import com.google.ai.edge.litertlm.ThinkingConfig
 import com.google.ai.edge.litertlm.ToolCall as RuntimeToolCall
 import com.google.ai.edge.litertlm.tool
-import com.google.gson.Gson
 import com.local.assistant.data.db.AttachmentKind
 import com.local.assistant.data.db.MessageEntity
 import com.local.assistant.data.db.Role
@@ -162,7 +161,7 @@ private class LiteRtChatSession(
         stream(
             Message.tool(
                 Contents.of(
-                    results.map { Content.ToolResponse(it.name, gson.fromJson(it.json, Map::class.java)) },
+                    results.map { Content.ToolResponse(it.name, ToolReplay.gson.fromJson(it.json, Map::class.java)) },
                 ),
             ),
         )
@@ -210,7 +209,6 @@ private class LiteRtChatSession(
 
     private companion object {
         const val TAG = "LiteRtChatSession"
-        val gson = Gson()
     }
 }
 

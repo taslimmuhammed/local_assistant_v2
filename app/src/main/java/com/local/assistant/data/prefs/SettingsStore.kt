@@ -230,6 +230,11 @@ class SettingsStore(context: Context) {
         get() = prefs.getStringSet(KEY_AWAY_IGNORED, emptySet()).orEmpty().toSet()
         set(value) = prefs.edit { putStringSet(KEY_AWAY_IGNORED, value) }
 
+    /** The daily step goal health_data measures steps against. */
+    var stepGoal: Int
+        get() = prefs.getInt(KEY_STEP_GOAL, com.local.assistant.health.HealthTools.DEFAULT_STEP_GOAL)
+        set(value) = prefs.edit { putInt(KEY_STEP_GOAL, value) }
+
     fun observeAwayBrief(): Flow<Boolean> = observeKey(KEY_AWAY_BRIEF) { awayBrief }
 
     fun observeAwayIgnoredApps(): Flow<Set<String>> = observeKey(KEY_AWAY_IGNORED) { awayIgnoredApps }
@@ -255,6 +260,7 @@ class SettingsStore(context: Context) {
         private const val KEY_AWAY_POP_UP = "away_pop_up"
         private const val KEY_AWAY_MINUTES = "away_minutes"
         private const val KEY_AWAY_IGNORED = "away_ignored_apps"
+        private const val KEY_STEP_GOAL = "step_goal"
         private const val KEY_EMBEDDER_PATH = "embedder_path"
         private const val KEY_EMBEDDER_KEY = "embedder_key"
         private const val KEY_GALLERY_MODEL_PATH = "gallery_model_path"

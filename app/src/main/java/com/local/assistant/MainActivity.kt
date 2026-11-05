@@ -226,6 +226,7 @@ private fun AppRoot(
             webSearchOn = container.webSearch.enabled,
             memory = memoryViewModel,
             awayBrief = container.awayBrief,
+            health = container.healthSource,
             section = settingsSection,
             onSection = { settingsSection = it },
             onBack = {

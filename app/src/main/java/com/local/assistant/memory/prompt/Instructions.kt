@@ -22,13 +22,19 @@ object Instructions {
     const val NAMED = "Your name is ${WakeWord.NAME}."
 
     /** [withTools] adds the routing rules for the declared tools. */
-    fun render(persona: String, withTools: Boolean = false, webSearch: Boolean = false, photoSearch: Boolean = false): String = buildString {
+    fun render(
+        persona: String,
+        withTools: Boolean = false,
+        webSearch: Boolean = false,
+        photoSearch: Boolean = false,
+        healthData: Boolean = false,
+    ): String = buildString {
         append(identity(persona))
         append("\n\n")
         append(MEMORY_RULES)
         if (withTools) {
             append("\n\n")
-            append(ToolCatalog.rules(webSearch, photoSearch))
+            append(ToolCatalog.rules(webSearch, photoSearch, healthData))
         }
     }
 

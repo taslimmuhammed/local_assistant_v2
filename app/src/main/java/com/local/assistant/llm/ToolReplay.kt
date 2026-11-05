@@ -1,5 +1,8 @@
 package com.local.assistant.llm
 
+import com.google.gson.Gson
+import com.google.gson.GsonBuilder
+import com.google.gson.ToNumberPolicy
 import com.local.assistant.memory.tools.ChatToolLog
 
 /**
@@ -33,5 +36,10 @@ object ToolReplay {
     const val MAX_TEXT = 240
     const val MAX_ITEMS = 6
 
-    private val gson = com.google.gson.Gson()
+    /**
+     * A tool result's JSON as the model is handed it, now or replayed. Whole numbers stay whole:
+     * read Gson's default way every number became a Double, the model saw
+     * "steps_left_to_goal": 7740.0 and wrote "7740.0 steps away" (5 Nov 2026).
+     */
+    internal val gson: Gson = GsonBuilder().setObjectToNumberStrategy(ToNumberPolicy.LONG_OR_DOUBLE).create()
 }
