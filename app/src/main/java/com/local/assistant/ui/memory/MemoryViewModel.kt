@@ -21,6 +21,8 @@ import com.local.assistant.memory.db.FactEntity
 import com.local.assistant.memory.db.FactOrigin
 import com.local.assistant.memory.db.NoteEntity
 import com.local.assistant.memory.db.TaskEntity
+import com.local.assistant.memory.db.TaskPlace
+import com.local.assistant.memory.tools.ReminderEdits
 import com.local.assistant.memory.prompt.MemoryBudget
 import com.local.assistant.memory.prompt.TokenEstimator
 import kotlinx.coroutines.CancellationException
@@ -80,12 +82,16 @@ data class FactsView(
     }
 }
 
-/** A short-lived message under the screen, with an undo when there is one. */
+/**
+ * A short-lived message under the screen, with an undo when there is one. The undo comes last, so
+ * `Notice("Deleted “Buy milk”") { restore() }` is an undo: with [settle] last that lambda was it,
+ * and every undo ran by itself once its message went (5 Nov 2026).
+ */
 data class Notice(
     val message: String,
-    val undo: (suspend () -> Unit)? = null,
     /** Runs once the notice goes without its undo: what the undo needed kept can go now. */
     val settle: (suspend () -> Unit)? = null,
+    val undo: (suspend () -> Unit)? = null,
 )
 
 class MemoryViewModel(
@@ -151,7 +157,7 @@ class MemoryViewModel(
             1 -> " · also removed 1 related snippet"
             else -> " · also removed $also related snippets"
         }
-        _notices.emit(Notice(message) { controls.undo(deletion) })
+        _notices.emit(Notice(message, undo = { controls.undo(deletion) }))
     }
 
     suspend fun source(fact: FactEntity): String? {
@@ -171,16 +177,31 @@ class MemoryViewModel(
         refreshDuplicates()
     }
 
-    fun completeTask(task: TaskEntity) = launch { controls.completeTask(task) }
+    fun completeTask(task: TaskEntity) = launch {
+        controls.completeTask(task)
+        _notices.emit(Notice("Done: “${task.title}”", undo = { controls.undoEdit(task) }))
+    }
+
+    /**
+     * Changes [task] as edited on screen. [onOutcome] hears whether it was saved, or why not, so
+     * the editor can stay open with the reason; a saved change can be undone.
+     */
+    fun editTask(task: TaskEntity, title: String, at: Long?, place: TaskPlace?, onOutcome: (ReminderEdits.Outcome) -> Unit) = launch {
+        val outcome = controls.editTask(task, title, at, place)
+        onOutcome(outcome)
+        if (outcome is ReminderEdits.Outcome.Saved) {
+            _notices.emit(Notice("Changed “${outcome.task.title}”", undo = { controls.undoEdit(task) }))
+        }
+    }
 
     fun deleteTask(task: TaskEntity) = launch {
         controls.deleteTask(task)
-        _notices.emit(Notice("Deleted “${task.title}”") { controls.restoreTask(task) })
+        _notices.emit(Notice("Deleted “${task.title}”", undo = { controls.restoreTask(task) }))
     }
 
     fun deleteEvent(event: EventEntity) = launch {
         controls.deleteEvent(event)
-        _notices.emit(Notice("Deleted “${event.title}”") { controls.restoreEvent(event) })
+        _notices.emit(Notice("Deleted “${event.title}”", undo = { controls.restoreEvent(event) }))
     }
 
     /** The note goes now; its image file once the undo has passed. */
@@ -204,7 +225,7 @@ class MemoryViewModel(
                 if (note == null) {
                     Notice("The model isn't available right now, so the image wasn't saved")
                 } else {
-                    Notice("Saved “${note.title}”") { controls.deleteSavedImage(note) }
+                    Notice("Saved “${note.title}”", undo = { controls.deleteSavedImage(note) })
                 }
             } catch (e: CancellationException) {
                 throw e

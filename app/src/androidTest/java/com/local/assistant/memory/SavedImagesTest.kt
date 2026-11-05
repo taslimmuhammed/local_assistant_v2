@@ -10,6 +10,7 @@ import com.local.assistant.data.repo.ChatRepository
 import com.local.assistant.memory.db.ArchiveRepository
 import com.local.assistant.memory.db.MemoryRepository
 import com.local.assistant.memory.db.SessionTracker
+import com.local.assistant.memory.db.TaskPlace
 import com.local.assistant.memory.embed.Int8Vectors
 import com.local.assistant.memory.notes.SavedImages
 import com.local.assistant.memory.prompt.HeuristicTokenEstimator
@@ -68,6 +69,7 @@ class SavedImagesTest {
             override fun canScheduleExact() = true
             override fun schedule(taskId: Long, dueAt: Long) = Unit
             override fun cancel(taskId: Long) = Unit
+            override fun schedulePlace(taskId: Long, place: TaskPlace) = Unit
             override fun scheduleEvent(eventId: Long, alertAt: Long, startsAt: Long) = Unit
             override fun cancelEvent(eventId: Long) = Unit
         }

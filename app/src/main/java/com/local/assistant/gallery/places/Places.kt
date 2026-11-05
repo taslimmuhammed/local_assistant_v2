@@ -80,6 +80,13 @@ class Places private constructor(
         return if (best < 0) null else Where(names[best], district[best], "${country[best]}.${region[best]}", country[best])
     }
 
+    /** A town by name: where it is and how many live there. */
+    data class Town(val name: String, val lat: Double, val lon: Double, val population: Int)
+
+    /** The biggest town called [name], by any of its names; null when no town is. */
+    fun town(name: String): Town? =
+        byName[key(name)]?.maxBy { population[it] }?.let { Town(names[it], lat[it].toDouble(), lon[it].toDouble(), population[it]) }
+
     /**
      * What [name] stands for: null when it names no town, district, state or country. [prefer]
      * says which towns of that name the user has photos near, given their points and the radius.

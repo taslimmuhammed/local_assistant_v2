@@ -7,14 +7,17 @@ import android.content.Intent
 import android.os.Build
 import android.util.Log
 import androidx.core.content.getSystemService
+import com.local.assistant.memory.db.TaskPlace
 import com.local.assistant.memory.tools.ReminderScheduler
 
 /**
  * Reminders on AlarmManager. Exact when the user has allowed exact alarms — from Android 14 an
  * app targeting it is not granted that by default — otherwise `setAndAllowWhileIdle`, which still
- * fires in Doze but may be a few minutes late; the chip says so.
+ * fires in Doze but may be a few minutes late; the chip says so. A place reminder is a set of
+ * geofences instead ([fences]); each call here says the whole of how a reminder goes off, so a
+ * reminder moved from a place to a time (or back) loses the one it had.
  */
-class AlarmReminderScheduler(private val context: Context) : ReminderScheduler {
+class AlarmReminderScheduler(private val context: Context, private val fences: PlaceFences) : ReminderScheduler {
 
     private val alarms = requireNotNull(context.getSystemService<AlarmManager>())
 
@@ -27,12 +30,20 @@ class AlarmReminderScheduler(private val context: Context) : ReminderScheduler {
      */
     override fun schedule(taskId: Long, dueAt: Long) {
         ReminderNotifications.cancel(context, taskId)
+        fences.stopWatching(taskId)
         set(dueAt, pendingIntent(taskId, dueAt))
+    }
+
+    override fun schedulePlace(taskId: Long, place: TaskPlace) {
+        ReminderNotifications.cancel(context, taskId)
+        alarms.cancel(pendingIntent(taskId, dueAt = 0))
+        fences.watch(taskId, place)
     }
 
     override fun cancel(taskId: Long) {
         ReminderNotifications.cancel(context, taskId)
         alarms.cancel(pendingIntent(taskId, dueAt = 0))
+        fences.stopWatching(taskId)
     }
 
     override fun scheduleEvent(eventId: Long, alertAt: Long, startsAt: Long) =

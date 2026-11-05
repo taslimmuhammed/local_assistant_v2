@@ -10,8 +10,16 @@ import com.local.assistant.memory.db.EventEntity
 import com.local.assistant.memory.db.FactEntity
 import com.local.assistant.memory.db.FactOrigin
 import com.local.assistant.memory.db.MemoryStore
+import com.local.assistant.location.DistanceWords
+import com.local.assistant.location.GeoPoint
+import com.local.assistant.location.PlaceFinder
+import com.local.assistant.location.PlaceFinding
+import com.local.assistant.location.PlaceWords
 import com.local.assistant.memory.db.TaskEntity
+import com.local.assistant.memory.db.PlaceDistance
+import com.local.assistant.memory.db.TaskPlace
 import com.local.assistant.memory.db.TaskStatus
+import com.local.assistant.reminders.PlaceAlerts
 import com.local.assistant.memory.notes.FoundImage
 import com.local.assistant.memory.notes.ImageNotes
 import com.local.assistant.voice.SpokenCommands
@@ -24,6 +32,7 @@ import java.time.ZonedDateTime
 import java.time.format.DateTimeFormatter
 import java.time.format.TextStyle
 import java.util.Locale
+import kotlin.math.roundToInt
 
 /**
  * Runs the model's tool calls against the memory store.
@@ -65,6 +74,8 @@ class ToolExecutor(
     private val photos: com.local.assistant.gallery.PhotoTools? = null,
     /** health_data; none when not wired in. */
     private val health: com.local.assistant.health.HealthTools? = null,
+    /** Where place reminders ring ("near DMart"); none when not wired in. */
+    private val places: PlaceFinder? = null,
 ) {
 
     data class Outcome(
@@ -88,6 +99,7 @@ class ToolExecutor(
 
     private sealed interface AlarmChange {
         data class Schedule(val taskId: Long, val dueAt: Long) : AlarmChange
+        data class SchedulePlace(val taskId: Long, val place: TaskPlace) : AlarmChange
         data class Cancel(val taskId: Long) : AlarmChange
         data class ScheduleEvent(val eventId: Long, val alert: EventTimes.Alert) : AlarmChange
         data class CancelEvent(val eventId: Long) : AlarmChange
@@ -142,9 +154,16 @@ class ToolExecutor(
             }
             applied to log.record(context.chatId, recordOf(applied))
         } else {
+            // A reminder's place is found first, outside the transaction: finding it can wait on
+            // a location permission dialog and a map search.
+            val found = try {
+                Result.success(placeFor(call, context))
+            } catch (e: ToolError) {
+                Result.failure(e)
+            }
             store.transaction {
                 val applied = try {
-                    dispatch(call, context)
+                    dispatch(call, context, found.getOrThrow())
                 } catch (e: ToolError) {
                     Applied(failure(e.message.orEmpty()))
                 }
@@ -225,10 +244,10 @@ class ToolExecutor(
         return Applied(done.result, done.chip, ready = done.ready)
     }
 
-    private suspend fun dispatch(call: ToolCall, context: ToolContext): Applied {
+    private suspend fun dispatch(call: ToolCall, context: ToolContext, place: PlaceFinding?): Applied {
         val args = Args(call.arguments)
         return when (call.name) {
-            ToolCatalog.ADD_TASK -> addTask(args, context)
+            ToolCatalog.ADD_TASK -> addTask(args, context, place)
             ToolCatalog.UPDATE_TASK -> updateTask(args)
             ToolCatalog.ADD_EVENT -> addEvent(args, context)
             ToolCatalog.SAVE_FACT -> if (memoryPaused()) {
@@ -251,12 +270,30 @@ class ToolExecutor(
 
     // ---- Tasks ----
 
-    private suspend fun addTask(args: Args, context: ToolContext): Applied {
+    /**
+     * Where an add_task with a place rings, found before its transaction; null for any other call.
+     * A place the user never said is the model's own idea ("call the office at 5" names a place
+     * but is a reminder at 5), so the reminder is made as if it hadn't been given.
+     */
+    private suspend fun placeFor(call: ToolCall, context: ToolContext): PlaceFinding? {
+        if (call.name != ToolCatalog.ADD_TASK) return null
+        val said = Args(call.arguments).text("place") ?: return null
+        if (!context.heard && !PlaceWords.mentioned(said, context.userText)) {
+            Log.i(TAG, "Place '$said' isn't in the user's words; made without it")
+            return null
+        }
+        val finder = places ?: throw ToolError("Place reminders aren't available in this app. Offer a reminder at a time instead.")
+        return finder.find(said, context.locked)
+    }
+
+    private suspend fun addTask(args: Args, context: ToolContext, place: PlaceFinding?): Applied {
         val title = tidyTitle(args.required("title"))
         // "Sarlamat 4:30 p.m. today" made a reminder named "Sarlamat" (2 Nov 2026): it was an alarm.
         if (SpokenCommands.isGarbledCommand(title) && alarms.available()) {
             throw ToolError("'$title' is \"set alarm\" misheard: the user asked for an alarm. Call set_alarm with the same time, and no label.")
         }
+        // Arriving is when it rings: a time given with it is dropped.
+        if (place != null) return addPlaceTask(title, args.text("place"), context, place)
         val rule = args.text("repeat")?.let { RepeatRule.parse(it) ?: throw ToolError("I couldn't understand repeat '$it'. Ask how often.") }
         val now = now()
         val due: ZonedDateTime? = when (val whenText = args.text("when")) {
@@ -291,6 +328,74 @@ class ToolExecutor(
         )
     }
 
+    /**
+     * A reminder that rings on arriving at [found]'s place: "buy milk" near the nearest DMarts. Or
+     * further out, when a distance was said ("5 km before I reach Munnar"): in the model's title or
+     * [placeSaid], or in the user's own words. Not in the recogniser's words for a message the
+     * model heard: a number in them may be misheard ([ToolContext.heard]).
+     */
+    private suspend fun addPlaceTask(title: String, placeSaid: String?, context: ToolContext, found: PlaceFinding): Applied {
+        // Android watches at most MAX_FENCES places per app, across every place reminder.
+        val watched = store.openTasks().sumOf { it.place?.spots?.size ?: 0 }
+        val room = PlaceAlerts.MAX_FENCES - watched
+        if (room <= 0) {
+            throw ToolError("Android lets an app watch at most ${PlaceAlerts.MAX_FENCES} places at once, and place reminders use them all. Nothing was saved. Ask the user to finish or cancel one first.")
+        }
+        val reach = (DistanceWords.find(title) ?: DistanceWords.find(placeSaid) ?: DistanceWords.find(context.userText.takeUnless { context.heard }))?.distance
+        if (reach != null && reach.metres > PlaceDistance.MAX_M) {
+            throw ToolError("A place reminder can ring at most ${PlaceDistance.MAX_M / 1000} km before a place. Nothing was saved. Ask the user for a shorter distance.")
+        }
+        val spots = found.place.spots.take(room).map { spot -> reach?.let { spot.copy(radiusM = it.radiusFor(spot.radiusM)) } ?: spot }
+        val place = found.place.copy(spots = spots, distance = reach)
+        // "Reminder before 5 kilometer" says only where: it is named for it, not for the distance
+        // again, which the chip and the agenda show beside it.
+        val words = tidyTitle(DistanceWords.remove(title))
+        val name = when {
+            words.lowercase(Locale.ROOT) !in BARE_TITLES || reach == null -> words
+            reach.beforeArriving -> "Almost at ${place.name}"
+            else -> "Near ${place.name}"
+        }
+        val nowMs = nowMs()
+        val id = store.insertTask(
+            TaskEntity(title = name, sourceMessageId = context.userMessageId, createdAt = nowMs, updatedAt = nowMs, place = place),
+        )
+        val count = place.spots.size
+        val nearest = found.nearestM?.let(::distance)
+        // A fence entered, not one already inside, rings: from inside it waits for the next time.
+        val inside = found.here?.let { here -> spots.any { GeoPoint(it.lat, it.lon).metresTo(here) <= it.radiusM } } == true
+        return Applied(
+            result = ok(
+                "id" to id,
+                "rings" to when {
+                    reach == null -> "when the user gets near ${place.name}"
+                    reach.beforeArriving -> "when the user is ${reach.words()} away from reaching ${place.name}"
+                    else -> "when the user comes within ${reach.words()} of ${place.name}"
+                } + if (count > 1) " (any of the $count nearest)" else "",
+                "nearest" to nearest,
+                "note" to when {
+                    !found.canRing -> CANT_RING
+                    inside -> ALREADY_INSIDE
+                    else -> null
+                },
+            ),
+            chip = MemoryChip(
+                kind = MemoryChip.Kind.TASK,
+                label = "Reminder",
+                detail = name,
+                note = when {
+                    !found.canRing -> "Rings once location is allowed all the time"
+                    inside -> "You're already there: rings the next time you arrive"
+                    count > 1 -> "Any of the $count nearest" + nearest?.let { ", closest $it" }.orEmpty()
+                    else -> place.spots.single().label?.takeUnless { it == place.name }
+                },
+                place = place.where(),
+            ),
+            undo = UndoToken(createdTaskId = id),
+            changedPrefix = true,
+            alarms = listOf(AlarmChange.SchedulePlace(id, place)),
+        )
+    }
+
     private suspend fun updateTask(args: Args): Applied {
         val statusText = args.text("status")
         val whenText = args.text("when")
@@ -312,7 +417,8 @@ class ToolExecutor(
                 resolved.at
             }
             if (!at.isAfter(now)) throw ToolError("'$whenText' has already passed. Ask for a later time.")
-            updated = updated.copy(dueAt = at.millis(), status = TaskStatus.OPEN, completedAt = null)
+            // A place reminder given a time rings at that time instead.
+            updated = updated.copy(dueAt = at.millis(), status = TaskStatus.OPEN, completedAt = null, place = null)
             label = "Moved"
         }
         when (status) {
@@ -333,6 +439,7 @@ class ToolExecutor(
         store.updateTask(updated)
 
         val live = updated.status == TaskStatus.OPEN && updated.dueAt != null && updated.dueAt > nowMs
+        val place = updated.place.takeIf { updated.status == TaskStatus.OPEN }
         return Applied(
             result = ok(
                 "id" to task.id,
@@ -345,11 +452,18 @@ class ToolExecutor(
                 detail = task.title,
                 at = updated.dueAt.takeIf { updated.status == TaskStatus.OPEN },
                 note = lateNote(live),
-                editable = updated.status == TaskStatus.OPEN,
+                editable = updated.status == TaskStatus.OPEN && place == null,
+                place = place?.where(),
             ),
             undo = UndoToken(previousTask = task),
             changedPrefix = true,
-            alarms = listOf(if (live) AlarmChange.Schedule(task.id, updated.dueAt!!) else AlarmChange.Cancel(task.id)),
+            alarms = listOf(
+                when {
+                    live -> AlarmChange.Schedule(task.id, updated.dueAt!!)
+                    place != null -> AlarmChange.SchedulePlace(task.id, place)
+                    else -> AlarmChange.Cancel(task.id)
+                },
+            ),
         )
     }
 
@@ -634,6 +748,8 @@ class ToolExecutor(
             EventTimes.nextStart(event, from, now.zone)?.takeIf { it < to }?.let { Triple(it, "event", event) }
         }
         val items = (tasks + events).sortedBy { it.first }
+        // Place reminders have no time: they come up whenever the user gets there.
+        val atPlaces = store.openTasks().filter { it.place != null }
         return Applied(
             ok(
                 "items" to items.take(MAX_LISTED).map { (at, type, item) ->
@@ -645,6 +761,8 @@ class ToolExecutor(
                     mapOf("id" to id, "type" to type, "title" to title, "at" to modelTime(at.atZone(now)))
                 },
                 "more" to (items.size - MAX_LISTED).takeIf { it > 0 },
+                "at_places" to atPlaces.take(MAX_LISTED).map { mapOf("id" to it.id, "type" to "task", "title" to it.title, "where" to it.place!!.where()) }
+                    .takeIf { it.isNotEmpty() },
             ),
         )
     }
@@ -681,7 +799,7 @@ class ToolExecutor(
         val facts = store.searchFacts(words, MAX_FOUND).map(::describe)
         val now = now()
         val tasks = words.take(3).flatMap { store.tasksMentioning(it, MAX_FOUND) }.distinctBy { it.id }
-            .map { "${it.title} (task ${it.id}, ${it.status.name.lowercase(Locale.ROOT)}${it.dueAt?.let { at -> ", " + modelTime(at.atZone(now)) }.orEmpty()})" }
+            .map { "${it.title} (task ${it.id}, ${it.status.name.lowercase(Locale.ROOT)}${(it.dueAt?.let { at -> modelTime(at.atZone(now)) } ?: it.place?.where())?.let { w -> ", $w" }.orEmpty()})" }
         val events = words.take(3).flatMap { store.eventsMentioning(it, MAX_FOUND) }.distinctBy { it.id }
             .map { "${it.title} (event ${it.id}, ${modelTime(it.startsAt.atZone(now))})" }
         // Earlier conversations, dated so the model can tell an old note from a new one.
@@ -718,7 +836,11 @@ class ToolExecutor(
                     val previous = token.previousTask
                     store.updateTask(previous)
                     val live = previous.status == TaskStatus.OPEN && previous.dueAt != null && previous.dueAt > nowMs()
-                    alarms += if (live) AlarmChange.Schedule(previous.id, previous.dueAt!!) else AlarmChange.Cancel(previous.id)
+                    alarms += when {
+                        live -> AlarmChange.Schedule(previous.id, previous.dueAt!!)
+                        previous.status == TaskStatus.OPEN && previous.place != null -> AlarmChange.SchedulePlace(previous.id, previous.place)
+                        else -> AlarmChange.Cancel(previous.id)
+                    }
                     true
                 }
                 token.createdEventId != null -> {
@@ -785,6 +907,7 @@ class ToolExecutor(
 
     private fun applyAlarm(change: AlarmChange) = when (change) {
         is AlarmChange.Schedule -> reminders.schedule(change.taskId, change.dueAt)
+        is AlarmChange.SchedulePlace -> reminders.schedulePlace(change.taskId, change.place)
         is AlarmChange.Cancel -> reminders.cancel(change.taskId)
         is AlarmChange.ScheduleEvent -> reminders.scheduleEvent(change.eventId, change.alert.at, change.alert.startsAt)
         is AlarmChange.CancelEvent -> reminders.cancelEvent(change.eventId)
@@ -805,6 +928,10 @@ class ToolExecutor(
         val today = now.toLocalDate().atTime(defaults.dateOnly).atZone(now.zone)
         return if (today.isAfter(now) && (rule.byDay.isEmpty() || today.dayOfWeek in rule.byDay)) today else rule.next(today, now)
     }
+
+    /** "1.2 km", "300 m": how far, as the model says it. */
+    private fun distance(metres: Double): String =
+        if (metres < 1_000) "${(metres / 50).roundToInt() * 50} m" else String.format(Locale.ROOT, "%.1f km", metres / 1_000)
 
     private fun lateNote(scheduled: Boolean): String? =
         if (scheduled && !reminders.canScheduleExact()) "may be a few minutes late" else null
@@ -856,6 +983,17 @@ class ToolExecutor(
         private const val TAG = "ToolExecutor"
         const val DEDUPE_WINDOW_MS = 2 * 60 * 1000L
         const val DEVICE_DEDUPE_WINDOW_MS = 15 * 1000L
+
+        /** A place reminder saved without location all the time: what the model tells the user. */
+        private const val CANT_RING =
+            "Saved, but it can't ring there until the user allows this app's location 'All the time' (Android settings, Apps, this app, Permissions, Location). Tell them."
+
+        /** A place reminder made from inside its fence, which only an arrival rings. */
+        private const val ALREADY_INSIDE =
+            "The user is already there (within that distance), so it rings the next time they arrive, not now. Tell them."
+
+        /** A reminder's title that says nothing but that it is one: "Reminder", once the distance is gone. */
+        private val BARE_TITLES = setOf("", "reminder", "a reminder", "remind me", "set a reminder", "set reminder", "alert", "an alert", "notify me")
 
         /** How long after a repeating alarm is set a new name for it is taken as a rename. */
         private const val RENAME_WINDOW_MS = 12 * 60 * 60 * 1000L

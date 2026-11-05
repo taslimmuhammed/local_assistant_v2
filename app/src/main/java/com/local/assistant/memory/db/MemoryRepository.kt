@@ -269,7 +269,7 @@ class MemoryRepository(
      * repeating event appears at its next occurrence.
      */
     suspend fun agenda(now: Long, limit: Int): List<AgendaItem> {
-        val tasks = agendaDao.openTasks(limit).map { AgendaItem(it.title, it.dueAt, ref = "task ${it.id}") }
+        val tasks = agendaDao.openTasks(limit).map { AgendaItem(it.title, it.dueAt, ref = "task ${it.id}", place = it.place?.name) }
         val events = agendaDao.eventsBetween(now, Long.MAX_VALUE).mapNotNull { event ->
             EventTimes.nextStart(event, now, zone())?.let { AgendaItem(event.title, it, event.allDay, ref = "event ${event.id}") }
         }

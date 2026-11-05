@@ -70,8 +70,11 @@ class ChatViewModel(
     /** A tool waiting on the user's answer to a permission dialog, e.g. contacts for "call amma". */
     val permissionRequests: SharedFlow<PermissionBroker.Request> = permissions.requests
 
-    /** A memory chip as the chat shows it. [recordId] is the TOOL row it came from. */
-    data class ChipItem(val recordId: Long, val chip: MemoryChip, val undone: Boolean, val canUndo: Boolean)
+    /**
+     * A memory chip as the chat shows it. [recordId] is the TOOL row it came from; [taskId] the
+     * place reminder it made or changed, shown on a map under it.
+     */
+    data class ChipItem(val recordId: Long, val chip: MemoryChip, val undone: Boolean, val canUndo: Boolean, val taskId: Long? = null)
 
     /** A file staged for the next send, shown as a chip above the composer. */
     data class PendingAttachment(
@@ -435,7 +438,7 @@ class ChatViewModel(
     }
 
     private fun noticeReminder(chip: MemoryChip) {
-        if (chip.kind != MemoryChip.Kind.TASK || chip.at == null) return
+        if (chip.kind != MemoryChip.Kind.TASK || (chip.at == null && chip.place == null)) return
         if (!settings.askedForNotifications) _askForNotifications.value = true
         if (chip.note != null && !settings.offeredExactAlarms) _offerExactAlarms.value = true
     }
@@ -497,7 +500,11 @@ internal fun chipsByMessage(messages: List<MessageEntity>): Map<Long, List<ChatV
                 waiting = mutableListOf()
             }
             Role.TOOL -> ChatToolLog.parse(message.text)?.let { record ->
-                record.chip?.let { waiting += ChatViewModel.ChipItem(message.id, it, record.undone, record.undo != null) }
+                record.chip?.let { chip ->
+                    val placeTask = (record.undo?.createdTaskId ?: record.undo?.previousTask?.id)
+                        ?.takeIf { chip.kind == MemoryChip.Kind.TASK && chip.place != null }
+                    waiting += ChatViewModel.ChipItem(message.id, chip, record.undone, record.undo != null, placeTask)
+                }
             }
             Role.ASSISTANT -> {
                 if (waiting.isNotEmpty()) byMessage[message.id] = waiting

@@ -17,12 +17,15 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.local.assistant.assist.AssistActivity
 import com.local.assistant.ui.chat.ChatScreen
+import com.local.assistant.ui.chat.ToolPermissionRequests
 import com.local.assistant.ui.gallery.GalleryScreen
 import com.local.assistant.ui.gallery.LocalPhotoAccess
 import com.local.assistant.ui.gallery.PhotoAccess
 import com.local.assistant.ui.gallery.GalleryViewModel
 import com.local.assistant.ui.memory.MemoryScreen
+import com.local.assistant.ui.memory.RemindersScreen
 import com.local.assistant.ui.memory.MemoryViewModel
 import com.local.assistant.ui.profile.ProfileScreen
 import com.local.assistant.ui.profile.ProfileViewModel
@@ -111,6 +114,7 @@ private fun AppRoot(
     var settingsSection by rememberSaveable { mutableStateOf<SettingsSection?>(null) }
     var showModelScreen by remember { mutableStateOf(false) }
     var showMemoryScreen by remember { mutableStateOf(false) }
+    var showRemindersScreen by remember { mutableStateOf(false) }
     var showProfileScreen by remember { mutableStateOf(false) }
     var showWebSearchScreen by remember { mutableStateOf(false) }
     var showPhotosScreen by remember { mutableStateOf(false) }
@@ -140,6 +144,7 @@ private fun AppRoot(
         showSettings = false
         showModelScreen = false
         showMemoryScreen = false
+        showRemindersScreen = false
         showProfileScreen = false
         showWebSearchScreen = false
         showPhotosScreen = false
@@ -149,6 +154,7 @@ private fun AppRoot(
         if (!settingsToOpen) return@LaunchedEffect
         showModelScreen = false
         showMemoryScreen = false
+        showRemindersScreen = false
         showProfileScreen = false
         showWebSearchScreen = false
         showPhotosScreen = false
@@ -251,6 +257,16 @@ private fun AppRoot(
         BackHandler { showMemoryScreen = false }
         val memoryViewModel: MemoryViewModel = viewModel(factory = MemoryViewModel.factory(container))
         MemoryScreen(viewModel = memoryViewModel, onBack = { showMemoryScreen = false })
+        // A reminder changed to a place may need location allowed.
+        ToolPermissionRequests(container.permissions.requests, elsewhere = { AssistActivity.inView })
+        return
+    }
+
+    if (showRemindersScreen) {
+        BackHandler { showRemindersScreen = false }
+        val memoryViewModel: MemoryViewModel = viewModel(factory = MemoryViewModel.factory(container))
+        RemindersScreen(viewModel = memoryViewModel, onBack = { showRemindersScreen = false })
+        ToolPermissionRequests(container.permissions.requests, elsewhere = { AssistActivity.inView })
         return
     }
 
@@ -259,6 +275,8 @@ private fun AppRoot(
         value = container.memoryControls.profile()["name"]?.trim()?.substringBefore(' ')?.takeIf { it.isNotEmpty() }
     }
     val viewModel: ChatViewModel = viewModel(factory = ChatViewModel.factory(container))
+    // The Reminders screen's own, kept by the activity: a place reminder's map in a reply opens its editor.
+    val memoryViewModel: MemoryViewModel = viewModel(factory = MemoryViewModel.factory(container))
     LaunchedEffect(chatToOpen) {
         chatToOpen?.let {
             viewModel.openChat(it)
@@ -268,12 +286,14 @@ private fun AppRoot(
     ChatScreen(
         viewModel = viewModel,
         onOpenMemory = { showMemoryScreen = true },
+        onOpenReminders = { showRemindersScreen = true },
         onOpenPhotos = { showPhotosScreen = true },
         onOpenSettings = { showSettings = true },
         // Read again each time a screen closes: a key added or photos allowed shows up here.
         canSearchWeb = container.webSearch.enabled,
         canFindPhotos = container.photoSearchReady(),
         userName = userName,
+        reminders = memoryViewModel,
     )
 }
 

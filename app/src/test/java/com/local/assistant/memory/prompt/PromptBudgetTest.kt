@@ -267,6 +267,19 @@ class PromptBudgetTest {
     }
 
     @Test
+    fun `a place reminder is on the agenda by where it rings`() {
+        val inputs = prefixInputs(
+            agenda = listOf(
+                AgendaItem("Call the CA", now.plusDays(1).withHour(11).withMinute(0).toInstant().toEpochMilli(), ref = "task 1"),
+                AgendaItem("Buy milk", null, ref = "task 2", place = "DMart"),
+                AgendaItem("Renew passport", null, ref = "task 3"),
+            ),
+        )
+        val text = assembler.plan(inputs, emptyList(), EnvelopeInputs(now, true, userText = "hi"), 0).prefix.text
+        assertTrue(text, text.contains("- near DMart · Buy milk (task 2)\n- no date · Renew passport (task 3)"))
+    }
+
+    @Test
     fun `now is shown first, then only when the day changes or fifteen minutes pass`() {
         assertTrue(assembler.shouldShowNow(null, now))
         assertFalse(assembler.shouldShowNow(now, now.plusMinutes(14)))

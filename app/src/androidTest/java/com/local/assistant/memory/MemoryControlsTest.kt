@@ -12,6 +12,7 @@ import com.local.assistant.memory.db.FactOrigin
 import com.local.assistant.memory.db.MemoryRepository
 import com.local.assistant.memory.db.SessionTracker
 import com.local.assistant.memory.db.TaskEntity
+import com.local.assistant.memory.db.TaskPlace
 import com.local.assistant.memory.db.TaskStatus
 import com.local.assistant.memory.db.EventEntity
 import com.local.assistant.memory.embed.Int8Vectors
@@ -75,6 +76,7 @@ class MemoryControlsTest {
             override fun canScheduleExact() = true
             override fun schedule(taskId: Long, dueAt: Long) = Unit
             override fun cancel(taskId: Long) { cancelled += taskId }
+            override fun schedulePlace(taskId: Long, place: TaskPlace) = Unit
             override fun scheduleEvent(eventId: Long, alertAt: Long, startsAt: Long) = Unit
             override fun cancelEvent(eventId: Long) = Unit
         }

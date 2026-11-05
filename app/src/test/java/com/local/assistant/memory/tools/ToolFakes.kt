@@ -16,7 +16,16 @@ import com.local.assistant.memory.db.FactWriteResult
 import com.local.assistant.memory.db.ForgetResult
 import com.local.assistant.memory.db.MemoryStore
 import com.local.assistant.memory.db.TaskEntity
+import com.local.assistant.memory.db.TaskPlace
 import com.local.assistant.memory.db.TaskStatus
+import com.local.assistant.memory.db.PlaceSpot
+import com.local.assistant.gallery.places.Places
+import com.local.assistant.location.DeviceLocation
+import com.local.assistant.location.FoundPlace
+import com.local.assistant.location.GeoPoint
+import com.local.assistant.location.OwnPlaces
+import com.local.assistant.location.PlaceSearch
+import com.local.assistant.location.PlaceSearchError
 import com.local.assistant.memory.notes.FoundImage
 import com.local.assistant.memory.notes.ImageNotes
 import kotlinx.coroutines.flow.Flow
@@ -102,10 +111,13 @@ class FakeMemoryStore(private val clock: () -> Long) : MemoryStore {
 
 class FakeReminders(var exact: Boolean = true) : ReminderScheduler {
     val scheduled = linkedMapOf<Long, Long>()
+    /** Place reminders being watched: as the real one, each call says the whole of how one goes off. */
+    val places = linkedMapOf<Long, TaskPlace>()
     val eventAlerts = linkedMapOf<Long, Long>()
     override fun canScheduleExact() = exact
-    override fun schedule(taskId: Long, dueAt: Long) { scheduled[taskId] = dueAt }
-    override fun cancel(taskId: Long) { scheduled.remove(taskId) }
+    override fun schedule(taskId: Long, dueAt: Long) { places.remove(taskId); scheduled[taskId] = dueAt }
+    override fun schedulePlace(taskId: Long, place: TaskPlace) { scheduled.remove(taskId); places[taskId] = place }
+    override fun cancel(taskId: Long) { scheduled.remove(taskId); places.remove(taskId) }
     override fun scheduleEvent(eventId: Long, alertAt: Long, startsAt: Long) { eventAlerts[eventId] = alertAt }
     override fun cancelEvent(eventId: Long) { eventAlerts.remove(eventId) }
 }
@@ -223,4 +235,101 @@ class FakePhone(var foreground: Boolean = true) : PhoneActions {
     }
     override fun doNotDisturb(on: Boolean) = if (dndAccess) Handoff.DONE.also { done += "dnd $on" } else Handoff.NEEDS_ACCESS
     override fun openPanel(panel: SettingsPanel) = act("panel $panel")
+}
+
+/** A few towns, as the APK's place list has them (see [Places.read]). */
+val TEST_TOWNS: Places = Places.read(
+    listOf(
+        "P\tKakkanad\t\t10.0159\t76.3419\tIN\t13\t30000\t",
+        "P\tKochi\tCochin,Ernakulam\t9.9312\t76.2673\tIN\t13\t600000\t",
+        "P\tMunnar\t\t10.0889\t77.0595\tIN\t13\t40000\t",
+        "P\tBengaluru\tBangalore\t12.9716\t77.5946\tIN\t19\t8000000\t",
+        "R\tIN.13\tKerala",
+        "R\tIN.19\tKarnataka",
+        "C\tIN\tIndia",
+    ).joinToString("\n").byteInputStream(),
+)
+
+/** Near Hoodi, Bengaluru: where the user is in the place tests. */
+val HOODI = GeoPoint(12.9912, 77.7034)
+
+/**
+ * The map, as places by the query that finds them (best match first); what's outside the box
+ * asked about isn't found. Records each search.
+ */
+class FakePlaceSearch : PlaceSearch {
+    val places = mutableMapOf<String, List<FoundPlace>>()
+    val asked = mutableListOf<Triple<String, GeoPoint, Double>>()
+    var failure: String? = null
+
+    override suspend fun search(query: String, around: GeoPoint, spanDeg: Double): List<FoundPlace> {
+        failure?.let { throw PlaceSearchError(it) }
+        asked += Triple(query, around, spanDeg)
+        return places[query.lowercase()].orEmpty()
+            .filter { kotlin.math.abs(it.point.lat - around.lat) <= spanDeg && kotlin.math.abs(it.point.lon - around.lon) <= spanDeg }
+    }
+
+    companion object {
+        fun place(
+            name: String,
+            lat: Double,
+            lon: Double,
+            label: String? = null,
+            radiusM: Int = PlaceSearch.MIN_RADIUS_M,
+            kind: FoundPlace.Kind = FoundPlace.Kind.SPOT,
+        ) = FoundPlace(name, GeoPoint(lat, lon), radiusM, label, kind)
+
+        /** DMarts around Bengaluru as OpenStreetMap had them (5 Nov 2026), in its order, and one DMart Ready. */
+        val DMARTS = listOf(
+            place("DMart", 12.8755954, 77.5445916, "Vajrahalli"),
+            place("DMart", 13.1003549, 77.5862263, "1st A Main"),
+            place("DMart", 12.9555717, 77.7286963, "Varthur Road"),
+            place("DMart", 12.9889936, 77.7100422, "Hoodi Main Road"),
+            place("DMart Ready", 12.9202013, 77.6105156, "9th Cross Road"),
+            place("DMart", 13.0123108, 77.6672269, "Ramamurthinagar Main Road"),
+            place("Dmart", 13.0290360, 77.6071212, "KHB Main Road"),
+            place("DMart", 12.9321517, 77.6346228, "Temple Trees Rd"),
+            place("DMart", 13.0334461, 77.6374519, "Hennuru - Bagaluru Road"),
+        )
+    }
+}
+
+/** The phone's location and what the user allows of it; [answers] are what they tap when asked. */
+class FakeLocation(
+    var at: GeoPoint? = HOODI,
+    var locate: Boolean = true,
+    var watch: Boolean = true,
+    var allowLocate: Boolean = true,
+    var allowWatch: Boolean = true,
+) : DeviceLocation {
+    val asked = mutableListOf<String>()
+    var fixes = 0
+
+    override fun canLocate() = locate
+    override suspend fun askToLocate(): Boolean {
+        asked += "locate"
+        locate = allowLocate
+        return locate
+    }
+    override fun canWatch() = locate && watch
+    override suspend fun askToWatch(): Boolean {
+        asked += "watch"
+        watch = allowWatch
+        return canWatch()
+    }
+    override suspend fun current(): GeoPoint? {
+        fixes++
+        return at.takeIf { locate }
+    }
+}
+
+/** Home and office as the user said them, and where each was found. */
+class FakeOwnPlaces : OwnPlaces {
+    val addresses = mutableMapOf<String, String>()
+    val kept = mutableMapOf<String, Pair<String, PlaceSpot>>()
+    override suspend fun address(key: String) = addresses[key]
+    override suspend fun spot(key: String, address: String) = kept[key]?.takeIf { it.first == address }?.second
+    override suspend fun keep(key: String, address: String, spot: PlaceSpot) {
+        kept[key] = address to spot
+    }
 }

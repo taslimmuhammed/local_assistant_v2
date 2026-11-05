@@ -9,6 +9,7 @@ import androidx.room.Index
 import androidx.room.PrimaryKey
 import com.local.assistant.data.db.ChatEntity
 import com.local.assistant.data.db.MessageEntity
+import java.util.Locale
 
 /**
  * Where a fact is filed. Assigned in code from the subject and attribute (see
@@ -129,6 +130,75 @@ data class TaskEntity(
     val createdAt: Long,
     val updatedAt: Long,
     val completedAt: Long? = null,
+    /**
+     * A place reminder's place: it rings when the user arrives there, not at a time, so
+     * [dueAt] stays null. Kept as JSON (see `Converters`).
+     */
+    val place: TaskPlace? = null,
+)
+
+/** Where a place reminder rings: "DMart" as the nearest few branches, "office" as one spot. */
+data class TaskPlace(
+    /** As the user said it, for the chip and the agenda: "DMart", "office". */
+    val name: String,
+    val spots: List<PlaceSpot>,
+    /**
+     * When it last rang. Another arrival soon after is the same visit — a fix wandering back and
+     * forth across the edge — and stays quiet (`PlaceAlerts.QUIET_MS`).
+     */
+    val rangAt: Long? = null,
+    /** How far out it rings, when the user said ("5 km before I reach Munnar"); the spots' radii already include it. */
+    val distance: PlaceDistance? = null,
+) {
+    /** "near DMart", or "5 km before Munnar": where it rings, as the chip, the agenda and the model see it. */
+    fun where(): String = distance?.describe(name) ?: "near $name"
+
+    /** Which of its spots: "any of the 5 nearest", or the one's street ("Karaparmba Road"); null when its name says it. */
+    fun which(): String? = if (spots.size > 1) "any of the ${spots.size} nearest" else spots.singleOrNull()?.label?.takeUnless { it == name }
+}
+
+/**
+ * How far out a place reminder rings, when the user said: "5 km before I reach Munnar" rings 5 km
+ * out from where arriving in Munnar would; "within 500 m of DMart" 500 m from the shop itself.
+ */
+data class PlaceDistance(
+    val metres: Int,
+    /** "before I reach": out from the place's edge. Otherwise ("within", "away from") from the place. */
+    val beforeArriving: Boolean,
+) {
+    /** How near counts as there, for a spot whose own size is [radiusM]. */
+    fun radiusFor(radiusM: Int): Int = if (beforeArriving) radiusM + metres else maxOf(metres, MIN_RADIUS_M)
+
+    /** A spot's own size, out of the [radiusM] this distance gave it; a circle drawn "within" leaves only itself. */
+    fun ownRadius(radiusM: Int): Int = if (beforeArriving) maxOf(radiusM - metres, MIN_RADIUS_M) else radiusM
+
+    /** "5 km before Munnar", "within 500 m of DMart". */
+    fun describe(place: String): String = if (beforeArriving) "${words()} before $place" else "within ${words()} of $place"
+
+    /** "5 km", "1.5 km", "500 m". */
+    fun words(): String {
+        if (metres < 1000) return "$metres m"
+        val km = metres / 1000.0
+        return (if (km % 1.0 == 0.0) km.toInt().toString() else String.format(Locale.ROOT, "%.1f", km)) + " km"
+    }
+
+    companion object {
+        /** The furthest out a reminder rings. */
+        const val MAX_M = 100_000
+
+        /** Smaller than this a phone's fix wanders across the edge (Android's geofencing guide says 100–150 m). */
+        const val MIN_RADIUS_M = 100
+    }
+}
+
+/** One spot a place reminder rings near: a branch, an address, a town. */
+data class PlaceSpot(
+    val lat: Double,
+    val lon: Double,
+    /** How near counts as there, in metres. */
+    val radiusM: Int,
+    /** Which one, for the notification: "Hoodi Main Road". */
+    val label: String? = null,
 )
 
 @Entity(

@@ -189,6 +189,9 @@ dependencies {
 
     implementation(libs.okhttp)
 
+    // A place reminder's map: its pin and circle, shown and moved in the Reminders editor.
+    implementation(libs.maplibre.android)
+
     // Session-end summaries and the nightly consolidation run as scheduled background work.
     implementation(libs.androidx.work.runtime.ktx)
 
@@ -214,6 +217,10 @@ dependencies {
     implementation(files(sherpaOnnxAar).builtBy(fetchSherpaOnnx))
     // The voice is published as a .tar.bz2, which Android can't unpack on its own.
     implementation(libs.commons.compress)
+
+    // Place reminders ring on arrival through Play Services' geofences: watched on the phone with
+    // the least power. Phones without Play Services use Android's proximity alerts instead.
+    implementation(libs.play.services.location)
 
     testImplementation(libs.junit)
 

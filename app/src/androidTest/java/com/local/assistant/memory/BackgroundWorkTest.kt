@@ -16,6 +16,7 @@ import com.local.assistant.llm.Sampling
 import com.local.assistant.memory.db.MemoryRepository
 import com.local.assistant.memory.db.SessionTracker
 import com.local.assistant.memory.db.SummaryStatus
+import com.local.assistant.memory.db.TaskPlace
 import com.local.assistant.memory.extract.ExtractionRouter
 import com.local.assistant.memory.extract.Extractor
 import com.local.assistant.memory.prompt.HeuristicTokenEstimator
@@ -67,6 +68,7 @@ class BackgroundWorkTest {
         override fun canScheduleExact() = true
         override fun schedule(taskId: Long, dueAt: Long) = Unit
         override fun cancel(taskId: Long) = Unit
+        override fun schedulePlace(taskId: Long, place: TaskPlace) = Unit
         override fun scheduleEvent(eventId: Long, alertAt: Long, startsAt: Long) = Unit
         override fun cancelEvent(eventId: Long) = Unit
     }

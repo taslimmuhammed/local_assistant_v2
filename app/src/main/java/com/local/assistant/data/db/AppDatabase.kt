@@ -51,7 +51,7 @@ import kotlinx.coroutines.Dispatchers
         NoteEntity::class,
         NoteFts::class,
     ],
-    version = 7,
+    version = 8,
     exportSchema = true,
 )
 @TypeConverters(Converters::class)
@@ -131,7 +131,14 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
-        val MIGRATIONS: Array<Migration> = arrayOf(MIGRATION_1_2, MIGRATION_2_3, Migration3To4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7)
+        /** Place reminders: "remind me to buy milk near DMart" rings on arriving, not at a time. */
+        private val MIGRATION_7_8 = object : Migration(7, 8) {
+            override fun migrate(connection: SQLiteConnection) {
+                connection.execSQL("ALTER TABLE tasks ADD COLUMN place TEXT")
+            }
+        }
+
+        val MIGRATIONS: Array<Migration> = arrayOf(MIGRATION_1_2, MIGRATION_2_3, Migration3To4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8)
 
         /**
          * [withVectors]: sqlite-vec loaded on this device (see [SqliteVec.probe]). Its table is

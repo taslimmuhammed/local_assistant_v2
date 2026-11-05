@@ -82,7 +82,13 @@ import com.local.assistant.model.ModelManager
 import com.local.assistant.model.TransferKind
 import com.local.assistant.reminders.AlarmReminderScheduler
 import com.local.assistant.reminders.ClockAlarms
+import com.local.assistant.reminders.PlaceFences
+import com.local.assistant.reminders.PlaceReminderReceiver
 import com.local.assistant.reminders.ReminderNotifications
+import com.local.assistant.location.NominatimSearch
+import com.local.assistant.location.PlaceFinder
+import com.local.assistant.location.SavedPlaces
+import com.local.assistant.device.PhoneLocation
 import com.local.assistant.ui.setup.MemorySearchControls
 import com.local.assistant.web.TavilySearch
 import kotlinx.coroutines.CancellationException
@@ -120,6 +126,8 @@ class AppContainer(context: Context) {
             embeddingQueue.kick()
             // Started while visible, as Android requires; from then on it keeps the app alive.
             if (KeepReadyService.wanted(settings)) KeepReadyService.start(appContext)
+            // Fences dropped while location was off, or waiting for location all the time.
+            appScope.launch { runCatching { PlaceReminderReceiver.watchAll(this@AppContainer) }.onFailure { Log.w("AppContainer", "Watching place reminders failed", it) } }
         },
         onBackground = {
             backgroundJobs.onBackground()
@@ -327,13 +335,31 @@ class AppContainer(context: Context) {
         notes = database.noteDao(),
     )
 
-    val reminderScheduler = AlarmReminderScheduler(context)
+    /** Geofences for place reminders: Play Services' where there are, else Android's own. */
+    val placeFences = PlaceFences.forPhone(context)
+
+    val reminderScheduler = AlarmReminderScheduler(context, placeFences)
 
     /** Alarms in the phone's own clock app, for "wake me up at 6". */
     val clockAlarms = ClockAlarms(context, inForeground = { appForeground.isForeground })
 
     /** Runtime permissions asked for from outside the UI, like contacts on the first "call amma". */
     val permissions = PermissionBroker(context)
+
+    /**
+     * Where place reminders ring: "here", home and office, and towns on the phone; shops and
+     * addresses on OpenStreetMap, sent only their name and the user's rough area.
+     */
+    val placeFinder = PlaceFinder(
+        search = NominatimSearch(),
+        towns = { placeList.get() },
+        location = PhoneLocation(context, permissions),
+        own = SavedPlaces(
+            memory = memoryRepository,
+            get = { database.appStateDao().get(it) },
+            put = { key, value -> database.appStateDao().put(com.local.assistant.memory.db.AppStateEntity(key, value)) },
+        ),
+    )
 
     /** Calls, messages, timers, apps, phone settings and arithmetic. */
     private val deviceTools = DeviceTools(
@@ -443,6 +469,7 @@ class AppContainer(context: Context) {
             reader = { path, question -> if ((llmService.capabilities.value?.visionTokensPerImage ?: 0) > 0) photoReader.answer(path, question) else null },
         ),
         health = healthTools,
+        places = placeFinder,
     )
 
     private val toolLoop = ToolLoop(
@@ -487,6 +514,7 @@ class AppContainer(context: Context) {
         reminders = reminderScheduler,
         onChanged = { conversations.prefixMayHaveChanged() },
         images = savedImages,
+        townAt = { placeList.get().nearest(it.lat, it.lon)?.town },
     )
 
     val consolidation = Consolidation(

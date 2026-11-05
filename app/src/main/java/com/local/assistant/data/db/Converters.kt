@@ -3,7 +3,9 @@ package com.local.assistant.data.db
 import androidx.room.TypeConverter
 import com.local.assistant.memory.db.FactCategory
 import com.local.assistant.memory.db.FactOrigin
+import com.google.gson.Gson
 import com.local.assistant.memory.db.SummaryStatus
+import com.local.assistant.memory.db.TaskPlace
 import com.local.assistant.memory.db.TaskStatus
 
 class Converters {
@@ -42,4 +44,14 @@ class Converters {
 
     @TypeConverter
     fun stringToSummaryStatus(value: String): SummaryStatus = SummaryStatus.valueOf(value)
+
+    @TypeConverter
+    fun taskPlaceToString(value: TaskPlace?): String? = value?.let(gson::toJson)
+
+    @TypeConverter
+    fun stringToTaskPlace(value: String?): TaskPlace? = value?.let { gson.fromJson(it, TaskPlace::class.java) }
+
+    private companion object {
+        val gson = Gson()
+    }
 }

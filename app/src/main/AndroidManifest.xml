@@ -55,6 +55,13 @@
     <uses-permission android:name="android.permission.health.READ_SLEEP" />
     <uses-permission android:name="android.permission.health.READ_EXERCISE" />
 
+    <!-- "Remind me to buy milk near DMart": asked the first time a place reminder is made. Precise
+         location finds "here" and the nearest branches; all the time lets Android ring the reminder
+         on arrival with the app closed (geofences). The location stays on the phone. -->
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+    <uses-permission android:name="android.permission.ACCESS_BACKGROUND_LOCATION" />
+
     <!-- "Turn on Do Not Disturb": the user still has to allow it in Settings. -->
     <uses-permission android:name="android.permission.ACCESS_NOTIFICATION_POLICY" />
 
@@ -227,6 +234,7 @@
         <receiver android:name=".reminders.ReminderReceiver" android:exported="false" />
         <receiver android:name=".reminders.ReminderActionReceiver" android:exported="false" />
         <receiver android:name=".reminders.EventReminderReceiver" android:exported="false" />
+        <receiver android:name=".reminders.PlaceReminderReceiver" android:exported="false" />
 
         <!-- Only the system can send these, so exporting the receiver lets nothing else in. -->
         <receiver android:name=".reminders.RescheduleReceiver" android:exported="true">

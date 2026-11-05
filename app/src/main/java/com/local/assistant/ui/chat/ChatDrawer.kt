@@ -26,6 +26,7 @@ import androidx.compose.material.icons.outlined.Add
 import androidx.compose.material.icons.outlined.ChatBubbleOutline
 import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material.icons.outlined.DeleteOutline
+import androidx.compose.material.icons.outlined.NotificationsActive
 import androidx.compose.material.icons.outlined.PhotoLibrary
 import androidx.compose.material.icons.outlined.Psychology
 import androidx.compose.material.icons.outlined.Settings
@@ -70,7 +71,7 @@ import java.util.Locale
 /**
  * The chat history, on a sheet of glass: the app's mark and a count, a dark "New chat" button,
  * the chats under Today, Yesterday and further back with when each was last used, and the rest
- * of the app (photos, memory, settings) as three tiles at the foot.
+ * of the app (photos, reminders, memory, settings) as four tiles at the foot.
  */
 @Composable
 fun ChatDrawer(
@@ -81,6 +82,7 @@ fun ChatDrawer(
     onSelectChat: (Long) -> Unit,
     onDeleteChat: (Long) -> Unit,
     onOpenMemory: () -> Unit,
+    onOpenReminders: () -> Unit,
     onOpenPhotos: () -> Unit,
     onOpenSettings: () -> Unit,
     modifier: Modifier = Modifier,
@@ -197,6 +199,7 @@ fun ChatDrawer(
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             DockTile(Icons.Outlined.PhotoLibrary, "Photos", Glass.Ink[0], onOpenPhotos, Modifier.weight(1f))
+            DockTile(Icons.Outlined.NotificationsActive, "Reminders", Glass.Ink[3], onOpenReminders, Modifier.weight(1f))
             // A brain: what the assistant knows about the user.
             DockTile(Icons.Outlined.Psychology, "About you", Glass.Ink[1], onOpenMemory, Modifier.weight(1f))
             DockTile(Icons.Outlined.Settings, "Settings", Glass.Ink[4], onOpenSettings, Modifier.weight(1f))

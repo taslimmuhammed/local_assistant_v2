@@ -9,6 +9,12 @@ import com.local.assistant.memory.db.FactCategory
 import com.local.assistant.memory.db.TaskEntity
 import com.local.assistant.memory.db.TaskStatus
 import com.local.assistant.memory.prompt.HeuristicTokenEstimator
+import com.local.assistant.location.GeoPoint
+import com.local.assistant.location.PlaceFinder
+import com.local.assistant.location.SavedPlaces
+import com.local.assistant.memory.db.PlaceDistance
+import com.local.assistant.memory.db.PlaceSpot
+import com.local.assistant.memory.db.TaskPlace
 import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
@@ -56,7 +62,13 @@ class ToolRoutingTest {
             )
         }
     }
-    private val executor = ToolExecutor(store, reminders, clock, log, now = { now }, memoryPaused = { paused }, images = images, device = device, web = WebTools(web))
+    private val placeSearch = FakePlaceSearch().apply { places["dmart"] = FakePlaceSearch.DMARTS }
+    private val location = FakeLocation()
+    private val appState = mutableMapOf<String, String>()
+    private val placeFinder = PlaceFinder(placeSearch, { TEST_TOWNS }, location, SavedPlaces(store, { appState[it] }, { key, value -> appState[key] = value }))
+    private val executor = ToolExecutor(
+        store, reminders, clock, log, now = { now }, memoryPaused = { paused }, images = images, device = device, web = WebTools(web), places = placeFinder,
+    )
     private val loop = ToolLoop(
         executor,
         maxRounds = 3,
@@ -1157,6 +1169,263 @@ class ToolRoutingTest {
         val (session, _) = withScreen(screen.path, call("remember_image", "title" to "Train ticket", "details" to "Kochi to Bengaluru"))
         assertEquals(true, result(session)["ok"])
         assertEquals(screen.path, images.saved.values.single().third.path)
+    }
+
+    // ---- Place reminders ----
+
+    /** As [turn], with what the user said (or, [locked], said on the lock screen). */
+    private fun said(text: String, vararg calls: ToolCall, locked: Boolean = false): Pair<ScriptedSession, List<LoopEvent>> {
+        val session = ScriptedSession(ArrayDeque(listOf(ScriptedSession.calls(*calls), ScriptedSession.says("Done."))))
+        val events = runBlocking { loop.run(session, "envelope", emptyList(), context.copy(userText = text, locked = locked)).toList() }
+        return session to events
+    }
+
+    private fun buyMilk() = said("remind me to buy milk near DMart", call("add_task", "title" to "Buy milk", "place" to "DMart"))
+
+    @Test
+    fun `remind me to buy milk near DMart`() {
+        val (session, events) = buyMilk()
+
+        val task = store.tasks.values.single()
+        assertEquals("Buy milk", task.title)
+        assertNull(task.dueAt)
+        val place = task.place!!
+        assertEquals("DMart", place.name)
+        assertEquals("Hoodi Main Road", place.spots.first().label)
+        assertEquals(5, place.spots.size)
+        // Watched, not timed.
+        assertEquals(mapOf(task.id to place), reminders.places)
+        assertTrue(reminders.scheduled.isEmpty())
+
+        assertEquals(true, result(session)["ok"])
+        assertEquals("when the user gets near DMart (any of the 5 nearest)", result(session)["rings"])
+        assertEquals("750 m", result(session)["nearest"])
+        assertNull(result(session)["note"])
+        val chip = events.filterIsInstance<LoopEvent.Memory>().single().chip
+        assertEquals(MemoryChip(MemoryChip.Kind.TASK, "Reminder", "Buy milk", note = "Any of the 5 nearest, closest 750 m", place = "near DMart"), chip)
+        assertTrue("agenda re-rendered", (events.last() as LoopEvent.Done).changedPrefix)
+    }
+
+    @Test
+    fun `when I reach office remind me to call Priya`() {
+        turn(call("save_fact", "subject" to "user", "attribute" to "office", "value" to "Infopark, Kakkanad"))
+        placeSearch.places["infopark"] = listOf(FakePlaceSearch.place("Infopark", 10.0093607, 76.3615845, "Edachira", radiusM = 600))
+
+        val (session, _) = said("when I reach office remind me to call Priya", call("add_task", "title" to "Call Priya", "place" to "office"))
+
+        // A reminder, not a call.
+        assertTrue(phone.done.isEmpty())
+        val task = store.tasks.values.single()
+        assertEquals("Call Priya", task.title)
+        assertEquals(TaskPlace("office", listOf(PlaceSpot(10.0093607, 76.3615845, 600, "Edachira"))), task.place)
+        assertEquals(true, result(session)["ok"])
+        // Looked for around Kakkanad, the town the user named, and kept for next time.
+        assertEquals(GeoPoint(10.0, 76.35).lat, placeSearch.asked.single().second.lat, 1e-9)
+        assertTrue(appState.keys.single() == "place.office")
+    }
+
+    @Test
+    fun `an office the user never described is asked about, and nothing is saved`() {
+        val (session, _) = said("when I get to work remind me to call Priya", call("add_task", "title" to "Call Priya", "place" to "work"))
+
+        assertEquals(false, result(session)["ok"])
+        assertTrue(result(session)["error"].toString().contains("save_fact (subject user, attribute office)"))
+        assertTrue(store.tasks.isEmpty())
+        assertTrue(reminders.places.isEmpty())
+    }
+
+    @Test
+    fun `a place the user never said is the model's own idea and is left out`() {
+        val (session, _) = said(
+            "remind me to call the CA at 5pm",
+            call("add_task", "title" to "Call the CA", "when" to "5pm", "place" to "office"),
+        )
+
+        val task = store.tasks.values.single()
+        assertNull(task.place)
+        assertEquals(at(9, 21, 17), task.dueAt)
+        assertEquals(mapOf(task.id to at(9, 21, 17)), reminders.scheduled)
+        assertTrue(reminders.places.isEmpty())
+        assertTrue(location.asked.isEmpty() && placeSearch.asked.isEmpty())
+        assertEquals("Mon 21 Sep 17:00", result(session)["due"])
+    }
+
+    /** What Gemma did with it on the phone (5 Nov 2026): the distance in the title, the town alone as the place. */
+    @Test
+    fun `set a reminder before 5 kilometer before I reach Munnar`() {
+        val (session, events) = said(
+            "set a reminder before 5 kilometer before I reach Munnar",
+            call("add_task", "title" to "Reminder before 5 kilometer", "place" to "Munnar"),
+        )
+
+        val task = store.tasks.values.single()
+        assertEquals("Almost at Munnar", task.title)
+        val place = task.place!!
+        assertEquals(PlaceDistance(5000, beforeArriving = true), place.distance)
+        // Munnar's own edge (2 km out, a town of 40,000) and 5 km further.
+        assertEquals(7000, place.spots.single().radiusM)
+        assertEquals(mapOf(task.id to place), reminders.places)
+        assertEquals("when the user is 5 km away from reaching Munnar", result(session)["rings"])
+        val chip = events.filterIsInstance<LoopEvent.Memory>().single().chip
+        assertEquals("Almost at Munnar" to "5 km before Munnar", chip.detail to chip.place)
+    }
+
+    @Test
+    fun `a distance in the user's words is taken when the model leaves it out`() {
+        said("remind me to buy milk when I'm within 500 m of DMart", call("add_task", "title" to "Buy milk", "place" to "DMart"))
+
+        val place = store.tasks.values.single().place!!
+        assertEquals("Buy milk", store.tasks.values.single().title)
+        assertEquals(PlaceDistance(500, beforeArriving = false), place.distance)
+        assertEquals(List(5) { 500 }, place.spots.map { it.radiusM })
+    }
+
+    @Test
+    fun `from inside the distance it rings the next time, and says so`() {
+        // The nearest DMart is 750 m from the user.
+        val (session, events) = said("remind me to buy milk within 1 km of DMart", call("add_task", "title" to "Buy milk", "place" to "DMart"))
+
+        assertEquals(true, result(session)["ok"])
+        assertTrue(result(session)["note"].toString().contains("rings the next time they arrive"))
+        assertEquals("You're already there: rings the next time you arrive", events.filterIsInstance<LoopEvent.Memory>().single().chip.note)
+    }
+
+    @Test
+    fun `a voice message's distance is the model's, not the recogniser's`() {
+        val heard = context.copy(userText = "remind me 50 km before Munnar", heard = true)
+        val session = ScriptedSession(ArrayDeque(listOf(ScriptedSession.calls(call("add_task", "title" to "Reminder 5 km before", "place" to "Munnar")), ScriptedSession.says("Done."))))
+        runBlocking { loop.run(session, "envelope", emptyList(), heard).toList() }
+
+        assertEquals(PlaceDistance(5000, beforeArriving = true), store.tasks.values.single().place!!.distance)
+    }
+
+    @Test
+    fun `too far out is asked about, and nothing is saved`() {
+        val (session, _) = said("remind me 200 km before Bengaluru", call("add_task", "title" to "Reminder", "place" to "Bengaluru"))
+
+        assertEquals(false, result(session)["ok"])
+        assertTrue(result(session)["error"].toString().contains("at most 100 km"))
+        assertTrue(store.tasks.isEmpty())
+        assertTrue(reminders.places.isEmpty())
+    }
+
+    @Test
+    fun `what's coming up says how far out`() {
+        said("set a reminder before 5 kilometer before I reach Munnar", call("add_task", "title" to "Reminder before 5 kilometer", "place" to "Munnar"))
+        val (session, _) = turn(call("get_upcoming"))
+
+        assertEquals("5 km before Munnar", ((result(session)["at_places"] as List<*>).single() as Map<*, *>)["where"])
+    }
+
+    @Test
+    fun `a place and a time ring at the place`() {
+        said("remind me to buy milk near DMart this evening", call("add_task", "title" to "Buy milk", "when" to "this evening", "place" to "DMart"))
+
+        val task = store.tasks.values.single()
+        assertNull(task.dueAt)
+        assertEquals("DMart", task.place?.name)
+        assertTrue(reminders.scheduled.isEmpty())
+    }
+
+    @Test
+    fun `cancelling a place reminder stops watching it`() {
+        buyMilk()
+        val (session, events) = turn(call("update_task", "task" to "milk", "status" to "cancelled"))
+
+        assertEquals(TaskStatus.CANCELLED, store.tasks.values.single().status)
+        assertTrue(reminders.places.isEmpty())
+        assertEquals(true, result(session)["ok"])
+        val chip = events.filterIsInstance<LoopEvent.Memory>().single().chip
+        assertEquals("Cancelled", chip.label)
+        assertNull(chip.place)
+    }
+
+    @Test
+    fun `a place reminder given a time rings at the time instead`() {
+        buyMilk()
+        turn(call("update_task", "task" to "milk", "when" to "tomorrow at 6pm"))
+
+        val task = store.tasks.values.single()
+        assertNull(task.place)
+        assertEquals(mapOf(task.id to at(9, 22, 18)), reminders.scheduled)
+        assertTrue(reminders.places.isEmpty())
+    }
+
+    @Test
+    fun `undoing a place reminder takes it down`() {
+        val (_, events) = buyMilk()
+
+        assertEquals(ToolExecutor.UndoResult.UNDONE, runBlocking { executor.undo(events.filterIsInstance<LoopEvent.Memory>().single().recordId) })
+        assertTrue(store.tasks.isEmpty())
+        assertTrue(reminders.places.isEmpty())
+    }
+
+    @Test
+    fun `what's coming up includes the place reminders`() {
+        turn(call("add_task", "title" to "Call the CA", "when" to "tomorrow at 11"))
+        buyMilk()
+        val (session, _) = turn(call("get_upcoming"))
+
+        assertEquals("Call the CA", (result(session)["items"] as List<*>).map { (it as Map<*, *>)["title"] }.single())
+        val atPlaces = (result(session)["at_places"] as List<*>).single() as Map<*, *>
+        assertEquals("Buy milk", atPlaces["title"])
+        assertEquals("near DMart", atPlaces["where"])
+    }
+
+    @Test
+    fun `a place it can't find is asked about, and nothing is saved`() {
+        // In Kochi, where the map has no DMart.
+        location.at = GeoPoint(10.0159, 76.3419)
+        val (session, events) = buyMilk()
+
+        assertEquals(false, result(session)["ok"])
+        assertTrue(result(session)["error"].toString().contains("Ask the user for its address or the area"))
+        assertTrue(store.tasks.isEmpty())
+        assertTrue(reminders.places.isEmpty())
+        assertTrue(events.none { it is LoopEvent.Memory })
+    }
+
+    @Test
+    fun `saved without location all the time, it says it can't ring yet`() {
+        location.watch = false
+        location.allowWatch = false
+        val (session, events) = buyMilk()
+
+        assertEquals(listOf("watch"), location.asked)
+        assertEquals(true, result(session)["ok"])
+        assertTrue(result(session)["note"].toString().contains("'All the time'"))
+        assertEquals("Rings once location is allowed all the time", events.filterIsInstance<LoopEvent.Memory>().single().chip.note)
+        // Kept, so it starts once location is allowed (watched again whenever the app opens).
+        assertEquals(1, reminders.places.size)
+    }
+
+    @Test
+    fun `on the lock screen a place reminder without location asks for an unlock`() {
+        location.locate = false
+        val (session, events) = said(
+            "remind me to buy milk near DMart",
+            call("add_task", "title" to "Buy milk", "place" to "DMart"),
+            locked = true,
+        )
+
+        assertEquals(false, result(session)["ok"])
+        assertTrue(result(session)["error"].toString().contains("unlock"))
+        assertTrue(location.asked.isEmpty())
+        assertTrue(store.tasks.isEmpty())
+        assertTrue(events.none { it == LoopEvent.NeedsUnlock })
+    }
+
+    @Test
+    fun `Android's hundred places are shared by every place reminder`() {
+        runBlocking {
+            store.insertTask(TaskEntity(title = "Earlier", createdAt = 0, updatedAt = 0, place = TaskPlace("Somewhere", List(97) { PlaceSpot(0.0, 0.0, 250) })))
+        }
+        buyMilk()
+        assertEquals(3, store.tasks.values.last().place!!.spots.size)
+
+        val (session, _) = said("remind me to buy eggs near DMart", call("add_task", "title" to "Buy eggs", "place" to "DMart"))
+        assertEquals(false, result(session)["ok"])
+        assertTrue(result(session)["error"].toString().contains("at most 100"))
     }
 
     /** A quote left unescaped in a description once made the app crash as it started. */

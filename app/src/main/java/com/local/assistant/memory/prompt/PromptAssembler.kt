@@ -91,7 +91,7 @@ class PromptAssembler(
     }
 
     private fun formatWhen(item: AgendaItem): String {
-        val at = item.at ?: return "no date"
+        val at = item.at ?: return item.place?.let { "near $it" } ?: "no date"
         val time = Instant.ofEpochMilli(at).atZone(zone)
         return if (item.allDay) DAY.format(time) else DAY_TIME.format(time)
     }

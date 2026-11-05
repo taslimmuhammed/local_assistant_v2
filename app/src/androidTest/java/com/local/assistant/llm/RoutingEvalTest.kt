@@ -64,6 +64,15 @@ class RoutingEvalTest {
         Case("move the CA call to 3", setOf("update_task")),
         Case("I called the CA, mark it done", setOf("update_task")),
         Case("cancel the passport reminder", setOf("update_task")),
+        // Place reminders: add_task with the place, not a call; a place only named is no place.
+        Case("remind me to buy milk near DMart", setOf("add_task")) { args -> "dmart" in args["place"].toString().lowercase().replace(" ", "") },
+        Case("when I reach office remind me to call Priya", setOf("add_task")) { args -> "office" in args["place"].toString().lowercase() },
+        Case("remind me to water the plants when I get home", setOf("add_task")) { args -> "home" in args["place"].toString().lowercase() },
+        Case("remind me to call the office at 5pm", setOf("add_task")) { args -> args["place"] == null && args["when"] != null },
+        // A distance with the place: the executor reads it from the words; the town must still be the place.
+        Case("set a reminder before 5 kilometer before I reach Munnar", setOf("add_task")) { args ->
+            "munnar" in args["place"].toString().lowercase() && args["when"] == null
+        },
         Case("my dentist is Dr. Rao", setOf("save_fact")) { args -> args["value"].toString().contains("Rao") },
         Case("reply in short answers from now on", setOf("save_fact")) { args -> args["core"] == true || args["core"] == "true" },
         Case("my wife's birthday is 12 May", setOf("save_fact", "add_event")),

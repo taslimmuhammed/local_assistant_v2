@@ -21,10 +21,11 @@ import java.util.concurrent.atomic.AtomicBoolean
 class PermissionBroker(private val context: Context) {
 
     /**
-     * [permissions]: one runtime permission, or with [health] the Health Connect ones, which
-     * Health Connect asks for on its own screen.
+     * [permissions]: runtime permissions asked together (precise location is asked with coarse,
+     * as Android requires), or with [health] the Health Connect ones, which Health Connect asks
+     * for on its own screen. [rationale], when there is one, is shown before Android's dialog.
      */
-    class Request(val permissions: Set<String>, val health: Boolean = false) {
+    class Request(val permissions: Set<String>, val health: Boolean = false, val rationale: Rationale? = null) {
         constructor(permission: String) : this(setOf(permission))
 
         /** The runtime permission asked for. */
@@ -41,6 +42,9 @@ class PermissionBroker(private val context: Context) {
         fun claim(): Boolean = claimed.compareAndSet(false, true)
     }
 
+    /** Why the app asks, said in its own dialog first: Android's says only what, not why. */
+    data class Rationale(val title: String, val text: String)
+
     private val _requests = MutableSharedFlow<Request>(extraBufferCapacity = 1)
     val requests: SharedFlow<Request> = _requests.asSharedFlow()
 
@@ -55,11 +59,20 @@ class PermissionBroker(private val context: Context) {
     }
 
     /**
+     * All of [permissions], explained with [rationale] first; true when all were allowed. Location
+     * all the time is a settings page on Android 11 and later, not a dialog, so it gets the
+     * longer wait ([longWait]).
+     */
+    suspend fun request(permissions: Set<String>, rationale: Rationale?, longWait: Boolean = false): Boolean = mutex.withLock {
+        if (permissions.all(::granted)) true else ask(Request(permissions, rationale = rationale), if (longWait) PAGE_ANSWER_TIMEOUT_MS else ANSWER_TIMEOUT_MS)
+    }
+
+    /**
      * Health Connect access to [permissions], on its screen, where the user can allow some and
      * not others: true when all were allowed. The caller checks what it has first.
      */
     suspend fun requestHealth(permissions: Set<String>): Boolean =
-        mutex.withLock { ask(Request(permissions, health = true), HEALTH_ANSWER_TIMEOUT_MS) }
+        mutex.withLock { ask(Request(permissions, health = true), PAGE_ANSWER_TIMEOUT_MS) }
 
     private suspend fun ask(request: Request, timeoutMs: Long = ANSWER_TIMEOUT_MS): Boolean {
         if (_requests.subscriptionCount.value == 0) return false
@@ -77,7 +90,8 @@ class PermissionBroker(private val context: Context) {
         /**
          * Health Connect's is a whole page to read, not a dialog: on the phone the user tapped
          * Allow 70 s in, after the minute was up, and was told the app had no access (5 Nov 2026).
+         * Location all the time is a settings page too.
          */
-        const val HEALTH_ANSWER_TIMEOUT_MS = 180_000L
+        const val PAGE_ANSWER_TIMEOUT_MS = 180_000L
     }
 }

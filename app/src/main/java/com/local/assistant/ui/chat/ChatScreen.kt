@@ -130,11 +130,17 @@ import com.local.assistant.ui.theme.fadingEdges
 import com.local.assistant.ui.theme.glass
 import kotlinx.coroutines.launch
 import kotlin.math.roundToInt
+import com.local.assistant.ui.memory.ShowNotices
+import com.local.assistant.ui.memory.ReminderEditor
+import com.local.assistant.ui.memory.MemoryViewModel
+import com.local.assistant.ui.memory.ConfirmDelete
+import com.local.assistant.memory.db.TaskEntity
 
 @Composable
 fun ChatScreen(
     viewModel: ChatViewModel,
     onOpenMemory: () -> Unit,
+    onOpenReminders: () -> Unit,
     onOpenPhotos: () -> Unit,
     onOpenSettings: () -> Unit,
     /** Which starter suggestions can run: the web and photo ones need setting up first. */
@@ -142,6 +148,8 @@ fun ChatScreen(
     canFindPhotos: Boolean = false,
     /** The user's first name, for the hello on a blank chat. */
     userName: String? = null,
+    /** Reminders as the Reminders screen has them: a place reminder's map in a reply opens its editor here. */
+    reminders: MemoryViewModel? = null,
 ) {
     val chats by viewModel.chats.collectAsStateWithLifecycle()
     val activeChatId by viewModel.activeChatId.collectAsStateWithLifecycle()
@@ -164,6 +172,13 @@ fun ChatScreen(
     val offerExactAlarms by viewModel.offerExactAlarms.collectAsStateWithLifecycle()
     val busyElsewhere by viewModel.busyElsewhere.collectAsStateWithLifecycle()
     val lifecycle = LocalLifecycleOwner.current.lifecycle
+    val placeReminders = reminders?.let { memory ->
+        val tasks by memory.tasks.collectAsStateWithLifecycle()
+        remember(tasks) { tasks.filter { it.place != null }.associateBy { it.id } }
+    }.orEmpty()
+    var editingReminder by remember { mutableStateOf<TaskEntity?>(null) }
+    var deletingReminder by remember { mutableStateOf<TaskEntity?>(null) }
+    val openReminder: ((TaskEntity) -> Unit)? = reminders?.let { { task -> editingReminder = task } }
 
     val drawerState = rememberDrawerState(DrawerValue.Closed)
     val scope = rememberCoroutineScope()
@@ -219,6 +234,15 @@ fun ChatScreen(
     // while the assistant overlay is over it: the overlay answers them then.
     ToolPermissionRequests(viewModel.permissionRequests, elsewhere = { com.local.assistant.assist.AssistActivity.inView })
 
+    // A place reminder opened from its map in a reply: the Reminders screen's editor, and its Undo.
+    reminders?.let { memory ->
+        ShowNotices(memory, snackbarHostState)
+        editingReminder?.let { task ->
+            ReminderEditor(task, memory, onDelete = { deletingReminder = task }, onDone = { editingReminder = null })
+        }
+        deletingReminder?.let { task -> ConfirmDelete(task, memory, onDone = { deletingReminder = null }) }
+    }
+
     LaunchedEffect(offerExactAlarms) {
         if (!offerExactAlarms || Build.VERSION.SDK_INT < Build.VERSION_CODES.S) return@LaunchedEffect
         viewModel.exactAlarmsOffered()
@@ -265,6 +289,10 @@ fun ChatScreen(
                     onOpenMemory = {
                         scope.launch { drawerState.close() }
                         onOpenMemory()
+                    },
+                    onOpenReminders = {
+                        scope.launch { drawerState.close() }
+                        onOpenReminders()
                     },
                     onOpenPhotos = {
                         scope.launch { drawerState.close() }
@@ -346,6 +374,8 @@ fun ChatScreen(
                                         onEditTime = viewModel::editTime,
                                         onOpenClock = viewModel::openClock,
                                         onOpenLink = openLink,
+                                        placeReminders = placeReminders,
+                                        onOpenReminder = openReminder,
                                     )
                                 }
                             }
@@ -368,6 +398,8 @@ fun ChatScreen(
                                             onEditTime = viewModel::editTime,
                                             onOpenClock = viewModel::openClock,
                                             onOpenLink = openLink,
+                                            placeReminders = placeReminders,
+                                            onOpenReminder = openReminder,
                                         )
                                     }
                                 }

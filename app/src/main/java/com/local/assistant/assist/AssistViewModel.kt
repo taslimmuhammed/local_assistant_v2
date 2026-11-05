@@ -413,7 +413,7 @@ class AssistViewModel(
         }
 
         override fun onMemory(chip: MemoryChip) {
-            if (chip.kind == MemoryChip.Kind.TASK && chip.at != null && !settings.askedForNotifications) {
+            if (chip.kind == MemoryChip.Kind.TASK && (chip.at != null || chip.place != null) && !settings.askedForNotifications) {
                 _askForNotifications.value = true
             }
         }

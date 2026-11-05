@@ -8,7 +8,10 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.Edit
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.DatePicker
 import androidx.compose.material3.DatePickerDialog
@@ -30,7 +33,9 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.unit.dp
+import com.local.assistant.memory.db.TaskEntity
 import com.local.assistant.memory.tools.MemoryChip
+import com.local.assistant.ui.memory.PlacePreview
 import com.local.assistant.ui.theme.AppColors
 import com.local.assistant.ui.theme.Glass
 import com.local.assistant.ui.theme.glass
@@ -40,11 +45,16 @@ import java.time.LocalTime
 import java.time.ZoneId
 import java.time.ZoneOffset
 import java.time.format.DateTimeFormatter
+import java.util.Locale
 
 /**
  * What the assistant just did with memory, under the reply that did it:
  * "Saved · Dentist: Dr. Rao · Undo", "Reminder · Call the CA · Tue 22 Sep, 11:00 AM · Edit".
  * Act first, undo after — nothing here asks "are you sure?".
+ *
+ * A place reminder still open is shown as it is now, on a small map; a tap opens it to move its
+ * pin, resize its circle, rename or delete it, as on the Reminders screen (the user asked for the
+ * map in the reply, 5 Nov 2026).
  */
 @Composable
 fun MemoryChips(
@@ -54,6 +64,10 @@ fun MemoryChips(
     onOpenClock: () -> Unit,
     onOpenLink: (String) -> Unit,
     modifier: Modifier = Modifier,
+    /** Open reminders that ring at a place, by id. */
+    placeReminders: Map<Long, TaskEntity> = emptyMap(),
+    /** Opens a place reminder's editor from its map; null where there is no map (the overlay). */
+    onOpenReminder: ((TaskEntity) -> Unit)? = null,
 ) {
     if (chips.isEmpty()) return
     var editing by remember { mutableStateOf<ChatViewModel.ChipItem?>(null) }
@@ -65,13 +79,32 @@ fun MemoryChips(
                 PhotoResults(photos)
                 return@forEach
             }
+            val reminder = item.taskId?.takeIf { !item.undone && onOpenReminder != null }?.let(placeReminders::get)
+            val place = reminder?.place
+            // As it is now: renamed, its circle changed or a pin dropped, since the reply.
+            val shown = if (reminder != null && place != null) {
+                val now = item.chip.copy(detail = reminder.title, place = place.where(), note = place.which()?.replaceFirstChar { it.titlecase(Locale.ROOT) })
+                item.copy(chip = now)
+            } else {
+                item
+            }
             MemoryChipRow(
-                item = item,
+                item = shown,
                 onUndo = { onUndo(item.recordId) },
                 onEdit = { editing = item },
                 onOpenClock = onOpenClock,
                 onOpenLink = onOpenLink,
             )
+            if (reminder != null && place != null && onOpenReminder != null) {
+                PlacePreview(
+                    place,
+                    onOpen = { onOpenReminder(reminder) },
+                    // As wide as a photo sent in the chat, from the left like the reply.
+                    modifier = Modifier.widthIn(max = 260.dp),
+                    action = "Edit",
+                    actionIcon = Icons.Outlined.Edit,
+                )
+            }
         }
     }
 
@@ -96,7 +129,7 @@ private fun MemoryChipRow(
     onOpenLink: (String) -> Unit,
 ) {
     val chip = item.chip
-    val text = listOfNotNull(chip.label, chip.detail, chip.at?.let { formatWhen(it, chip.allDay) })
+    val text = listOfNotNull(chip.label, chip.detail, chip.at?.let { formatWhen(it, chip.allDay) } ?: chip.place)
         .filter { it.isNotBlank() }
         .joinToString(" · ")
     Row(
@@ -143,7 +176,7 @@ private fun ChipAction(label: String, onClick: () -> Unit) {
 /** Pick a date, then a time; together they are the new moment. */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun EditTimeDialog(initial: Long, onPicked: (Long) -> Unit, onDismiss: () -> Unit) {
+internal fun EditTimeDialog(initial: Long, onPicked: (Long) -> Unit, onDismiss: () -> Unit) {
     val zone = ZoneId.systemDefault()
     val start = Instant.ofEpochMilli(initial).atZone(zone)
     // The date picker works in UTC midnights.

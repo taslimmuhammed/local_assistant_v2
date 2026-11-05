@@ -32,7 +32,6 @@ import androidx.compose.material.icons.outlined.DeleteOutline
 import androidx.compose.material.icons.outlined.PushPin
 import androidx.compose.material.icons.outlined.Search
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -46,10 +45,8 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
-import androidx.compose.material3.SnackbarDuration
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
-import androidx.compose.material3.SnackbarResult
 import androidx.compose.material3.SwipeToDismissBox
 import androidx.compose.material3.SwipeToDismissBoxValue
 import androidx.compose.material3.Tab
@@ -60,7 +57,6 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.material3.rememberSwipeToDismissBoxState
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -122,16 +118,7 @@ fun MemoryScreen(viewModel: MemoryViewModel, onBack: () -> Unit) {
         uri?.let(viewModel::addSavedImage)
     }
 
-    LaunchedEffect(viewModel) {
-        viewModel.notices.collect { notice ->
-            val result = snackbar.showSnackbar(
-                message = notice.message,
-                actionLabel = if (notice.undo != null) "Undo" else null,
-                duration = SnackbarDuration.Long,
-            )
-            if (result == SnackbarResult.ActionPerformed) viewModel.undo(notice) else viewModel.settle(notice)
-        }
-    }
+    ShowNotices(viewModel, snackbar)
 
     Scaffold(
         containerColor = AppColors.Background,
@@ -268,7 +255,7 @@ private fun CoreHeader(tokens: Int, cap: Int) {
 }
 
 @Composable
-private fun SectionHeader(title: String) {
+internal fun SectionHeader(title: String) {
     Text(
         title,
         style = MaterialTheme.typography.titleSmall,
@@ -370,39 +357,23 @@ private fun DuplicatesCard(suggestions: List<DuplicateSuggestion>, viewModel: Me
 private fun AgendaTab(viewModel: MemoryViewModel) {
     val tasks by viewModel.tasks.collectAsStateWithLifecycle()
     val events by viewModel.events.collectAsStateWithLifecycle()
+    var editing by remember { mutableStateOf<TaskEntity?>(null) }
+    var deleting by remember { mutableStateOf<TaskEntity?>(null) }
     LazyColumn(Modifier.fillMaxSize()) {
         item { SectionHeader("Reminders") }
         if (tasks.isEmpty()) item { Note("No open reminders.") }
-        items(tasks, key = { "task-${it.id}" }) { task ->
-            Dismissible(onDismiss = { viewModel.deleteTask(task) }) {
-                TaskRow(task, onDone = { viewModel.completeTask(task) })
-            }
-        }
+        reminderRows(tasks, viewModel, onEdit = { editing = it }, onDelete = { deleting = it })
         item { SectionHeader("Events") }
         if (events.isEmpty()) item { Note("No upcoming events.") }
         items(events, key = { "event-${it.id}" }) { event ->
             Dismissible(onDismiss = { viewModel.deleteEvent(event) }) { EventRow(event) }
         }
-        item { Note("Swipe to delete. Reminders and events can also be changed by asking in a chat.") }
+        item { Note("Tap a reminder to change it. Swipe to delete. Reminders and events can also be changed by asking in a chat.") }
     }
-}
-
-@Composable
-private fun TaskRow(task: TaskEntity, onDone: () -> Unit) {
-    Row(
-        Modifier.fillMaxWidth().glass(RowShape).padding(horizontal = 8.dp, vertical = 4.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Checkbox(checked = false, onCheckedChange = { onDone() })
-        Column(Modifier.weight(1f)) {
-            Text(task.title, style = MaterialTheme.typography.bodyLarge, color = AppColors.TextPrimary)
-            Text(
-                listOfNotNull(task.dueAt?.let { formatWhen(it, false) } ?: "No date", task.repeatRule?.let { "repeats" }).joinToString(" · "),
-                style = MaterialTheme.typography.labelSmall,
-                color = AppColors.TextSecondary,
-            )
-        }
+    editing?.let { task ->
+        ReminderEditor(task, viewModel, onDelete = { deleting = task }, onDone = { editing = null })
     }
+    deleting?.let { task -> ConfirmDelete(task, viewModel, onDone = { deleting = null }) }
 }
 
 @Composable
@@ -546,17 +517,24 @@ private const val THUMB_SAMPLE = 4
 // ---- Shared ----
 
 /**
- * Swipe left to delete; the row's own list removes it, and the snackbar offers it back. The row
- * is a card of glass: the red is only where it has moved off, or it would show through the row.
+ * Swipe left to delete; the row's own list removes it, and the snackbar offers it back. With
+ * [springBack] the row comes back at once, for a delete that asks first. The row is a card of
+ * glass: the red is only where it has moved off, or it would show through the row.
  */
 @Composable
-private fun Dismissible(onDismiss: () -> Unit, content: @Composable () -> Unit) {
+internal fun Dismissible(onDismiss: () -> Unit, springBack: Boolean = false, content: @Composable () -> Unit) {
     val state = rememberSwipeToDismissBoxState()
+    val scope = rememberCoroutineScope()
     SwipeToDismissBox(
         state = state,
         modifier = Modifier.padding(horizontal = 12.dp, vertical = 3.dp),
         enableDismissFromStartToEnd = false,
-        onDismiss = { if (it == SwipeToDismissBoxValue.EndToStart) onDismiss() },
+        onDismiss = {
+            if (it == SwipeToDismissBoxValue.EndToStart) {
+                if (springBack) scope.launch { state.reset() }
+                onDismiss()
+            }
+        },
         backgroundContent = {
             val moved = -(runCatching { state.requireOffset() }.getOrDefault(0f))
             val revealed = with(LocalDensity.current) { moved.coerceAtLeast(0f).toDp() }
@@ -572,17 +550,17 @@ private fun Dismissible(onDismiss: () -> Unit, content: @Composable () -> Unit) 
     ) { content() }
 }
 
-private val RowShape = RoundedCornerShape(18.dp)
+internal val RowShape = RoundedCornerShape(18.dp)
 
 @Composable
-private fun Note(text: String) {
+internal fun Note(text: String) {
     Text(text, style = MaterialTheme.typography.bodyMedium, color = AppColors.TextSecondary, modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp))
 }
 
 private val DAY_TIME = DateTimeFormatter.ofPattern("EEE d MMM, h:mm a", Locale.ENGLISH)
 private val DAY = DateTimeFormatter.ofPattern("EEE d MMM", Locale.ENGLISH)
 
-private fun formatWhen(at: Long, allDay: Boolean): String {
+internal fun formatWhen(at: Long, allDay: Boolean): String {
     val time = Instant.ofEpochMilli(at).atZone(ZoneId.systemDefault())
     return if (allDay) DAY.format(time) else DAY_TIME.format(time)
 }

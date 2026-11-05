@@ -134,11 +134,12 @@ object ToolCatalog {
     private val declarations: List<String> = listOf(
         function(
             ADD_TASK,
-            "Use when the user wants to be reminded or to do something later (\\\"remind me\\\", \\\"don't let me forget\\\"). Put the user's own time words in when, copied exactly.",
+            "Use when the user wants to be reminded or to do something later (\\\"remind me\\\", \\\"don't let me forget\\\"). Put the user's own time words in when, copied exactly. place: only for a reminder on reaching a place (\\\"near DMart\\\", \\\"when I reach office\\\"), the place as said; then no when.",
             required = listOf("title"),
             "title" to "string",
             "when" to "string",
             "repeat" to "string",
+            "place" to "string",
         ),
         function(
             UPDATE_TASK,
@@ -252,7 +253,7 @@ object ToolCatalog {
 
     private val RULES = """
         Tools — call them rather than only saying you will:
-        - Reminders and to-dos → add_task, with the user's own time words in when.
+        - Reminders and to-dos → add_task, with the user's own time words in when, or for one on reaching a place ("near DMart", "when I get home") the place in place.
         - Alarms ("set an alarm", "wake me up") → set_alarm, which rings in the phone's clock app.
         - "Remember this" about an image → remember_image, with everything you can read in details (not save_fact).
         - Calls, messages, timers, apps and phone settings only when asked for now: "remind me to call amma at 6" is add_task, "I should call her" is no tool.

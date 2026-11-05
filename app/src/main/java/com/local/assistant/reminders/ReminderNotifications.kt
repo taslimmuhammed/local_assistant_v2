@@ -1,6 +1,7 @@
 package com.local.assistant.reminders
 
 import android.Manifest
+import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
@@ -16,12 +17,13 @@ import androidx.core.content.ContextCompat
 import com.local.assistant.MainActivity
 import com.local.assistant.R
 import com.local.assistant.memory.db.EventEntity
+import com.local.assistant.memory.db.PlaceSpot
 import com.local.assistant.memory.db.TaskEntity
 import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 
-/** The reminder notification: the task's title, with Done and Snooze 1 h. */
+/** The reminder notification: the task's title, with Done and Snooze 1 h (or, at a place, Next time). */
 object ReminderNotifications {
 
     /**
@@ -30,6 +32,12 @@ object ReminderNotifications {
      */
     private const val CHANNEL = "reminder_alerts"
     private const val FIRST_CHANNEL = "reminders"
+
+    /**
+     * Arriving at a place: its own channel, so it can ring longer and be set apart in the
+     * system's settings. Same tone and stream as reminders, so silent mode still holds.
+     */
+    private const val PLACE_CHANNEL = "place_alerts"
 
     /**
      * Reminders play the phone's alarm tone — music, rather than a ding that is easy to miss —
@@ -55,6 +63,19 @@ object ReminderNotifications {
             vibrationPattern = longArrayOf(0, 400, 200, 400)
         }
         manager.createNotificationChannel(channel)
+        val place = NotificationChannel(PLACE_CHANNEL, "Place reminders", NotificationManager.IMPORTANCE_HIGH).apply {
+            description = "Reminders that ring when you reach a place, like a shop or your office"
+            setSound(
+                tone,
+                AudioAttributes.Builder()
+                    .setUsage(AudioAttributes.USAGE_NOTIFICATION_EVENT)
+                    .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
+                    .build(),
+            )
+            enableVibration(true)
+            vibrationPattern = longArrayOf(0, 700, 300, 700, 300, 700)
+        }
+        manager.createNotificationChannel(place)
     }
 
     fun canPost(context: Context): Boolean =
@@ -86,6 +107,55 @@ object ReminderNotifications {
             NotificationManagerCompat.from(context).notify(id, notification)
         } catch (_: SecurityException) {
             // Permission withdrawn since the check; nothing to show it with.
+        }
+    }
+
+    /**
+     * "Buy milk" — "You're near DMart, Hoodi Main Road". Rings like an alarm: the tone repeats
+     * until the user looks (opening the shade or the notification stops it), since a place
+     * reminder is about now, and a ding in a pocket in a shop is easy to miss.
+     */
+    fun showPlace(context: Context, task: TaskEntity, spot: PlaceSpot?) {
+        if (!canPost(context)) return
+        val place = task.place ?: return
+        val id = task.id.toInt()
+        val open = PendingIntent.getActivity(
+            context,
+            id,
+            Intent(context, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP),
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+        )
+        val nextTime = PendingIntent.getBroadcast(
+            context,
+            id,
+            Intent(context, PlaceReminderReceiver::class.java)
+                .setAction(PlaceReminderReceiver.ACTION_NEXT_TIME)
+                .putExtra(ReminderReceiver.EXTRA_TASK_ID, task.id),
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+        )
+        val where = listOfNotNull(place.name, spot?.label?.takeUnless { it.equals(place.name, ignoreCase = true) }).joinToString(", ")
+        val notification = NotificationCompat.Builder(context, PLACE_CHANNEL)
+            .setSmallIcon(R.drawable.ic_notification_reminder)
+            .setContentTitle(task.title)
+            .setContentText(
+                when (val reach = place.distance) {
+                    null -> "You're near $where"
+                    else -> if (reach.beforeArriving) "You're about ${reach.words()} from $where" else "You're within ${reach.words()} of $where"
+                },
+            )
+            .setCategory(NotificationCompat.CATEGORY_REMINDER)
+            .setPriority(NotificationCompat.PRIORITY_MAX)
+            .setAutoCancel(true)
+            .setContentIntent(open)
+            .setShowWhen(true)
+            .addAction(0, "Done", action(context, task.id, ReminderActionReceiver.ACTION_DONE))
+            .addAction(0, "Next time", nextTime)
+            .build()
+        notification.flags = notification.flags or Notification.FLAG_INSISTENT
+        try {
+            NotificationManagerCompat.from(context).notify(id, notification)
+        } catch (_: SecurityException) {
+            // Permission withdrawn since the check.
         }
     }
 

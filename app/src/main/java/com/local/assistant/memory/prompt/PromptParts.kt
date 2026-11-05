@@ -14,6 +14,8 @@ data class AgendaItem(
     val allDay: Boolean = false,
     /** "task 42" or "event 7": lets the model name exactly the item it means in a tool call. */
     val ref: String? = null,
+    /** A place reminder's place, said instead of a time: "near DMart". */
+    val place: String? = null,
 )
 
 /** Section C: context carried over from before this conversation's verbatim window. */

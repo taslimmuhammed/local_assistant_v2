@@ -6,6 +6,7 @@ import com.local.assistant.memory.db.EventEntity
 import com.local.assistant.memory.db.FactEntity
 import com.local.assistant.memory.db.ForgetResult
 import com.local.assistant.memory.db.TaskEntity
+import com.local.assistant.memory.db.TaskPlace
 import com.local.assistant.memory.prompt.Snippet
 
 /**
@@ -30,6 +31,8 @@ data class MemoryChip(
     val link: String? = null,
     /** find_photos: the photos it found, drawn as thumbnails or a card instead of a text row. */
     val photos: PhotoSet? = null,
+    /** A place reminder's place, shown instead of a time: "near DMart". */
+    val place: String? = null,
 ) {
     enum class Kind { FACT, TASK, EVENT, FORGET, ALARM, IMAGE, CALL, MESSAGE, TIMER, APP, SETTING, WEB, PHOTOS, SCREENSHOT, HEALTH }
 }
@@ -134,6 +137,10 @@ interface ReminderScheduler {
 
     fun schedule(taskId: Long, dueAt: Long)
 
+    /** Rings when the user arrives at [place]'s spots, instead of at a time (geofences). */
+    fun schedulePlace(taskId: Long, place: TaskPlace)
+
+    /** Stops the reminder, at a time or a place, and takes down its notification. */
     fun cancel(taskId: Long)
 
     /** Alerts about the event starting at [startsAt], at [alertAt] (ahead of it). */

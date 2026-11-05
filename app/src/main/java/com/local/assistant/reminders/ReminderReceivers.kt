@@ -1,9 +1,14 @@
 package com.local.assistant.reminders
 
+import android.app.PendingIntent
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import android.location.LocationManager
 import android.util.Log
+import com.google.android.gms.location.Geofence
+import com.google.android.gms.location.GeofenceStatusCodes
+import com.google.android.gms.location.GeofencingEvent
 import com.local.assistant.appContainer
 import com.local.assistant.memory.db.TaskStatus
 import com.local.assistant.memory.tools.EventTimes
@@ -134,7 +139,86 @@ class RescheduleReceiver : BroadcastReceiver() {
                 EventTimes.nextAlert(event, now, zone, WhenDefaults().dateOnly)?.let { event.id to it }
             }
             alerts.forEach { (id, alert) -> container.reminderScheduler.scheduleEvent(id, alert.at, alert.startsAt) }
-            Log.i("Reminders", "Rescheduled ${tasks.size} reminders and ${alerts.size} event alerts after ${intent.action}")
+            val places = PlaceReminderReceiver.watchAll(container)
+            Log.i("Reminders", "Rescheduled ${tasks.size} reminders, ${alerts.size} event alerts and $places place reminders after ${intent.action}")
+        }
+    }
+}
+
+/**
+ * Arriving at a place reminder's place, told by Play Services' geofences ([ACTION_FENCE]) or
+ * Android's proximity alerts ([ACTION_NEAR]): the reminder rings, alarm-like, and stays open
+ * until Done — "remind me next time" ([ACTION_NEXT_TIME]) just puts the notification away.
+ */
+class PlaceReminderReceiver : BroadcastReceiver() {
+
+    override fun onReceive(context: Context, intent: Intent) {
+        val arrived: List<Pair<Long, Int>> = when (intent.action) {
+            ACTION_NEXT_TIME -> {
+                intent.getLongExtra(ReminderReceiver.EXTRA_TASK_ID, -1L).takeIf { it > 0 }?.let { ReminderNotifications.cancel(context, it) }
+                return
+            }
+            ACTION_FENCE -> {
+                val event = GeofencingEvent.fromIntent(intent) ?: return
+                if (event.hasError()) {
+                    // Location turned off: Play Services has dropped every fence; the next time
+                    // the app comes to the front sets them again.
+                    Log.w(TAG, "Geofence error ${GeofenceStatusCodes.getStatusCodeString(event.errorCode)}")
+                    return
+                }
+                if (event.geofenceTransition != Geofence.GEOFENCE_TRANSITION_ENTER) return
+                event.triggeringGeofences.orEmpty().mapNotNull { PlaceAlerts.spotOf(it.requestId) }
+            }
+            ACTION_NEAR -> {
+                if (!intent.getBooleanExtra(LocationManager.KEY_PROXIMITY_ENTERING, false)) return
+                listOfNotNull(intent.data?.toString()?.let(PlaceAlerts::spotOf))
+            }
+            else -> return
+        }
+        async(context) {
+            val container = context.appContainer
+            val now = System.currentTimeMillis()
+            for ((taskId, spot) in arrived.distinctBy { it.first }) {
+                val task = container.memoryRepository.task(taskId)
+                if (task == null || task.status != TaskStatus.OPEN || task.place == null) {
+                    // Finished or deleted since: its fences are left over.
+                    container.placeFences.stopWatching(taskId)
+                    continue
+                }
+                if (!PlaceAlerts.shouldRing(task, now)) {
+                    Log.i(TAG, "Reminder $taskId rang ${(now - (task.place.rangAt ?: now)) / 60_000} min ago; quiet")
+                    continue
+                }
+                Log.i(TAG, "Arrived near ${task.place.name} (spot $spot): ringing reminder $taskId")
+                ReminderNotifications.showPlace(context, task, task.place.spots.getOrNull(spot))
+                container.memoryRepository.updateTask(task.copy(place = task.place.copy(rangAt = now), updatedAt = now))
+            }
+        }
+    }
+
+    companion object {
+        private const val TAG = "PlaceReminders"
+        const val ACTION_FENCE = "com.local.assistant.place.FENCE"
+        const val ACTION_NEAR = "com.local.assistant.place.NEAR"
+        const val ACTION_NEXT_TIME = "com.local.assistant.place.NEXT_TIME"
+
+        /** The one intent every Play Services geofence calls; Play Services adds which fired. */
+        fun fenceIntent(context: Context): PendingIntent = PendingIntent.getBroadcast(
+            context,
+            0,
+            Intent(context, PlaceReminderReceiver::class.java).setAction(ACTION_FENCE),
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_MUTABLE,
+        )
+
+        /**
+         * Watches every open place reminder again: geofences don't survive a reboot, Play
+         * Services drops them when location is turned off, and one saved before location was
+         * allowed all the time starts once it is.
+         */
+        suspend fun watchAll(container: com.local.assistant.AppContainer): Int {
+            val tasks = container.memoryRepository.openTasks().filter { it.place != null }
+            tasks.forEach { container.placeFences.watch(it.id, it.place!!) }
+            return tasks.size
         }
     }
 }

@@ -5,6 +5,7 @@ import com.local.assistant.data.db.AppDatabase
 import com.local.assistant.data.db.ChatEntity
 import com.local.assistant.data.db.MessageEntity
 import com.local.assistant.data.repo.ChatRepository
+import com.local.assistant.location.GeoPoint
 import com.local.assistant.memory.core.AliasPlanner
 import com.local.assistant.memory.core.DuplicateSuggestion
 import com.local.assistant.memory.core.FactKeys
@@ -18,8 +19,10 @@ import com.local.assistant.memory.db.ForgetResult
 import com.local.assistant.memory.db.MemoryRepository
 import com.local.assistant.memory.db.NoteEntity
 import com.local.assistant.memory.db.TaskEntity
+import com.local.assistant.memory.db.TaskPlace
 import com.local.assistant.memory.db.TaskStatus
 import com.local.assistant.memory.notes.SavedImages
+import com.local.assistant.memory.tools.ReminderEdits
 import com.local.assistant.memory.tools.ReminderScheduler
 import com.local.assistant.memory.tools.TaskOps
 import kotlinx.coroutines.flow.Flow
@@ -43,11 +46,14 @@ class MemoryControls(
     private val images: SavedImages? = null,
     private val clock: () -> Long = System::currentTimeMillis,
     private val zone: () -> ZoneId = ZoneId::systemDefault,
+    /** The town nearest a point, for a reminder's pin moved on the map. */
+    private val townAt: suspend (GeoPoint) -> String? = { null },
 ) {
     private val facts = database.factDao()
     private val agenda = database.agendaDao()
     private val sessions = database.sessionDao()
     private val state = database.appStateDao()
+    private val edits = ReminderEdits(memory, reminders, clock, townAt)
 
     fun observeFacts(): Flow<List<FactEntity>> = facts.observeAll()
 
@@ -194,9 +200,23 @@ class MemoryControls(
         onChanged()
     }
 
+    /** [task] with new words and a new time, or for a place reminder its pins and circles; what can't be done is said to the user. */
+    suspend fun editTask(task: TaskEntity, title: String, at: Long?, place: TaskPlace? = null): ReminderEdits.Outcome =
+        edits.edit(task, title, at, place).also { if (it is ReminderEdits.Outcome.Saved) onChanged() }
+
+    /** Undoes an edit: [previous] is the reminder as it was. */
+    suspend fun undoEdit(previous: TaskEntity) {
+        edits.putBack(previous)
+        onChanged()
+    }
+
     suspend fun restoreTask(task: TaskEntity) {
         memory.insertTask(task)
-        if (task.status == TaskStatus.OPEN && task.dueAt != null && task.dueAt > clock()) reminders.schedule(task.id, task.dueAt)
+        when {
+            task.status != TaskStatus.OPEN -> Unit
+            task.dueAt != null && task.dueAt > clock() -> reminders.schedule(task.id, task.dueAt)
+            task.place != null -> reminders.schedulePlace(task.id, task.place)
+        }
         onChanged()
     }
 

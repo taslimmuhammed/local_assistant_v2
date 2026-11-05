@@ -99,8 +99,21 @@ class MigrationTest {
             db.execSQL("INSERT INTO chats (id, title, createdAt, updatedAt) VALUES (1, 'Old', 1, 2)")
             db.execSQL("INSERT INTO messages (chatId, role, text, createdAt, incomplete) VALUES (1, 'USER', 'hello', 1, 0)")
         }
-        helper.runMigrationsAndValidate(7, AppDatabase.MIGRATIONS.toList()).use { db ->
+        helper.runMigrationsAndValidate(8, AppDatabase.MIGRATIONS.toList()).use { db ->
             assertEquals(1L, db.long("SELECT COUNT(*) FROM messages WHERE sessionId IS NOT NULL AND tokenEst > 0 AND offRecord = 0"))
+        }
+    }
+
+    @Test
+    fun version7RemindersStayTimedAndPlacesFit() {
+        helper.createDatabase(7).use { db ->
+            db.execSQL("INSERT INTO tasks (id, title, dueAt, status, createdAt, updatedAt) VALUES (1, 'Call the CA', 100, 'OPEN', 1, 2)")
+        }
+        helper.runMigrationsAndValidate(8, AppDatabase.MIGRATIONS.toList()).use { db ->
+            // Every reminder from before rings at its time, at no place.
+            assertEquals(1L, db.long("SELECT COUNT(*) FROM tasks WHERE id = 1 AND place IS NULL AND dueAt = 100"))
+            db.execSQL("INSERT INTO tasks (title, status, createdAt, updatedAt, place) VALUES ('Buy milk', 'OPEN', 3, 4, '{\"name\":\"DMart\",\"spots\":[]}')")
+            assertEquals(1L, db.long("SELECT COUNT(*) FROM tasks WHERE place LIKE '%DMart%'"))
         }
     }
 
