@@ -79,7 +79,6 @@ import androidx.compose.material.icons.outlined.PhotoLibrary
 import androidx.compose.material.icons.outlined.Place
 import androidx.compose.material.icons.outlined.PowerSettingsNew
 import androidx.compose.material.icons.outlined.Psychology
-import androidx.compose.material.icons.outlined.Public
 import androidx.compose.material.icons.outlined.RecordVoiceOver
 import androidx.compose.material.icons.outlined.Schedule
 import androidx.compose.material.icons.outlined.ScreenshotMonitor
@@ -938,12 +937,12 @@ private val TourPages = listOf(
         "Keeps you in the loop",
         "Ask how you slept or how far you walked. Back at your phone, a card shows who called and who's waiting on a reply.",
         listOf(
-            TourPoint(Icons.Outlined.FavoriteBorder, "Steps, sleep, heart rate and workouts, from Health Connect"),
-            TourPoint(Icons.Outlined.NotificationsNone, "Missed calls and messages, summed up when you're back"),
-            TourPoint(Icons.AutoMirrored.Outlined.Reply, "Replies ready to send, once you've checked them"),
+            TourPoint(Icons.Outlined.FavoriteBorder, "Steps, sleep, heart rate and workouts"),
+            TourPoint(Icons.Outlined.NotificationsNone, "Missed calls and messages, summed up"),
+            TourPoint(Icons.AutoMirrored.Outlined.Reply, "Replies ready, sent once you check them"),
             TourPoint(Icons.Outlined.ToggleOff, "Both stay off until you turn them on"),
         ),
-        where = "Settings → Health data, and While you were away",
+        where = "Settings → Health data (Health Connect), and While you were away",
         sceneDescription = "A card of missed calls and messages, and today's steps.",
     ),
     TourPage(
