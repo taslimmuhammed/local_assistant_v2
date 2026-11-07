@@ -888,7 +888,7 @@ private val TourPages = listOf(
         listOf(
             TourPoint(Icons.Outlined.Person, "Facts you mention: “my dentist is Dr. Rao”"),
             TourPoint(Icons.Outlined.Description, "Images you ask it to keep: bills, cards, tickets"),
-            TourPoint(Icons.Outlined.History, "Earlier chats, found by what they were about"),
+            TourPoint(Icons.Outlined.History, "Earlier chats, found by meaning"),
             TourPoint(Icons.Outlined.Edit, "See, change or delete any of it"),
         ),
         where = "About you, in the menu",
@@ -896,13 +896,13 @@ private val TourPages = listOf(
     ),
     TourPage(
         SceneKind.PLAN, "Reminders and lists", Icons.Outlined.NotificationsActive, Glass.Ink[3],
-        "Reminders that know where you are",
+        "Right time, right place",
         "Set reminders, events, alarms and timers by saying so. Tie one to a place and it rings when you get there.",
         listOf(
             TourPoint(Icons.Outlined.Schedule, "“Remind me every Monday at 9”"),
             TourPoint(Icons.Outlined.Place, "“Buy milk when I'm near DMart”"),
             TourPoint(Icons.Outlined.Alarm, "Alarms and timers, in your Clock app"),
-            TourPoint(Icons.Outlined.Checklist, "Notes and lists: “add bread to my shopping list”"),
+            TourPoint(Icons.Outlined.Checklist, "Lists: “add bread to my list”"),
         ),
         where = "Reminders and Notes, in the menu",
         sceneDescription = "A reminder to buy milk near a shop, with the circle on the map where it rings.",
@@ -912,13 +912,12 @@ private val TourPages = listOf(
         "Runs your phone for you",
         "Calls, messages, apps and settings, several in one go. Anything for another person waits for your tap to send.",
         listOf(
-            TourPoint(Icons.Outlined.Call, "Calls and messages by SMS, WhatsApp or email"),
+            TourPoint(Icons.Outlined.Call, "Calls, SMS, WhatsApp and email"),
             TourPoint(Icons.Outlined.FlashlightOn, "Flashlight, silent, volume, Do Not Disturb"),
             TourPoint(Icons.Outlined.Apps, "Opens apps and takes screenshots"),
             TourPoint(Icons.Outlined.Calculate, "Sums and conversions: “5 miles in km”"),
-            TourPoint(Icons.Outlined.Public, "Looks things up on the web"),
         ),
-        where = "Web search needs a free Tavily key: Settings → Web search",
+        where = "Web search too, with a free key from Settings",
         sceneDescription = "One message that calls Mom and turns on the flashlight, then a sum.",
     ),
     TourPage(
