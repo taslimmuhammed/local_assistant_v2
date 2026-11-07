@@ -70,6 +70,15 @@ class SettingsStore(context: Context) {
         get() = prefs.getBoolean(KEY_PROFILE_ASKED, false)
         set(value) = prefs.edit { putBoolean(KEY_PROFILE_ASKED, value) }
 
+    /**
+     * The welcome tour has been shown (to the end, or skipped); first launch shows it before the
+     * profile. Someone whose profile was already asked set the app up before the tour existed, so
+     * it isn't sprung on them; Settings has it.
+     */
+    var tourSeen: Boolean
+        get() = prefs.getBoolean(KEY_TOUR_SEEN, profileAsked)
+        set(value) = prefs.edit { putBoolean(KEY_TOUR_SEEN, value) }
+
     /** Chat history older than this many days is deleted by the nightly job; 0 keeps everything. */
     var historyRetentionDays: Int
         get() = prefs.getInt(KEY_HISTORY_RETENTION, 0)
@@ -268,6 +277,7 @@ class SettingsStore(context: Context) {
         private const val KEY_FACE_GROUPING_VERSION = "face_grouping_version"
         private const val KEY_MEMORY_PAUSED = "memory_paused"
         private const val KEY_PROFILE_ASKED = "profile_asked"
+        private const val KEY_TOUR_SEEN = "tour_seen"
         private const val KEY_WEB_SEARCH_ASKED = "web_search_asked"
         private const val KEY_HISTORY_RETENTION = "history_retention_days"
         private const val KEY_USE_GPU = "use_gpu"
