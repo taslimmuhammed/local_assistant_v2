@@ -17,6 +17,12 @@ interface Embedder {
     /** The cosine similarity above which a recalled snippet counts as relevant for this model. */
     val similarityThreshold: Float
 
+    /**
+     * The bar for search_memory, where the model asked: a little under [similarityThreshold],
+     * by an amount that depends on how spread out this model's similarities are.
+     */
+    val searchThreshold: Float get() = similarityThreshold - 0.1f
+
     /** Whether a query can be embedded right now without first loading the model. */
     val isReady: Boolean
 

@@ -50,7 +50,9 @@ import com.local.assistant.memory.db.NoteEntity
 import com.local.assistant.memory.db.NoteKind
 import com.local.assistant.memory.db.SessionTracker
 import com.local.assistant.memory.embed.EmbedderCatalog
-import com.local.assistant.memory.embed.BundledEmbedder
+import com.local.assistant.memory.embed.Embedder
+import com.local.assistant.memory.embed.MemoryEmbedder
+import com.local.assistant.memory.embed.PhotoModelEmbedder
 import com.local.assistant.memory.embed.InstalledEmbedder
 import com.local.assistant.memory.embed.LiteRtEmbedder
 import com.local.assistant.memory.prompt.Snippet
@@ -82,7 +84,6 @@ import com.local.assistant.memory.work.EmbeddingQueue
 import com.local.assistant.memory.work.ModelScheduler
 import com.local.assistant.model.ModelCatalog
 import com.local.assistant.model.ModelManager
-import com.local.assistant.model.TransferKind
 import com.local.assistant.reminders.AlarmReminderScheduler
 import com.local.assistant.reminders.ClockAlarms
 import com.local.assistant.reminders.PlaceFences
@@ -174,32 +175,42 @@ class AppContainer(context: Context) {
 
     val modelManager = ModelManager(context, ModelCatalog.FILE, settings::modelPath, appScope)
 
-    /** The embedding model: downloaded, or imported from storage. */
+    /** Photo search's model, EmbeddingGemma 2; its text side is memory search's too. */
+    val galleryModelManager = ModelManager(context, GalleryModel.FILE, settings::galleryModelPath, appScope)
+
+    /** One engine for photo search and memory search (see [GalleryEmbedder]). */
+    val photoModel = GalleryEmbedder(modelFile = { galleryModelManager.installed.value?.file }, cacheDir = context.cacheDir)
+
+    /** An embedding model the user imported from storage, used by memory search instead of the photo model. */
     val embedderManager = ModelManager(
         context = context,
         model = EmbedderCatalog.FILE,
         storedPath = settings::embedderPath,
         scope = appScope,
-        onInstalled = { kind, name ->
-            settings.embedderKey = when (kind) {
-                TransferKind.DOWNLOAD -> EmbedderCatalog.DEFAULT.key
-                TransferKind.IMPORT -> EmbedderCatalog.forImport(name ?: EmbedderCatalog.FILE.fileName).key
+        onInstalled = { _, name ->
+            settings.embedderKey = EmbedderCatalog.forImport(name ?: EmbedderCatalog.FILE.fileName).key
+            appScope.launch {
+                // The photo model's text side is memory search's no longer.
+                embedder.unload()
+                embeddingQueue.kick()
             }
-            embeddingQueue.kick()
         },
     )
 
-    /** EmbeddingGemma from the Play asset pack; the embedder when the user hasn't picked one. */
-    val bundledEmbedder = BundledEmbedder(context, onReady = { embeddingQueue.kick() })
-
-    val embedder = LiteRtEmbedder(
-        installed = {
-            settings.embedderPath?.let { path ->
-                // No key only from builds before keys were kept, when Granite was the download.
-                InstalledEmbedder(File(path), EmbedderCatalog.byKey(settings.embedderKey) ?: EmbedderCatalog.GRANITE)
-            } ?: bundledEmbedder.file?.let { InstalledEmbedder(it, EmbedderCatalog.EMBEDDING_GEMMA) }
-        },
-        cacheDir = context.cacheDir,
+    /** Memory search's model: the photo model's text side, or one the user imported. */
+    val embedder: Embedder = MemoryEmbedder(
+        imported = LiteRtEmbedder(
+            installed = {
+                settings.embedderPath?.let { path ->
+                    // No key only from builds before keys were kept, when Granite was the download.
+                    InstalledEmbedder(File(path), EmbedderCatalog.byKey(settings.embedderKey) ?: EmbedderCatalog.GRANITE)
+                }
+            },
+            cacheDir = context.cacheDir,
+        ),
+        photo = PhotoModelEmbedder(photoModel),
+        // Not the old EmbeddingGemma 300M, in the moment before dropOldEmbedder deletes it.
+        useImported = { settings.embedderPath != null && settings.embedderKey != OLD_EMBEDDER_KEY },
     )
 
     private val vectorIndex: VectorIndex =
@@ -238,9 +249,6 @@ class AppContainer(context: Context) {
 
     val modelScheduler = ModelScheduler()
 
-    /** Photo search: its own model, database and index (see `gallery/`). */
-    val galleryModelManager = ModelManager(context, GalleryModel.FILE, settings::galleryModelPath, appScope)
-
     val photoLibrary = PhotoLibrary(context)
 
     val photoThumbnails = PhotoThumbnails(photoLibrary)
@@ -272,7 +280,7 @@ class AppContainer(context: Context) {
     val galleryIndex = GalleryIndex(
         dao = galleryDatabase.photoDao(),
         library = photoLibrary,
-        embedder = GalleryEmbedder(modelFile = { galleryModelManager.installed.value?.file }, cacheDir = context.cacheDir),
+        embedder = photoModel,
         scheduler = modelScheduler,
         scope = appScope,
         faces = faceIndex,
@@ -289,7 +297,7 @@ class AppContainer(context: Context) {
     fun photoSearchReady(): Boolean =
         galleryModelManager.installed.value != null && photoLibrary.access() != PhotoLibrary.Access.NONE
 
-    /** Phones this small give the photo model's memory back as soon as the Photos screen closes. */
+    /** Phones this small give the photo model's memory back (what memory search isn't using) as soon as the Photos screen closes. */
     val isSmallDevice: Boolean = totalMemoryBytes(context) <= SMALL_DEVICE_BYTES
 
     /** Secrets the user pastes in, encrypted with a Keystore key. */
@@ -641,46 +649,68 @@ class AppContainer(context: Context) {
 
     /**
      * Memory search comes with the first chat model: once one is installed (downloaded or
-     * imported) where there was none, EmbeddingGemma downloads right after it, from this app's
-     * GitHub release, so nobody has to go back for it. Not when an embedder is already here or
-     * on its way (Play's asset pack), and not for a chat model that was installed before.
+     * imported) where there was none, the photo model, whose text side memory search uses,
+     * downloads right after it, so nobody has to go back for it. Not when it is already here or
+     * on its way, not when the user has loaded their own embedder, and not for a chat model that
+     * was installed before.
      */
-    private fun fetchEmbedderAfterFirstModel() {
+    private fun fetchPhotoModelAfterFirstModel() {
         appScope.launch {
             var hadModel = modelManager.installed.value != null
             modelManager.installed.collect { model ->
                 val arrived = model != null && !hadModel
                 hadModel = model != null
-                val bundled = bundledEmbedder.state.value
-                val noEmbedder = embedderManager.installed.value == null && embedderManager.transfer.value == null &&
-                    (bundled is BundledEmbedder.State.Unavailable)
-                if (arrived && noEmbedder) {
-                    Log.i("AppContainer", "Chat model installed; fetching ${EmbedderCatalog.DEFAULT.displayName}")
-                    embedderManager.download()
+                val none = galleryModelManager.installed.value == null && galleryModelManager.transfer.value == null &&
+                    embedderManager.installed.value == null
+                if (arrived && none) {
+                    Log.i("AppContainer", "Chat model installed; fetching ${GalleryModel.DISPLAY_NAME}")
+                    galleryModelManager.download()
                 }
             }
         }
     }
 
+    /**
+     * EmbeddingGemma 300M was memory search's own model until the photo model took it over
+     * (2026-11-07). Its file and the runtime's cache of it are deleted, about 440 MB; its
+     * vectors are replaced as the archive is embedded again.
+     */
+    private suspend fun dropOldEmbedder() {
+        if (settings.embedderKey != OLD_EMBEDDER_KEY) return
+        embedderManager.deleteInstalled()
+        settings.embedderKey = null
+        dropEmbedderCaches()
+        Log.i("AppContainer", "Deleted EmbeddingGemma 300M; memory search uses the photo model")
+    }
+
+    /** The runtime's caches of the imported embedder, named after its file. */
+    private fun dropEmbedderCaches() {
+        appContext.cacheDir.listFiles { file -> file.name.startsWith(EmbedderCatalog.FILE.fileName) }?.forEach { it.delete() }
+    }
+
     fun memorySearchControls() = MemorySearchControls(
-        manager = embedderManager,
+        photoModel = galleryModelManager,
+        photoModelName = "EmbeddingGemma 2",
+        photoModelBytes = GalleryModel.SIZE_BYTES,
+        imported = embedderManager,
+        importedName = { EmbedderCatalog.byKey(settings.embedderKey)?.displayName },
         remaining = embeddingQueue.remaining,
-        installedName = { EmbedderCatalog.byKey(settings.embedderKey)?.displayName },
-        bundled = bundledEmbedder.state,
-        bundledName = EmbedderCatalog.EMBEDDING_GEMMA.displayName,
-        downloadName = "EmbeddingGemma",
-        downloadModelName = EmbedderCatalog.DEFAULT.displayName,
-        downloadBytes = EmbedderCatalog.DEFAULT.sizeBytes,
-        delete = {
+        deleteImported = {
             embedder.unload()
             embedderManager.deleteInstalled()
             settings.embedderKey = null
+            dropEmbedderCaches()
+            embeddingQueue.kick()
         },
     )
 
     init {
-        bundledEmbedder.ensure()
-        fetchEmbedderAfterFirstModel()
+        fetchPhotoModelAfterFirstModel()
+        appScope.launch {
+            dropOldEmbedder()
+            // Memory search starts once the photo model is here (downloaded later, or already).
+            galleryModelManager.installed.collect { if (it != null) embeddingQueue.kick() }
+        }
         backgroundJobs.scheduleNightly()
         // Exchanges from before the archive existed, or missed by a crash, then their vectors.
         appScope.launch {
@@ -710,8 +740,11 @@ class AppContainer(context: Context) {
          */
         const val AFTER_MODEL_WORK_MS = 30_000L
 
-        /** At or below this, the embedder's ~0.5 GB is given back whenever it is idle. */
+        /** At or below this, memory search's model (≈250 MB) is given back whenever it is idle in the background. */
         const val SMALL_DEVICE_BYTES = 8L * 1024 * 1024 * 1024
+
+        /** EmbeddingGemma 300M's key, from before the photo model did memory search too. */
+        const val OLD_EMBEDDER_KEY = "embeddinggemma-300m-wi8"
 
         fun totalMemoryBytes(context: Context): Long {
             val info = ActivityManager.MemoryInfo()

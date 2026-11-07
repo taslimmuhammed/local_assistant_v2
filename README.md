@@ -46,8 +46,9 @@ Android 8 or newer · 64-bit phone · 8 GB of RAM or more · about 4.5 GB free
      it stopped if interrupted.
    - **Load from device storage** uses a `.litertlm` model file you already have.
 
-   Right after it, the app also downloads EmbeddingGemma (0.33 GB) by itself, so it can find past
-   conversations by meaning. Nothing to do; no account needed.
+   Right after it, the app also downloads EmbeddingGemma 2 (0.39 GB) by itself, so it can find
+   past conversations by meaning; the same model searches your photos. Nothing to do; no account
+   needed.
 
 It then takes about 15 seconds to get ready (it loads the model and reads its instructions), and
 from then on answers right away.
@@ -80,22 +81,18 @@ In the same place:
 
 ### Optional extras
 
-- **Memory search** is set up with the model. If you delete it, or the download didn't finish,
-  get it again from Settings → Model and memory search. Without it, past chats are still found by
-  keywords.
+- **Memory search** is set up with the model. If the download didn't finish, get it from
+  Settings → Model and memory search. Without it, past chats are still found by keywords.
 - **Web search**: Settings → Web search, and paste a free key from [tavily.com](https://tavily.com).
+- **Photos**: tap **Photos** in the chat drawer and turn on photo search. It uses memory search's
+  model, so there is nothing more to download once that is here.
+  There, **Find people in your photos** groups faces and names them from your contacts' photos.
 
 ### Models and licences
 
 - **Gemma 4 E4B**, the assistant: by Google, from Hugging Face, Apache License 2.0.
-- **EmbeddingGemma 300M**, memory search: by Google, converted to LiteRT-LM's format with 8-bit
-  weights (`tools/embedder`) and published on this repository's
-  [models-v1 release](https://github.com/taslimmuhammed/local_assistant_v2/releases/tag/models-v1).
-  Gemma is provided under and subject to the Gemma Terms of Use found at
-  [ai.google.dev/gemma/terms](https://ai.google.dev/gemma/terms); its use is subject to the
-  [Gemma Prohibited Use Policy](https://ai.google.dev/gemma/prohibited_use_policy).
-- **EmbeddingGemma 2 (text and vision, 440M)**, photo search: by Google, downloaded from
-  litert-community on Hugging Face when Photos is turned on; Gemma Terms of Use, as above.
+- **EmbeddingGemma 2 (text and vision, 440M)**, memory search and photo search: by Google,
+  downloaded from litert-community on Hugging Face, Apache License 2.0.
 - **YuNet** (MIT) and **SFace** (Apache License 2.0), finding and telling faces apart for People:
   from OpenCV Zoo, converted to TensorFlow Lite; SFace's weights stored as 8-bit. See
   `app/src/main/assets/faces/NOTICE.txt`.

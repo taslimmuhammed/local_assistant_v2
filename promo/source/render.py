@@ -1067,7 +1067,7 @@ def s_layers(t):
         put_center(c, sp, W / 2, y0 + 5 * step + 80, max(0.01, ua), min(1, ua * 2))
     uf = prog(t, 34.8, 0.5) * (1 - prog(t, 38.8, 0.3))
     text_line(c, '+ nightly consolidation while you charge', W / 2, y0 + 5 * step + 70, 34, 600, (200, 200, 222), a=uf, opsz=14)
-    text_line(c, 'sqlite-vec  ·  EmbeddingGemma 300M  ·  all on-device', W / 2, y0 + 5 * step + 130, 30, 500, (160, 160, 185), a=prog(t, 35.1, 0.5) * (1 - prog(t, 38.8, 0.3)), opsz=14)
+    text_line(c, 'sqlite-vec  ·  EmbeddingGemma 2  ·  all on-device', W / 2, y0 + 5 * step + 130, 30, 500, (160, 160, 185), a=prog(t, 35.1, 0.5) * (1 - prog(t, 38.8, 0.3)), opsz=14)
     return c.convert('RGB'), dict(flash=max(0.0, 0.0))
 
 

@@ -25,8 +25,14 @@ import java.io.File
  * loaded on the GPU, the chat model's own vision failed on any image ("TensorBuffer must have all
  * static dimensions", 2026-10-26): a photo sent in a chat after a search, or a found photo given
  * to it to read a question from. With this one on the CPU, both work. The [com.local.assistant.memory.work.ModelScheduler] already
- * keeps it from running while the chat model is generating. The engine is only kept while photos
- * are being indexed or searched; [unload] gives it back.
+ * keeps it from running while the chat model is generating.
+ *
+ * One engine serves photo search and memory search ([com.local.assistant.memory.embed.PhotoModelEmbedder]),
+ * so the two never hold a copy each. Photos use it while they are indexed or searched and then
+ * [release] it; memory search holds it from [embedText] or [prepare] until [unloadText]. Released
+ * while memory search holds it, the engine is opened again without the vision encoder, which
+ * loads only with the first image and is most of its memory (on the OnePlus, 2026-11-06,
+ * `TextEmbedderEvalTest`: ≈250 MB for the text side, ≈350 MB more once a photo is embedded).
  */
 class GalleryEmbedder(
     private val modelFile: () -> File?,
@@ -44,26 +50,82 @@ class GalleryEmbedder(
     @Volatile
     private var loadedFrom: File? = null
 
+    /** Memory search is using it: [release] keeps the text side loaded. */
+    @Volatile
+    private var textHeld = false
+
+    /** An image went through since it was opened, so the vision encoder is in memory too. */
+    @Volatile
+    private var holdsVision = false
+
+    /** The last text embedded and its vector: a question goes to photo and memory search alike. */
+    private var lastText: String? = null
+    private var lastVector: FloatArray? = null
+
     val isInstalled: Boolean get() = modelFile()?.isFile == true
 
     val isLoaded: Boolean get() = engine != null
 
     /** A normalised vector for a photo given as encoded image bytes (JPEG), or null on failure. */
-    suspend fun embedImage(jpeg: ByteArray): FloatArray? = compute(listOf(InputData.Image(jpeg)))
+    suspend fun embedImage(jpeg: ByteArray): FloatArray? = compute(InputData.Image(jpeg))
 
     /** A normalised vector for what someone typed, with the model's search-query prompt. */
-    suspend fun embedQuery(text: String): FloatArray? = compute(listOf(InputData.Text(GalleryModel.QUERY_PREFIX + text.trim())))
+    suspend fun embedQuery(text: String): FloatArray? = compute(InputData.Text(GalleryModel.QUERY_PREFIX + text.trim()))
 
-    suspend fun unload() = mutex.withLock { close() }
+    /** For memory search: a normalised vector for [text] as given (the caller adds the task prompt). */
+    suspend fun embedText(text: String): FloatArray? {
+        textHeld = true
+        return compute(InputData.Text(text))
+    }
 
-    private suspend fun compute(input: List<InputData>): FloatArray? = mutex.withLock {
+    /** For memory search: opens the engine now, so the next question needn't wait. True when it is ready. */
+    suspend fun prepare(): Boolean = mutex.withLock {
+        textHeld = true
+        modelFile()?.let { engineFor(it) } != null
+    }
+
+    /**
+     * Photos are done with it for now: closed, or while memory search holds it, opened again
+     * without the vision encoder (≈0.6 s) if an image had loaded it.
+     */
+    suspend fun release() = mutex.withLock {
+        if (!textHeld) {
+            close()
+        } else if (holdsVision) {
+            close()
+            modelFile()?.let { engineFor(it) }
+        }
+    }
+
+    /** Memory search is done with it: closed, unless photos are being indexed with it (their [release] closes it then). */
+    suspend fun unloadText() = mutex.withLock {
+        textHeld = false
+        if (!holdsVision) close()
+    }
+
+    /** Closes it whoever is using it; the next call opens it again. */
+    suspend fun unload() = mutex.withLock {
+        textHeld = false
+        close()
+    }
+
+    private suspend fun compute(input: InputData): FloatArray? = mutex.withLock {
+        val text = (input as? InputData.Text)?.text
+        if (text != null && text == lastText) lastVector?.let { return@withLock it.copyOf() }
         val engine = engineFor(modelFile() ?: return@withLock null) ?: return@withLock null
         withContext(Dispatchers.Default) {
             try {
-                engine.computeEmbedding(input, OPTIONS).embedding.takeIf { it.size >= Int8Vectors.DIMENSIONS }
+                engine.computeEmbedding(listOf(input), OPTIONS).embedding.takeIf { it.size >= Int8Vectors.DIMENSIONS }
             } catch (e: Exception) {
                 Log.w(TAG, "Embedding failed", e)
                 null
+            }
+        }?.also { vector ->
+            if (text != null) {
+                lastText = text
+                lastVector = vector.copyOf()
+            } else {
+                holdsVision = true
             }
         }
     }
@@ -112,6 +174,9 @@ class GalleryEmbedder(
         engine?.let { runCatching { it.close() } }
         engine = null
         loadedFrom = null
+        holdsVision = false
+        lastText = null
+        lastVector = null
     }
 
     private companion object {

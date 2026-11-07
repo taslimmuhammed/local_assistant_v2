@@ -255,7 +255,7 @@ class Retriever(
         val keyword = QueryText.ftsMatch(terms)?.let { runCatching { source.chunksMatching(it) }.getOrNull() }.orEmpty()
         val (vector, _) = queryVector(query, embedQuery = true)
         val modelId = embedder.modelId
-        val threshold = embedder.similarityThreshold - SEARCH_THRESHOLD_SLACK
+        val threshold = embedder.searchThreshold
         val close = if (vector != null && modelId != null) {
             source.embeddedChunks(modelId).filter { part ->
                 part.embedding?.let { Int8Vectors.similarity(Int8Vectors.cosineDistance(it, vector)) >= threshold } == true
@@ -317,7 +317,7 @@ class Retriever(
         val keyword = QueryText.ftsMatch(terms)?.let { runCatching { source.matching(it) }.getOrNull() }.orEmpty()
         val (vector, _) = queryVector(query, embedQuery = true)
         val modelId = embedder.modelId
-        val threshold = embedder.similarityThreshold - SEARCH_THRESHOLD_SLACK
+        val threshold = embedder.searchThreshold
         val close = if (vector != null && modelId != null) {
             source.embedded(modelId).filter { note ->
                 note.embedding?.let { Int8Vectors.similarity(Int8Vectors.cosineDistance(it, vector)) >= threshold } == true
@@ -336,7 +336,7 @@ class Retriever(
         val terms = QueryText.terms(query)
         val (vector, _) = queryVector(query, embedQuery = true)
         val search = search(terms, QueryText.rareTerms(query), vector) { _, _ -> false }
-        val threshold = embedder.similarityThreshold - SEARCH_THRESHOLD_SLACK
+        val threshold = embedder.searchThreshold
         search.candidates
             .map { it.copy(injected = it.keywordHit || (it.similarity ?: -1f) >= threshold) }
             .filter { it.injected }
@@ -436,7 +436,6 @@ class Retriever(
         /** Keyword matches scored before the best [PER_LIST] are kept. */
         private const val KEYWORD_POOL = 200
         private const val NEAREST_MARGIN = 20
-        private const val SEARCH_THRESHOLD_SLACK = 0.1f
 
         /** A rare word naming the image outweighs a small difference in similarity. */
         private const val RARE_BONUS = 0.2f

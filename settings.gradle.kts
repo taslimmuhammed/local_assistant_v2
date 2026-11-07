@@ -22,5 +22,3 @@ dependencyResolutionManagement {
 
 rootProject.name = "LocalAssistant"
 include(":app")
-// EmbeddingGemma, delivered by Play right after the app installs (see embedder_pack/README.md).
-include(":embedder_pack")

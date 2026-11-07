@@ -10,9 +10,8 @@ import com.local.assistant.model.ModelFile
  * LiteRT-LM. Apache-2.0, ungated. Text and images land in one space, so a typed query is compared
  * straight against the photos' vectors.
  *
- * Separate from memory search's embedder ([com.local.assistant.memory.embed.EmbedderCatalog]):
- * nobody has yet measured EmbeddingGemma 2 against it on this app's chat archive, so chat recall
- * stays as it is until that comparison says otherwise.
+ * Memory search uses its text side as well ([com.local.assistant.memory.embed.PhotoModelEmbedder]),
+ * on the same engine, instead of a text model of its own.
  *
  * The generic CPU/GPU file, not the per-chip NPU builds in the same repository.
  */

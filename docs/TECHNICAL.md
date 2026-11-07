@@ -61,13 +61,9 @@ adb push gemma-4-E4B-it.litertlm /sdcard/Download/
 
 Then pick it from the file picker.
 
-**The memory-search model comes with the app on Google Play.** EmbeddingGemma 300M ships in the
-fast-follow asset pack `:embedder_pack`. Play downloads it by itself right after install, with
-nothing to host. The app loads it from where Play unpacked it (`memory/embed/BundledEmbedder`),
-unless the user has downloaded or imported another embedder in Settings. An APK built with
-`assembleDebug` has no packs; `./gradlew :app:installBundleDebug` installs the bundle the way Play
-would. `embedder_pack/README.md` covers putting the model file in place and the Gemma licence
-checklist. Settings → About shows the notices in the app.
+**The memory-search model is the photo model.** EmbeddingGemma 2 (388 MB) downloads by itself
+right after the first chat model, from litert-community on Hugging Face: nothing to host, no
+account. Settings → About shows the models' licences in the app.
 
 ## Architecture
 
@@ -79,10 +75,11 @@ AssistantApplication
     │   ├── ChatRepository        every message written with its session and token estimate
     │   ├── MemoryRepository      facts, tombstones, agenda
     │   └── ArchiveRepository     every exchange as a chunk: keyword index, vectors, backlog
-    ├── ModelManager (×2)         download / import / delete the chat model, and the embedder
+    ├── ModelManager (×3)         download / import the chat model, the photo model, an imported embedder
     ├── LlmService                owns the LiteRT-LM Engine
     ├── LiteRtLmBackend           LlmBackend: conversations, streaming, one-shot completions
-    ├── LiteRtEmbedder            the embedding model (LiteRT-LM EmbeddingEngine, CPU)
+    ├── MemoryEmbedder            memory search's model: the photo model's text side (GalleryEmbedder,
+    │                             LiteRT-LM EmbeddingEngine, CPU), or an imported one (LiteRtEmbedder)
     ├── ModelScheduler            one model job at a time; the user always first
     ├── EmbeddingQueue            embeds the archive's backlog while the user is idle
     ├── Retriever                 per-turn recall: facts, then keyword + vector search, fused
@@ -179,27 +176,32 @@ on a device where it fails to load, `KotlinVectorIndex` scores the same bytes wi
 arithmetic (`VectorParityTest` checks both return identical neighbours). Vectors from different
 models are never compared: changing the embedder sends the archive back to the backlog.
 
-The embedder is optional and installed under Settings → Model and memory search. The one to use
-is **EmbeddingGemma 300M**: on public per-language benchmarks it retrieves clearly better than the
-alternatives in English, Hindi, romanized Hindi, Malayalam, Tamil and Telugu. Google does not
-publish it in a form LiteRT-LM's `EmbeddingEngine` loads, so it is built from the original weights
-with `tools/embedder` (see its README; about 15 minutes on a Mac) and published on this
-repository's GitHub release `models-v1` (333,151,761 bytes; the app checks its SHA-256). It
-downloads by itself right after the first chat model is installed
-(`AppContainer.fetchEmbedderAfterFirstModel`), and from the screen above; no account needed.
+The embedder is optional and set up under Settings → Model and memory search. It is the photo
+model's text side, **EmbeddingGemma 2** (see Photos): one engine, `gallery/GalleryEmbedder`,
+serves both, so they share one download and one copy in memory (`memory/embed/PhotoModelEmbedder`).
+Memory search holds it from its first use in the foreground until it is unloaded; photo search
+releases it when done, which reopens it without the vision encoder if an image had loaded it
+(≈350 MB of the engine's memory). It downloads by itself right after the first chat model
+(`AppContainer.fetchPhotoModelAfterFirstModel`), and from the screen above. An embedder imported
+from storage is used instead when there is one (`memory/embed/MemoryEmbedder`);
 [Granite Embedding 311M multilingual](https://huggingface.co/litert-community/granite-embedding-311m-multilingual-r2)
-(332 MB, Apache-2.0), the download before that, still works when imported. Without either, recall
-still works on keywords and rare words.
+(332 MB, Apache-2.0), the download in the first builds, is recognised by its name. Without one,
+recall still works on keywords and rare words.
 
-EmbeddingGemma's similarities run lower than the usual 0.6 rule of thumb: calibrated on 60
-labelled pairs (`tools/embedder/calibrate_threshold.py`), its inject threshold is 0.42 — 73% of
-related pairs recalled at 95% precision. Measured on the target phone:
+EmbeddingGemma 300M did memory search until 2026-11-07, as a model of its own. On the target
+phone the two were both loaded during chats, ≈250 MB each; now one is. On 61 labelled pairs
+(`TextEmbedderEvalTest`) both recall 73% of related pairs at their thresholds, at a precision of
+≈0.90 for EmbeddingGemma 2 against 0.95; with no wrong pair allowed, 54% against 69%. The first
+launch after the change deletes the old file and its cache, and the archive is embedded again.
+
+EmbeddingGemma 2's similarities sit high and close together (related pairs' median 0.79,
+unrelated 0.66), so its inject threshold is 0.75, and search_memory's 0.68, just under the
+lowest related pair. Measured on the target phone:
 
 | | |
 |---|---|
-| EmbeddingGemma load (once, on CPU) | 2.7 s |
-| Embedding the user's message before a reply | 20 ms median, 25 ms p95 |
-| Embedding an archived exchange | 38 ms |
+| EmbeddingGemma 2 load, text side (once, on CPU) | 0.6 s |
+| Embedding the user's message before a reply | 51 ms median |
 | Recall without vectors (FTS, fusion, facts) | 44 ms |
 | KNN over 55,000 chunks, k = 40 | 18–31 ms sqlite-vec, 30–51 ms Kotlin |
 
@@ -765,11 +767,11 @@ it. The WAV is still what the chat plays back.
 "birthday cake" and those photos come up. Everything lives in `gallery/` and `ui/gallery/`.
 
 - **Model.** Google's EmbeddingGemma 2, the text + vision build (440M, 388 MB, Apache-2.0,
-  `litert-community/embeddinggemma-2-text-vision-440m-litert-lm`), downloaded from the Photos
-  screen. Text and images share one space, so a typed query is compared directly with each photo's
-  vector. It is separate from memory search's EmbeddingGemma 300M: nobody has compared the two on
-  the chat archive yet, so chat recall is unchanged. `ModelFormat.Kind.GALLERY` refuses a file
-  without both the text and the vision encoder.
+  `litert-community/embeddinggemma-2-text-vision-440m-litert-lm`), downloaded after the first chat
+  model or from the Photos screen. Text and images share one space, so a typed query is compared
+  directly with each photo's vector. Memory search uses its text side too, on the same engine (see
+  Memory search). `ModelFormat.Kind.GALLERY` refuses a file without both the text and the vision
+  encoder.
 - **Index.** `gallery.db`, a Room database of its own: one row per MediaStore photo, with its
   date, its `DATE_MODIFIED` (an edited photo is redone) and a 256-byte int8 vector. Everything in
   it can be rebuilt from the photos, so it never needs a migration of `assistant.db`; a schema
@@ -1481,7 +1483,7 @@ URLs, hashes, base64, long random IDs — and the loop is self-reinforcing once 
 | A new tool | `memory/tools/ToolCatalog.kt` (declaration + routing rule) and `ToolExecutor` |
 | Time words the resolver misses | `memory/tools/WhenResolver.kt`, with a row in `WhenResolverTest` |
 | Photo search: model, cutoff, when it indexes | `gallery/GalleryModel.kt`, `gallery/PhotoRanking.kt`, `gallery/GalleryIndex.kt`; `GalleryEvalTest` on the phone |
-| Another embedding model | `memory/embed/EmbedderCatalog.kt` (prompts, threshold); `tools/embedder/calibrate_threshold.py`, then `EmbedderProbeTest` on the phone |
+| Memory search's thresholds, or another embedding model | `memory/embed/PhotoModelEmbedder.kt` (thresholds), `EmbedderCatalog.kt` (imported ones); `TextEmbedderEvalTest`, then `EmbedderProbeTest` on the phone |
 | What counts as trivial, or a rare word | `memory/retrieval/QueryText.kt` |
 | What extraction looks for | `memory/extract/Extraction.kt` (prompt and examples), `ExtractionRouter` (what may be written) |
 | When compaction runs | `MemoryBudget` (`compactionTrigger`, `compactionTarget`, `rollingSummaryCap`) |

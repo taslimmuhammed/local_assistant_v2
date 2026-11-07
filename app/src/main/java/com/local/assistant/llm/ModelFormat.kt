@@ -16,13 +16,13 @@ import java.nio.ByteOrder
  *
  * The check is the start of the layout [ModelPrecision] reads: "LITERTLM", then at 24 where the
  * header ends, which has to lie inside the file. Every model the app uses has it: Gemma 4 E4B,
- * EmbeddingGemma and Granite.
+ * EmbeddingGemma 2 and Granite.
  *
  * A LiteRT-LM file of the wrong kind is just as fatal: handed an embedding model as the chat
  * model, the runtime logs "Section not found" and aborts ("bad_optional_access was thrown in
- * -fno-exceptions mode"), in any build (emulator, 2026-09-30). The embedding model is offered on
- * this app's GitHub release, so importing it as the chat model is an easy mistake. [problem]
- * therefore also checks the file has the section its [Kind] runs on.
+ * -fno-exceptions mode"), in any build (emulator, 2026-09-30). An embedding model is an easy file
+ * to pick by mistake when importing the chat model. [problem] therefore also checks the file has
+ * the section its [Kind] runs on.
  */
 object ModelFormat {
 
@@ -31,7 +31,7 @@ object ModelFormat {
         /** Gemma 4 E4B's text decoder; embedding models have none. */
         CHAT("That's not a chat model: it can't write replies. Pick the Gemma model file.", "tf_lite_prefill_decode"),
 
-        /** EmbeddingGemma's and Granite's text encoder; chat models have none. */
+        /** An imported text embedder's encoder (Granite, say); chat models have none. */
         EMBEDDER("That's not a memory-search (embedding) model.", "tf_lite_text_encoder"),
 
         /** EmbeddingGemma 2's text and image encoders, for photo search; text-only embedders lack the second. */

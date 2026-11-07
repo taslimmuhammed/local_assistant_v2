@@ -19,7 +19,6 @@ coroutines = "1.11.0"
 kotlinxSerialization = "1.8.1"
 litertlm = "0.18.1"
 litert = "2.3.0"
-playAssetDelivery = "2.3.0"
 bundletool = "1.18.1"
 gson = "2.14.0"
 # Steps, heart rate and sleep, read from Android's own health store (health/HealthConnectSource).
@@ -59,7 +58,6 @@ okhttp = { group = "com.squareup.okhttp3", name = "okhttp", version.ref = "okhtt
 maplibre-android = { group = "org.maplibre.gl", name = "android-sdk", version.ref = "maplibre" }
 litertlm-android = { group = "com.google.ai.edge.litertlm", name = "litertlm-android", version.ref = "litertlm" }
 litert = { group = "com.google.ai.edge.litert", name = "litert", version.ref = "litert" }
-play-asset-delivery-ktx = { group = "com.google.android.play", name = "asset-delivery-ktx", version.ref = "playAssetDelivery" }
 bundletool = { group = "com.android.tools.build", name = "bundletool", version.ref = "bundletool" }
 gson = { group = "com.google.code.gson", name = "gson", version.ref = "gson" }
 androidx-health-connect = { group = "androidx.health.connect", name = "connect-client", version.ref = "healthConnect" }
@@ -72,7 +70,6 @@ androidx-test-ext-junit = { group = "androidx.test.ext", name = "junit", version
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }
-android-asset-pack = { id = "com.android.asset-pack", version.ref = "agp" }
 kotlin-android = { id = "org.jetbrains.kotlin.android", version.ref = "kotlin" }
 kotlin-compose = { id = "org.jetbrains.kotlin.plugin.compose", version.ref = "kotlin" }
 ksp = { id = "com.google.devtools.ksp", version.ref = "ksp" }

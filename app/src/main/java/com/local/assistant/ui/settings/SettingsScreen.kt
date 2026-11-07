@@ -941,11 +941,6 @@ private val PACK_NOTES = mapOf(
 private const val KEEP_READY_MEMORY = "1.8 GB"
 
 /** The system's text-to-speech page, where engines and voice data are installed. */
-/**
- * What the models are and the terms they come under. EmbeddingGemma is a Gemma model: shipping
- * it means passing on the Gemma Terms of Use and its Prohibited Use Policy, and saying it was
- * modified (converted). Gemma 4 E4B and Granite are Apache 2.0.
- */
 /** The models' and libraries' licences: the About page. */
 @Composable
 private fun LicenceEntries() {
@@ -966,14 +961,9 @@ private fun LicenceEntries() {
         listOf("Apache License 2.0" to "https://www.apache.org/licenses/LICENSE-2.0"),
     )
     Entry(
-        "EmbeddingGemma 300M (memory search)",
-        "Gemma is provided under and subject to the Gemma Terms of Use found at ai.google.dev/gemma/terms. " +
-            "This copy is modified: converted to LiteRT-LM format with 8-bit weights. " +
-            "Using it means agreeing not to use it for anything in the Gemma Prohibited Use Policy.",
-        listOf(
-            "Gemma Terms of Use" to "https://ai.google.dev/gemma/terms",
-            "Gemma Prohibited Use Policy" to "https://ai.google.dev/gemma/prohibited_use_policy",
-        ),
+        "EmbeddingGemma 2 (memory and photo search)",
+        "By Google, in LiteRT-LM format from litert-community. Apache License 2.0.",
+        listOf("Apache License 2.0" to "https://www.apache.org/licenses/LICENSE-2.0"),
     )
     Entry(
         "Granite Embedding 311M (if imported)",

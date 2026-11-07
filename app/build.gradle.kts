@@ -122,9 +122,6 @@ android {
         compose = true
     }
 
-    // EmbeddingGemma, fetched by Play right after install (see embedder_pack/README.md).
-    assetPacks += listOf(":embedder_pack")
-
     testOptions {
         unitTests.isReturnDefaultValues = true
     }
@@ -194,9 +191,6 @@ dependencies {
 
     // Session-end summaries and the nightly consolidation run as scheduled background work.
     implementation(libs.androidx.work.runtime.ktx)
-
-    // Where Play put the embedder pack, and asking for it when it hasn't arrived.
-    implementation(libs.play.asset.delivery.ktx)
 
     // On-device LLM runtime.
     implementation(libs.litertlm.android)

@@ -89,13 +89,13 @@ class GalleryIndex(
         }
     }
 
-    /** Stops indexing and gives the model's memory back; [start] carries on where it stopped. */
+    /** Stops indexing and gives the model's memory back (what memory search isn't using); [start] carries on where it stopped. */
     suspend fun pause() {
         synchronized(this) { job }?.let {
             it.cancel()
             it.join()
         }
-        embedder.unload()
+        embedder.release()
         faces?.close()
     }
 
@@ -105,7 +105,7 @@ class GalleryIndex(
             pass(deadline)
         } finally {
             _status.update { it.copy(running = false) }
-            embedder.unload()
+            embedder.release()
             faces?.close()
         }
     }
@@ -120,7 +120,7 @@ class GalleryIndex(
         // Photo search first, then which are documents (the model is still loaded), then where
         // they were taken (quick), then people.
         scoreDocuments()
-        embedder.unload()
+        embedder.release()
         if (!locatePending(deadline)) return false
         return faces?.indexPending(deadline, ::runWhenIdle) ?: true
     }
@@ -459,7 +459,7 @@ class GalleryIndex(
         idleUnload?.cancel()
         idleUnload = scope.launch {
             delay(IDLE_UNLOAD_MS)
-            if (synchronized(this@GalleryIndex) { job?.isActive } != true) embedder.unload()
+            if (synchronized(this@GalleryIndex) { job?.isActive } != true) embedder.release()
         }
     }
 

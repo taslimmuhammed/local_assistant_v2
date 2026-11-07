@@ -82,7 +82,7 @@ class EmbedderProbeTest {
         val spec = if (args.getString("embedder") != null) {
             EmbedderCatalog.forImport(File(path!!).name)
         } else {
-            EmbedderCatalog.byKey(settings.embedderKey) ?: EmbedderCatalog.DEFAULT
+            EmbedderCatalog.byKey(settings.embedderKey) ?: EmbedderCatalog.GRANITE
         }
         val embedder = LiteRtEmbedder({ InstalledEmbedder(File(path!!), spec) }, context.cacheDir)
         report("model ${spec.modelId} (${File(path!!).length() / 1_000_000} MB), prefixes q='${spec.queryPrefix}' d='${spec.documentPrefix}'")

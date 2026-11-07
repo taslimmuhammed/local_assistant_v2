@@ -43,7 +43,7 @@ class LiteRtEmbedder(
     override val modelId: String? get() = installed()?.spec?.modelId
 
     override val similarityThreshold: Float
-        get() = installed()?.spec?.similarityThreshold ?: EmbedderCatalog.DEFAULT.similarityThreshold
+        get() = installed()?.spec?.similarityThreshold ?: EmbedderCatalog.GRANITE.similarityThreshold
 
     override val isReady: Boolean get() = engine != null && loadedFrom == installed()
 
