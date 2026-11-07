@@ -353,3 +353,82 @@ class NoteEntity(
 @Fts4(contentEntity = NoteEntity::class, tokenizer = FtsOptions.TOKENIZER_UNICODE61)
 @Entity(tableName = "notes_fts")
 data class NoteFts(val title: String, val details: String)
+
+/** A note is free text; a list is items to tick off. Both are the user's notes. */
+enum class NoteKind { NOTE, LIST }
+
+/** One line of a list: "Eggs", ticked off once bought. */
+data class NoteItem(val text: String, val done: Boolean = false)
+
+/**
+ * A note or list the user keeps: "Shopping list", "Wifi details". Made and changed in chat (the
+ * edit_note tool) or on the Notes screen, and read back to the model when a message is about it.
+ *
+ * Not the `notes` table, which holds saved images. What recall searches is [UserNoteChunkEntity]:
+ * the note cut into parts and embedded, made again every time the note changes.
+ */
+@Entity(
+    tableName = "user_notes",
+    foreignKeys = [
+        ForeignKey(
+            entity = MessageEntity::class,
+            parentColumns = ["id"],
+            childColumns = ["sourceMessageId"],
+            onDelete = ForeignKey.SET_NULL,
+        ),
+    ],
+    indices = [Index("sourceMessageId"), Index("updatedAt")],
+)
+data class UserNoteEntity(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val title: String,
+    val kind: NoteKind,
+    /** A note's text; empty for a list. */
+    val body: String = "",
+    /** A list's items, in order; empty for a note. Kept as JSON (see `Converters`). */
+    val items: List<NoteItem> = emptyList(),
+    /** Shown first, on the Notes screen and to the model. */
+    val pinned: Boolean = false,
+    /** The message that asked for it; null for one made on the Notes screen, or once that chat is deleted. */
+    val sourceMessageId: Long? = null,
+    val createdAt: Long,
+    val updatedAt: Long,
+)
+
+/**
+ * A part of a note as recall searches it: the note's title, then a few of its items or lines.
+ * A note's parts are made again whenever it changes ([com.local.assistant.memory.notes.NoteChunks]);
+ * a part whose words didn't change keeps its vector.
+ */
+@Entity(
+    tableName = "user_note_chunks",
+    foreignKeys = [
+        ForeignKey(
+            entity = UserNoteEntity::class,
+            parentColumns = ["id"],
+            childColumns = ["noteId"],
+            onDelete = ForeignKey.CASCADE,
+        ),
+    ],
+    indices = [Index("noteId"), Index("modelId")],
+)
+class UserNoteChunkEntity(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val noteId: Long,
+    /** Its place in the note, from 0. */
+    val ordinal: Int,
+    /** The note's title, then this part of it: what is searched and embedded. */
+    val text: String,
+    /** Which part: a list's items [from, to), or a note's characters [from, to). */
+    val fromIndex: Int,
+    val toIndex: Int,
+    /** int8, like the archive's (see `Int8Vectors`); null until embedded. */
+    @ColumnInfo(typeAffinity = ColumnInfo.BLOB)
+    val embedding: ByteArray? = null,
+    val modelId: String? = null,
+)
+
+/** Keyword index over the parts of notes, kept in sync by Room's triggers. */
+@Fts4(contentEntity = UserNoteChunkEntity::class, tokenizer = FtsOptions.TOKENIZER_UNICODE61)
+@Entity(tableName = "user_note_chunks_fts")
+data class UserNoteChunkFts(val text: String)

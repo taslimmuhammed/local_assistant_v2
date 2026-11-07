@@ -99,8 +99,25 @@ class MigrationTest {
             db.execSQL("INSERT INTO chats (id, title, createdAt, updatedAt) VALUES (1, 'Old', 1, 2)")
             db.execSQL("INSERT INTO messages (chatId, role, text, createdAt, incomplete) VALUES (1, 'USER', 'hello', 1, 0)")
         }
-        helper.runMigrationsAndValidate(8, AppDatabase.MIGRATIONS.toList()).use { db ->
+        helper.runMigrationsAndValidate(9, AppDatabase.MIGRATIONS.toList()).use { db ->
             assertEquals(1L, db.long("SELECT COUNT(*) FROM messages WHERE sessionId IS NOT NULL AND tokenEst > 0 AND offRecord = 0"))
+        }
+    }
+
+    @Test
+    fun version8GainsNotesWithTheirKeywordIndex() {
+        helper.createDatabase(8).use { db ->
+            db.execSQL("INSERT INTO tasks (id, title, dueAt, status, createdAt, updatedAt) VALUES (1, 'Call the CA', 100, 'OPEN', 1, 2)")
+        }
+        helper.runMigrationsAndValidate(9, AppDatabase.MIGRATIONS.toList()).use { db ->
+            assertEquals(1L, db.long("SELECT COUNT(*) FROM tasks WHERE id = 1"))
+            db.execSQL("INSERT INTO user_notes (id, title, kind, body, items, pinned, createdAt, updatedAt) VALUES (1, 'Shopping list', 'LIST', '', '[]', 0, 1, 1)")
+            db.execSQL("INSERT INTO user_note_chunks (noteId, ordinal, text, fromIndex, toIndex) VALUES (1, 0, 'Shopping list: Eggs, Milk', 0, 2)")
+            // Found by its words through the triggers Room expects, and gone with its note.
+            assertEquals(1L, db.long("SELECT COUNT(*) FROM user_note_chunks_fts WHERE user_note_chunks_fts MATCH 'eggs'"))
+            db.execSQL("PRAGMA foreign_keys = ON")
+            db.execSQL("DELETE FROM user_notes WHERE id = 1")
+            assertEquals(0L, db.long("SELECT COUNT(*) FROM user_note_chunks"))
         }
     }
 

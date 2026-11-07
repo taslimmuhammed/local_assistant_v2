@@ -34,8 +34,10 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.unit.dp
 import com.local.assistant.memory.db.TaskEntity
+import com.local.assistant.memory.db.UserNoteEntity
 import com.local.assistant.memory.tools.MemoryChip
 import com.local.assistant.ui.memory.PlacePreview
+import com.local.assistant.ui.notes.NotePreview
 import com.local.assistant.ui.theme.AppColors
 import com.local.assistant.ui.theme.Glass
 import com.local.assistant.ui.theme.glass
@@ -55,6 +57,9 @@ import java.util.Locale
  * A place reminder still open is shown as it is now, on a small map; a tap opens it to move its
  * pin, resize its circle, rename or delete it, as on the Reminders screen (the user asked for the
  * map in the reply, 5 Nov 2026).
+ *
+ * A note or list the reply made or changed is shown the same way, as it is now, with its items to
+ * tick off: under the latest reply about it only.
  */
 @Composable
 fun MemoryChips(
@@ -68,6 +73,14 @@ fun MemoryChips(
     placeReminders: Map<Long, TaskEntity> = emptyMap(),
     /** Opens a place reminder's editor from its map; null where there is no map (the overlay). */
     onOpenReminder: ((TaskEntity) -> Unit)? = null,
+    /** The user's notes as they are now, by id. */
+    notes: Map<Long, UserNoteEntity> = emptyMap(),
+    /** The chips (by record id) under which their note is shown: each note's latest. */
+    notePreviews: Set<Long> = emptySet(),
+    /** Opens a note on the Notes screen; null where notes aren't shown (the overlay). */
+    onOpenNote: ((UserNoteEntity) -> Unit)? = null,
+    /** Ticks or unticks a list's item: the note's id and the item's place in it. */
+    onToggleNoteItem: (Long, Int) -> Unit = { _, _ -> },
 ) {
     if (chips.isEmpty()) return
     var editing by remember { mutableStateOf<ChatViewModel.ChipItem?>(null) }
@@ -103,6 +116,15 @@ fun MemoryChips(
                     modifier = Modifier.widthIn(max = 260.dp),
                     action = "Edit",
                     actionIcon = Icons.Outlined.Edit,
+                )
+            }
+            val note = item.chip.noteId?.takeIf { onOpenNote != null && item.recordId in notePreviews }?.let(notes::get)
+            if (note != null && onOpenNote != null) {
+                NotePreview(
+                    note,
+                    onOpen = { onOpenNote(note) },
+                    onToggle = { index -> onToggleNoteItem(note.id, index) },
+                    modifier = Modifier.widthIn(max = 260.dp),
                 )
             }
         }

@@ -23,6 +23,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Add
+import androidx.compose.material.icons.outlined.Checklist
 import androidx.compose.material.icons.outlined.ChatBubbleOutline
 import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material.icons.outlined.DeleteOutline
@@ -71,7 +72,7 @@ import java.util.Locale
 /**
  * The chat history, on a sheet of glass: the app's mark and a count, a dark "New chat" button,
  * the chats under Today, Yesterday and further back with when each was last used, and the rest
- * of the app (photos, reminders, memory, settings) as four tiles at the foot.
+ * of the app (photos, notes, reminders, memory, settings) as tiles in two rows at the foot.
  */
 @Composable
 fun ChatDrawer(
@@ -85,6 +86,7 @@ fun ChatDrawer(
     onOpenReminders: () -> Unit,
     onOpenPhotos: () -> Unit,
     onOpenSettings: () -> Unit,
+    onOpenNotes: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     // A chat and its messages can't be brought back, so a tap on the bin asks first.
@@ -194,15 +196,22 @@ fun ChatDrawer(
             }
         }
 
-        Row(
+        // Two rows: five tiles in one cut "Reminders" and "About you" short on the phone (its text
+        // is set large). What the user keeps on top, what's about them and the app below.
+        Column(
             Modifier.fillMaxWidth().padding(start = 12.dp, end = 12.dp, top = 6.dp, bottom = 12.dp),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            DockTile(Icons.Outlined.PhotoLibrary, "Photos", Glass.Ink[0], onOpenPhotos, Modifier.weight(1f))
-            DockTile(Icons.Outlined.NotificationsActive, "Reminders", Glass.Ink[3], onOpenReminders, Modifier.weight(1f))
-            // A brain: what the assistant knows about the user.
-            DockTile(Icons.Outlined.Psychology, "About you", Glass.Ink[1], onOpenMemory, Modifier.weight(1f))
-            DockTile(Icons.Outlined.Settings, "Settings", Glass.Ink[4], onOpenSettings, Modifier.weight(1f))
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                DockTile(Icons.Outlined.PhotoLibrary, "Photos", Glass.Ink[0], onOpenPhotos, Modifier.weight(1f))
+                DockTile(Icons.Outlined.Checklist, "Notes", Glass.Ink[2], onOpenNotes, Modifier.weight(1f))
+                DockTile(Icons.Outlined.NotificationsActive, "Reminders", Glass.Ink[3], onOpenReminders, Modifier.weight(1f))
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                // A brain: what the assistant knows about the user.
+                DockTile(Icons.Outlined.Psychology, "About you", Glass.Ink[1], onOpenMemory, Modifier.weight(1f))
+                DockTile(Icons.Outlined.Settings, "Settings", Glass.Ink[4], onOpenSettings, Modifier.weight(1f))
+            }
         }
     }
 }
@@ -285,7 +294,7 @@ private fun ChatRow(
     }
 }
 
-/** One of the three ways on from the drawer: a tile of glass with a tinted icon. */
+/** One of the ways on from the drawer: a tile of glass with a tinted icon. */
 @Composable
 private fun DockTile(icon: ImageVector, label: String, accent: Color, onClick: () -> Unit, modifier: Modifier = Modifier) {
     Column(

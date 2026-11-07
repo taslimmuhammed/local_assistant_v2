@@ -1132,7 +1132,7 @@ private fun MemorySettings(viewModel: MemoryViewModel) {
         AlertDialog(
             onDismissRequest = { forgetStep = 0 },
             title = { Text("Forget everything?") },
-            text = { Text("Every fact, reminder and event, every saved image, the search index of past conversations and all summaries are deleted. Your chats stay, but nothing is learned from them again.") },
+            text = { Text("Every fact, reminder and event, every saved image, the search index of past conversations and all summaries are deleted. Your chats and notes stay, but nothing is learned from the chats again.") },
             confirmButton = { TextButton(onClick = { forgetStep = 2 }) { Text("Continue", color = AppColors.Danger) } },
             dismissButton = { TextButton(onClick = { forgetStep = 0 }) { Text("Cancel") } },
         )

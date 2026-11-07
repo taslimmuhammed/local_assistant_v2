@@ -43,9 +43,11 @@ import com.local.assistant.device.PermissionBroker
 import com.local.assistant.memory.MemoryControls
 import com.local.assistant.memory.notes.ImageDescriber
 import com.local.assistant.memory.notes.SavedImages
+import com.local.assistant.memory.notes.UserNotes
 import com.local.assistant.memory.db.ArchiveRepository
 import com.local.assistant.memory.db.MemoryRepository
 import com.local.assistant.memory.db.NoteEntity
+import com.local.assistant.memory.db.NoteKind
 import com.local.assistant.memory.db.SessionTracker
 import com.local.assistant.memory.embed.EmbedderCatalog
 import com.local.assistant.memory.embed.BundledEmbedder
@@ -61,6 +63,7 @@ import com.local.assistant.memory.tools.ArchiveSearch
 import com.local.assistant.memory.prompt.ConversationManager
 import com.local.assistant.memory.prompt.MeasuredTokenEstimator
 import com.local.assistant.memory.prompt.MemoryBudget
+import com.local.assistant.memory.prompt.NoteTitle
 import com.local.assistant.memory.prompt.TurnRunner
 import com.local.assistant.memory.tools.ChatToolLog
 import com.local.assistant.memory.tools.DeviceTools
@@ -214,11 +217,15 @@ class AppContainer(context: Context) {
     /** Images the user asked to have remembered, kept outside their chats. */
     val savedImages: SavedImages = SavedImages(context.filesDir, database.noteDao(), chatRepository)
 
+    /** The user's notes and lists, and the parts of them recall searches. */
+    val userNotes: UserNotes = UserNotes(database.userNoteDao(), transaction = { block -> memoryRepository.transaction(block) })
+
     private val retriever = Retriever(
         facts = memoryRepository,
         archive = archive,
         embedder = embedder,
         notes = savedImages,
+        userNotes = userNotes,
         // Similarities in debug builds, to calibrate the threshold on real pairs.
         logScores = (context.applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE) != 0,
     )
@@ -323,6 +330,7 @@ class AppContainer(context: Context) {
         summarizer = summarizer,
         // A background summary or extraction closed it: make it ready again.
         onModelFreed = { if (settings.keepAssistantReady && !appForeground.isForeground) prepareForNextAsk(AFTER_MODEL_WORK_MS) },
+        noteIndex = { userNotes.all().map { NoteTitle(it.id, it.title, it.kind == NoteKind.LIST) } },
     )
 
     val embeddingQueue: EmbeddingQueue = EmbeddingQueue(
@@ -333,7 +341,17 @@ class AppContainer(context: Context) {
         inForeground = { appForeground.isForeground },
         unloadWhenDrained = totalMemoryBytes(context) <= SMALL_DEVICE_BYTES,
         notes = database.noteDao(),
+        userNotes = database.userNoteDao(),
     )
+
+    /**
+     * A note changed on the Notes screen: its new parts need vectors, and a new name or a new note
+     * changes the prefix, rebuilt once the chat is idle.
+     */
+    fun notesChanged() {
+        embeddingQueue.kick()
+        conversations.prefixMayHaveChanged()
+    }
 
     /** Geofences for place reminders: Play Services' where there are, else Android's own. */
     val placeFences = PlaceFences.forPhone(context)
@@ -443,10 +461,20 @@ class AppContainer(context: Context) {
         log = ChatToolLog(chatRepository),
         now = ZonedDateTime::now,
         archive = ArchiveSearch { query, limit ->
+            // Their own notes first, as they are now: an older conversation about a list is out of date once it changes.
+            val notes = retriever.searchNotes(query, limit).map { note ->
+                val kind = if (note.kind == NoteKind.LIST) "list" else "note"
+                val content = if (note.kind == NoteKind.LIST) {
+                    note.items.joinToString("; ") { if (it.done) "${it.text} (ticked)" else it.text }.ifEmpty { "empty" }
+                } else {
+                    note.body.ifBlank { "empty" }
+                }
+                Snippet("The user's $kind “${note.title}” ($kind ${note.id}), as it is now: $content", note.updatedAt)
+            }
             val images = retriever.searchImages(query, limit).map {
                 Snippet("Saved image “${it.title}”: ${it.details} (the user can ask about it and you will see it again)", it.createdAt)
             }
-            (images + retriever.search(query, limit).map { Snippet(it.chunk.text, it.chunk.createdAt) }).take(limit)
+            (notes + images + retriever.search(query, limit).map { Snippet(it.chunk.text, it.chunk.createdAt) }).take(limit)
         },
         memoryPaused = { settings.memoryPaused },
         images = savedImages,
@@ -470,6 +498,7 @@ class AppContainer(context: Context) {
         ),
         health = healthTools,
         places = placeFinder,
+        notes = userNotes,
     )
 
     private val toolLoop = ToolLoop(

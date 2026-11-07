@@ -333,3 +333,16 @@ class FakeOwnPlaces : OwnPlaces {
         kept[key] = address to spot
     }
 }
+
+/** The user's notes in a map, newest change first as the real store lists them. */
+class FakeNoteStore : com.local.assistant.memory.notes.NoteStore {
+    val notes = linkedMapOf<Long, com.local.assistant.memory.db.UserNoteEntity>()
+    private var nextId = 1L
+
+    override suspend fun all() = notes.values.sortedWith(compareByDescending<com.local.assistant.memory.db.UserNoteEntity> { it.pinned }.thenByDescending { it.updatedAt })
+    override suspend fun note(id: Long) = notes[id]
+    override suspend fun insert(note: com.local.assistant.memory.db.UserNoteEntity): Long = nextId++.also { notes[it] = note.copy(id = it) }
+    override suspend fun update(note: com.local.assistant.memory.db.UserNoteEntity) { notes[note.id] = note }
+    override suspend fun delete(id: Long) { notes.remove(id) }
+    override suspend fun restore(note: com.local.assistant.memory.db.UserNoteEntity) { notes[note.id] = note }
+}

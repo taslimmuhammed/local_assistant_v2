@@ -20,8 +20,13 @@ import com.local.assistant.memory.db.PlaceDistance
 import com.local.assistant.memory.db.TaskPlace
 import com.local.assistant.memory.db.TaskStatus
 import com.local.assistant.reminders.PlaceAlerts
+import com.local.assistant.memory.db.NoteKind
+import com.local.assistant.memory.db.UserNoteEntity
 import com.local.assistant.memory.notes.FoundImage
 import com.local.assistant.memory.notes.ImageNotes
+import com.local.assistant.memory.notes.NoteEdits
+import com.local.assistant.memory.notes.NoteMatch
+import com.local.assistant.memory.notes.NoteStore
 import com.local.assistant.voice.SpokenCommands
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -76,6 +81,8 @@ class ToolExecutor(
     private val health: com.local.assistant.health.HealthTools? = null,
     /** Where place reminders ring ("near DMart"); none when not wired in. */
     private val places: PlaceFinder? = null,
+    /** The user's notes and lists, for edit_note; none when not wired in. */
+    private val notes: NoteStore = NoNotes,
 ) {
 
     data class Outcome(
@@ -195,6 +202,8 @@ class ToolExecutor(
             when {
                 value !is String -> value
                 call.name == ToolCatalog.CALCULATE && key == "expression" -> NumberGrounding.groundExpression(value, userText)
+                // "list 3" is the id from "Notes and lists:", not a number the user said.
+                call.name == ToolCatalog.EDIT_NOTE && key == "note" -> value
                 // Who to call or message: a name spelled as the user spelled it.
                 call.name == ToolCatalog.CALL && key == "who" || call.name == ToolCatalog.SEND_MESSAGE && key == "to" ->
                     ContactMatcher.asSaid(NumberGrounding.ground(value, userText), userText)
@@ -264,6 +273,8 @@ class ToolExecutor(
             } else {
                 rememberImage(args, context)
             }
+            // Not stopped by a pause: like a reminder, a note is something the user asked to have kept.
+            ToolCatalog.EDIT_NOTE -> editNote(args, context)
             else -> throw ToolError("There is no tool called ${call.name}.")
         }
     }
@@ -706,6 +717,184 @@ class ToolExecutor(
         )
     }
 
+    // ---- Notes and lists ----
+
+    /**
+     * Makes, changes, reads or deletes one of the user's notes. Which one is matched from [Args]'
+     * note by id or name ([NoteMatch]); a name nothing matches makes a new one, but only for a call
+     * that puts something in it: "remove eggs from the party list" with no party list is refused,
+     * with the names there are. Called with nothing to change, it reads the note back.
+     */
+    private suspend fun editNote(args: Args, context: ToolContext): Applied {
+        val reference = args.required("note")
+        val request = NoteEdits.Request(
+            add = args.text("add"),
+            remove = args.text("remove"),
+            check = args.text("check"),
+            uncheck = args.text("uncheck"),
+            text = args.text("text"),
+            title = args.text("title"),
+        )
+        val delete = args.bool("delete") == true
+        val all = notes.all()
+        if ((request.changes || delete) && NoteEdits.onlyAsks(context.userText)) return answerOnly(all, reference)
+        val creating = !delete && (request.add != null || request.text != null)
+        val note = when (val found = NoteMatch.find(all, reference, loose = !creating)) {
+            is NoteMatch.Found.One -> found.note
+            is NoteMatch.Found.Many -> throw ToolError("More than one note fits '$reference': ${listing(found.notes)}. Ask which one.")
+            NoteMatch.Found.None -> if (creating) {
+                return createNote(reference, request, context)
+            } else {
+                throw ToolError("There's no note called '$reference'. " + notesThere(all) + " Nothing was changed. Ask which one they mean.")
+            }
+        }
+        if (delete) {
+            notes.delete(note.id)
+            return Applied(
+                result = ok("deleted" to "${kindWord(note)} ${note.title}"),
+                chip = MemoryChip(MemoryChip.Kind.NOTE, "Deleted", note.title),
+                undo = UndoToken(previousUserNote = note),
+                changedPrefix = true,
+            )
+        }
+        if (!request.changes) return Applied(read(note), chip = MemoryChip(MemoryChip.Kind.NOTE, kindLabel(note), note.title, noteId = note.id))
+
+        val outcome = try {
+            NoteEdits.apply(note, request, nowMs())
+        } catch (e: NoteEdits.Refused) {
+            throw ToolError(e.message.orEmpty())
+        }
+        val written = outcome.note
+        if (outcome.changed) notes.update(written)
+        val open = written.items.count { !it.done }
+        return Applied(
+            result = ok(
+                "id" to note.id,
+                // "note" is the hint below, as in every tool's result: a note's name goes as its title.
+                (if (note.kind == NoteKind.LIST) "list" else "title") to written.title,
+                "renamed_from" to note.title.takeIf { outcome.renamed },
+                "added" to outcome.added.takeIf { it.isNotEmpty() && note.kind == NoteKind.LIST },
+                "already_on_it" to outcome.already.takeIf { it.isNotEmpty() },
+                "back_on_it" to outcome.reopened.takeIf { it.isNotEmpty() },
+                "removed" to outcome.removed.takeIf { it.isNotEmpty() },
+                "ticked" to outcome.checked.takeIf { it.isNotEmpty() },
+                "unticked" to outcome.unchecked.takeIf { it.isNotEmpty() },
+                "rewritten" to outcome.rewritten.takeIf { it },
+                "not_found" to outcome.notFound.takeIf { it.isNotEmpty() },
+                "items" to (if (note.kind == NoteKind.LIST) "$open to do, ${written.items.size - open} ticked" else null),
+                "note" to outcome.notFound.takeIf { it.isNotEmpty() }?.let {
+                    "Not on it, so left alone: ${it.joinToString(", ")}. Tell the user." +
+                        if (note.kind == NoteKind.LIST && written.items.isNotEmpty()) " On it: " + written.items.take(MAX_LISTED * 2).joinToString(", ") { item -> item.text } else ""
+                },
+            ),
+            chip = MemoryChip(
+                kind = MemoryChip.Kind.NOTE,
+                label = changeLabel(outcome, note),
+                detail = written.title,
+                note = changeNote(outcome),
+                noteId = note.id,
+            ),
+            undo = UndoToken(previousUserNote = note, writtenUserNote = written).takeIf { outcome.changed },
+            changedPrefix = outcome.renamed,
+        )
+    }
+
+    /** A change called for on a message that only asks about a note: the note read back, nothing changed. */
+    private fun answerOnly(all: List<UserNoteEntity>, reference: String): Applied =
+        when (val found = NoteMatch.find(all, reference, loose = true)) {
+            is NoteMatch.Found.One -> Applied(
+                read(found.note) + ("note" to "They only asked, so nothing was changed. Answer their question from this."),
+                chip = MemoryChip(MemoryChip.Kind.NOTE, kindLabel(found.note), found.note.title, noteId = found.note.id),
+            )
+            is NoteMatch.Found.Many -> throw ToolError("More than one note fits '$reference': ${listing(found.notes)}. Nothing was changed. Ask which one they mean.")
+            NoteMatch.Found.None -> throw ToolError("There's no note called '$reference'. " + notesThere(all) + " Nothing was made: they only asked. Tell them.")
+        }
+
+    /** A new note or list named [reference] (or the title given), holding what [request] adds. */
+    private suspend fun createNote(reference: String, request: NoteEdits.Request, context: ToolContext): Applied {
+        val named = request.title ?: reference
+        val kind = NoteEdits.kindFor(named, request.add, request.text)
+        // "Make a list: milk, eggs" names nothing: a list is "List", a note its first words.
+        val title = NoteEdits.tidyTitle(named).takeIf { NoteMatch.keys(it).isNotEmpty() }
+            ?: if (kind == NoteKind.LIST) "List" else NoteEdits.tidyTitle((request.text ?: request.add).orEmpty().split(' ').take(UNTITLED_WORDS).joinToString(" ")).ifEmpty { "Note" }
+        val nowMs = nowMs()
+        val blank = UserNoteEntity(title = title, kind = kind, sourceMessageId = context.userMessageId, createdAt = nowMs, updatedAt = nowMs)
+        val filled = try {
+            NoteEdits.apply(blank, request.copy(title = null, remove = null, check = null, uncheck = null), nowMs).note
+        } catch (e: NoteEdits.Refused) {
+            throw ToolError(e.message.orEmpty())
+        }
+        val id = notes.insert(filled)
+        val note = filled.copy(id = id)
+        return Applied(
+            result = ok(
+                "id" to id,
+                "created" to "${kindWord(note)} ${note.title}",
+                "items" to note.items.size.takeIf { kind == NoteKind.LIST },
+                "note" to "It is in their Notes and shown under your reply, where they can tick and edit it.",
+            ),
+            chip = MemoryChip(
+                kind = MemoryChip.Kind.NOTE,
+                label = if (kind == NoteKind.LIST) "New list" else "New note",
+                detail = note.title,
+                noteId = id,
+            ),
+            undo = UndoToken(createdUserNoteId = id, writtenUserNote = note),
+            changedPrefix = true,
+        )
+    }
+
+    /** A note as the model reads it back: a list's items, ticked ones marked, or a note's text. */
+    private fun read(note: UserNoteEntity): Map<String, Any?> = when (note.kind) {
+        NoteKind.LIST -> ok(
+            "id" to note.id,
+            "list" to note.title,
+            "items" to note.items.take(MAX_NOTE_ITEMS).map { if (it.done) "${it.text} (ticked)" else it.text },
+            "more" to (note.items.size - MAX_NOTE_ITEMS).takeIf { it > 0 },
+            "empty" to note.items.isEmpty().takeIf { it },
+        )
+        // Its name as "title": "note" is a result's hint.
+        NoteKind.NOTE -> ok("id" to note.id, "title" to note.title, "text" to note.body.take(MAX_NOTE_CHARS_READ).ifEmpty { "(empty)" })
+    }
+
+    private fun kindWord(note: UserNoteEntity) = if (note.kind == NoteKind.LIST) "list" else "note"
+
+    private fun kindLabel(note: UserNoteEntity) = if (note.kind == NoteKind.LIST) "List" else "Note"
+
+    /** "Shopping list (note 3); Goa packing (note 4)", as the model can name them back. */
+    private fun listing(found: List<UserNoteEntity>): String =
+        found.take(MAX_LISTED).joinToString("; ") { "${it.title} (note ${it.id})" }
+
+    private fun notesThere(all: List<UserNoteEntity>): String =
+        if (all.isEmpty()) "The user has no notes yet." else "Their notes: ${listing(all)}."
+
+    /** "Added", "Ticked", "Removed"…; "Changed" for more than one kind of change. */
+    private fun changeLabel(outcome: NoteEdits.Outcome, note: UserNoteEntity): String {
+        val kinds = listOfNotNull(
+            "Added".takeIf { outcome.added.isNotEmpty() || outcome.reopened.isNotEmpty() },
+            "Removed".takeIf { outcome.removed.isNotEmpty() },
+            "Ticked".takeIf { outcome.checked.isNotEmpty() },
+            "Unticked".takeIf { outcome.unchecked.isNotEmpty() },
+            "Rewritten".takeIf { outcome.rewritten },
+            "Renamed".takeIf { outcome.renamed },
+        )
+        return when (kinds.size) {
+            0 -> kindLabel(note)
+            1 -> kinds.single()
+            else -> "Changed"
+        }
+    }
+
+    /** What changed, item by item: "Eggs, Butter"; "Not on it: Jam". */
+    private fun changeNote(outcome: NoteEdits.Outcome): String? {
+        val items = (outcome.added + outcome.reopened + outcome.removed + outcome.checked + outcome.unchecked)
+            .takeIf { it.isNotEmpty() && !outcome.rewritten }
+            ?.joinToString(", ")
+            ?.let { if (it.length > MAX_CHIP_NOTE) it.take(MAX_CHIP_NOTE).substringBeforeLast(", ") + "…" else it }
+        val missing = outcome.notFound.takeIf { it.isNotEmpty() }?.let { "Not on it: " + it.joinToString(", ") }
+        return listOfNotNull(items, missing).joinToString(" · ").ifEmpty { null }
+    }
+
     private suspend fun forget(args: Args): Applied {
         val subject = args.required("subject")
         val attribute = args.text("attribute")
@@ -862,6 +1051,24 @@ class ToolExecutor(
                     images.delete(token.createdNoteId)
                     true
                 }
+                // A note changed since (an item ticked on the Notes screen) is left as it is.
+                token.createdUserNoteId != null -> {
+                    val current = notes.note(token.createdUserNoteId)
+                    when {
+                        current == null -> true
+                        current == token.writtenUserNote || token.writtenUserNote == null -> {
+                            notes.delete(token.createdUserNoteId)
+                            true
+                        }
+                        else -> false
+                    }
+                }
+                token.previousUserNote != null -> {
+                    val current = notes.note(token.previousUserNote.id)
+                    val unchanged = if (token.writtenUserNote == null) current == null else current == token.writtenUserNote
+                    if (unchanged) notes.restore(token.previousUserNote)
+                    unchanged
+                }
                 else -> false
             }
             if (done) log.update(recordId, record.copy(undone = true))
@@ -1007,6 +1214,14 @@ class ToolExecutor(
         private const val MAX_DETAILS = 4_000
         private const val MAX_NOTES = 3
         private const val MAX_NOTE_CHARS = 360
+
+        /** A list read back to the model: its first items, then how many more. */
+        private const val MAX_NOTE_ITEMS = 40
+        private const val MAX_NOTE_CHARS_READ = 1_500
+        private const val MAX_CHIP_NOTE = 80
+
+        /** A note made with no name is named for its first few words. */
+        private const val UNTITLED_WORDS = 5
         private val NOTE_DATE = DateTimeFormatter.ofPattern("d MMM yyyy", Locale.ENGLISH)
 
         private val gson = Gson()
@@ -1029,6 +1244,16 @@ private object NoImageNotes : ImageNotes {
     override suspend fun findImage(chatId: Long, upToMessageId: Long): FoundImage? = null
     override suspend fun save(title: String, details: String, image: FoundImage): Long = error("no image store")
     override suspend fun delete(noteId: Long) = Unit
+}
+
+/** No notes: edit_note finds none, and can't make one. */
+private object NoNotes : NoteStore {
+    override suspend fun all(): List<UserNoteEntity> = emptyList()
+    override suspend fun note(id: Long): UserNoteEntity? = null
+    override suspend fun insert(note: UserNoteEntity): Long = throw ToolError("Notes aren't available in this app.")
+    override suspend fun update(note: UserNoteEntity) = Unit
+    override suspend fun delete(id: Long) = Unit
+    override suspend fun restore(note: UserNoteEntity) = Unit
 }
 
 /** A call the app cannot carry out, told to the model so it can ask the user. */

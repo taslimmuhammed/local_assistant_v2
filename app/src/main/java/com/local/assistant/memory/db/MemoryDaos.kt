@@ -455,3 +455,54 @@ interface NoteDao {
     @Query("DELETE FROM notes")
     suspend fun deleteAll()
 }
+
+@Dao
+interface UserNoteDao {
+
+    @Insert
+    suspend fun insert(note: UserNoteEntity): Long
+
+    @Update
+    suspend fun update(note: UserNoteEntity)
+
+    @Query("SELECT * FROM user_notes WHERE id = :id")
+    suspend fun byId(id: Long): UserNoteEntity?
+
+    @Query("SELECT * FROM user_notes WHERE id IN (:ids)")
+    suspend fun byIds(ids: Collection<Long>): List<UserNoteEntity>
+
+    /** Pinned first, then the latest changed. */
+    @Query("SELECT * FROM user_notes ORDER BY pinned DESC, updatedAt DESC")
+    suspend fun all(): List<UserNoteEntity>
+
+    @Query("SELECT * FROM user_notes ORDER BY pinned DESC, updatedAt DESC")
+    fun observe(): Flow<List<UserNoteEntity>>
+
+    @Query("DELETE FROM user_notes WHERE id = :id")
+    suspend fun delete(id: Long)
+
+    // Its parts, as recall searches them.
+
+    @Insert
+    suspend fun insertChunks(chunks: List<UserNoteChunkEntity>)
+
+    @Query("SELECT * FROM user_note_chunks WHERE noteId = :noteId ORDER BY ordinal")
+    suspend fun chunksOf(noteId: Long): List<UserNoteChunkEntity>
+
+    @Query("DELETE FROM user_note_chunks WHERE noteId = :noteId")
+    suspend fun deleteChunks(noteId: Long)
+
+    /** Parts matching an FTS4 query. */
+    @Query("SELECT user_note_chunks.* FROM user_note_chunks JOIN user_note_chunks_fts ON user_note_chunks.id = user_note_chunks_fts.rowid WHERE user_note_chunks_fts MATCH :match")
+    suspend fun chunksMatching(match: String): List<UserNoteChunkEntity>
+
+    @Query("SELECT * FROM user_note_chunks WHERE modelId = :modelId AND embedding IS NOT NULL")
+    suspend fun embeddedChunks(modelId: String): List<UserNoteChunkEntity>
+
+    /** Parts not yet embedded by [modelId], nor tried and failed with it. */
+    @Query("SELECT * FROM user_note_chunks WHERE modelId IS NULL OR (modelId != :modelId AND modelId != '!' || :modelId) ORDER BY id LIMIT :limit")
+    suspend fun unembeddedChunks(modelId: String, limit: Int): List<UserNoteChunkEntity>
+
+    @Query("UPDATE user_note_chunks SET embedding = :embedding, modelId = :modelId WHERE id = :id")
+    suspend fun setChunkEmbedding(id: Long, embedding: ByteArray?, modelId: String?)
+}

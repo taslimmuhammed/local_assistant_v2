@@ -135,6 +135,8 @@ import com.local.assistant.ui.memory.ReminderEditor
 import com.local.assistant.ui.memory.MemoryViewModel
 import com.local.assistant.ui.memory.ConfirmDelete
 import com.local.assistant.memory.db.TaskEntity
+import com.local.assistant.memory.db.UserNoteEntity
+import com.local.assistant.ui.notes.NotesViewModel
 
 @Composable
 fun ChatScreen(
@@ -150,6 +152,11 @@ fun ChatScreen(
     userName: String? = null,
     /** Reminders as the Reminders screen has them: a place reminder's map in a reply opens its editor here. */
     reminders: MemoryViewModel? = null,
+    /** The user's notes: the Notes tile, and a note or list shown under the reply that changed it. */
+    notes: NotesViewModel? = null,
+    onOpenNotes: () -> Unit = {},
+    /** Opens one note on the Notes screen. */
+    onOpenNote: (UserNoteEntity) -> Unit = {},
 ) {
     val chats by viewModel.chats.collectAsStateWithLifecycle()
     val activeChatId by viewModel.activeChatId.collectAsStateWithLifecycle()
@@ -179,6 +186,17 @@ fun ChatScreen(
     var editingReminder by remember { mutableStateOf<TaskEntity?>(null) }
     var deletingReminder by remember { mutableStateOf<TaskEntity?>(null) }
     val openReminder: ((TaskEntity) -> Unit)? = reminders?.let { { task -> editingReminder = task } }
+    val notesById = notes?.let { vm ->
+        val all by vm.all.collectAsStateWithLifecycle()
+        remember(all) { all.associateBy { it.id } }
+    }.orEmpty()
+    // Each note under the latest reply that made or changed it, not under every one.
+    val notePreviews = remember(chips) {
+        chips.values.flatten().filter { it.chip.noteId != null && !it.undone }
+            .groupBy { it.chip.noteId }.values.mapTo(HashSet()) { items -> items.maxOf { it.recordId } }
+    }
+    val openNote: ((UserNoteEntity) -> Unit)? = notes?.let { { note -> onOpenNote(note) } }
+    val toggleNoteItem: (Long, Int) -> Unit = { id, index -> notes?.toggle(id, index) }
 
     val drawerState = rememberDrawerState(DrawerValue.Closed)
     val scope = rememberCoroutineScope()
@@ -302,6 +320,10 @@ fun ChatScreen(
                         scope.launch { drawerState.close() }
                         onOpenSettings()
                     },
+                    onOpenNotes = {
+                        scope.launch { drawerState.close() }
+                        onOpenNotes()
+                    },
                 )
             }
         },
@@ -376,6 +398,10 @@ fun ChatScreen(
                                         onOpenLink = openLink,
                                         placeReminders = placeReminders,
                                         onOpenReminder = openReminder,
+                                        notes = notesById,
+                                        notePreviews = notePreviews,
+                                        onOpenNote = openNote,
+                                        onToggleNoteItem = toggleNoteItem,
                                     )
                                 }
                             }
@@ -400,6 +426,10 @@ fun ChatScreen(
                                             onOpenLink = openLink,
                                             placeReminders = placeReminders,
                                             onOpenReminder = openReminder,
+                                            notes = notesById,
+                                            notePreviews = notePreviews,
+                                            onOpenNote = openNote,
+                                            onToggleNoteItem = toggleNoteItem,
                                         )
                                     }
                                 }

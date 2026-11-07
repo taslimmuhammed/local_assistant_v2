@@ -29,6 +29,9 @@ data class SummaryBlock(val kind: Kind, val text: String) {
     }
 }
 
+/** A note or list as the prefix names it, so the model knows what there is and can name it in edit_note. */
+data class NoteTitle(val id: Long, val title: String, val list: Boolean)
+
 /** Everything the static system instruction (sections A–D) is built from. */
 data class PrefixInputs(
     val instructions: String,
@@ -37,6 +40,8 @@ data class PrefixInputs(
     /** Day granularity only, so the prefix changes at most once a day on its own. */
     val agendaDate: LocalDate,
     val agenda: List<AgendaItem>,
+    /** The user's notes and lists, pinned first then the latest changed: names only, never what's in them. */
+    val notes: List<NoteTitle> = emptyList(),
 )
 
 data class SystemPrefix(
@@ -45,10 +50,27 @@ data class SystemPrefix(
     val core: CoreMemory,
     val summaryTokens: Int,
     val agendaTokens: Int,
+    val notesTokens: Int = 0,
 )
 
 /** An archived exchange recalled for this turn. */
 data class Snippet(val text: String, val at: Long)
+
+/**
+ * A note or list recalled for this turn, as it is now: [whole] its items ("Eggs (ticked)") or
+ * lines, all of them, and [matched] those of the parts that matched, shown instead when the whole
+ * doesn't fit. [shownAbove]: this very version is in the conversation already, so only a pointer
+ * to it goes in.
+ */
+data class NoteLine(
+    val id: Long,
+    val title: String,
+    val list: Boolean,
+    val whole: List<String>,
+    val matched: List<String>,
+    val updatedAt: Long,
+    val shownAbove: Boolean = false,
+)
 
 /**
  * A saved image recalled for this turn. [attached]: the image goes with this message; otherwise
@@ -95,6 +117,8 @@ data class EnvelopeInputs(
     val savedImage: SavedImageLine? = null,
     /** Photos from the user's gallery that may be about this message, best first. */
     val photos: List<PhotoLine> = emptyList(),
+    /** The user's notes and lists this message is about, best first. */
+    val notes: List<NoteLine> = emptyList(),
     /** The message asks to see photos ("show me…"), and find_photos is there to show them. */
     val asksForPhotos: Boolean = false,
     /** What files sent with the message cost: the user's own, and a recalled image. */
@@ -116,6 +140,8 @@ data class Envelope(
     val savedImage: SavedImageLine? = null,
     /** The photos that made it in; the others must not be attached either. */
     val photos: List<PhotoLine> = emptyList(),
+    /** The notes that made it in. */
+    val notes: List<NoteLine> = emptyList(),
 )
 
 data class HistorySelection(
@@ -126,7 +152,7 @@ data class HistorySelection(
 )
 
 /** Budget-shedding steps, in the order they are applied. */
-enum class ShedStep { SNIPPETS, PHOTOS, FACTS, IMAGE, SUMMARY, HISTORY, CORE }
+enum class ShedStep { SNIPPETS, PHOTOS, FACTS, NOTES, IMAGE, SUMMARY, HISTORY, CORE }
 
 /** A complete prompt that fits the budget, and what was given up to make it fit. */
 data class PromptPlan(

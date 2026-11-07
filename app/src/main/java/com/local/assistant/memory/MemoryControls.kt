@@ -257,7 +257,8 @@ class MemoryControls(
 
     /**
      * Facts, names, reminders and events, saved images, the archive's search index and every summary go.
-     * Chats stay as they are, but nothing is ever learned from what was said before now.
+     * Chats stay as they are, but nothing is ever learned from what was said before now. The user's
+     * notes and lists stay too: like chats, they are what the user wrote, not what was learned.
      */
     suspend fun forgetEverything(skipExtractionTo: suspend (Long) -> Unit) {
         for (task in agenda.allTasks()) reminders.cancel(task.id)
@@ -305,6 +306,14 @@ class MemoryControls(
                     "title" to it.title, "details" to it.details,
                     "saved" to Instant.ofEpochMilli(it.createdAt).toString(),
                     "file" to it.imagePath?.let { path -> java.io.File(path).name },
+                )
+            },
+            "notes_and_lists" to database.userNoteDao().all().map {
+                linkedMapOf(
+                    "title" to it.title, "kind" to it.kind.name.lowercase(), "pinned" to it.pinned,
+                    "text" to it.body.takeIf { _ -> it.kind == com.local.assistant.memory.db.NoteKind.NOTE },
+                    "items" to it.items.takeIf { _ -> it.kind == com.local.assistant.memory.db.NoteKind.LIST }?.map { item -> linkedMapOf("text" to item.text, "ticked" to item.done) },
+                    "changed" to Instant.ofEpochMilli(it.updatedAt).toString(),
                 )
             },
             "conversation_summaries" to sessions.summarised().map {

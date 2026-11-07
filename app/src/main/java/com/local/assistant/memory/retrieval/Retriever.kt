@@ -4,6 +4,11 @@ import android.util.Log
 import com.local.assistant.memory.db.ChunkEntity
 import com.local.assistant.memory.db.FactEntity
 import com.local.assistant.memory.db.NoteEntity
+import com.local.assistant.memory.db.UserNoteChunkEntity
+import com.local.assistant.memory.db.UserNoteEntity
+import com.local.assistant.memory.db.NoteKind
+import com.local.assistant.memory.notes.NoteEdits
+import com.local.assistant.memory.notes.NoteMatch
 import com.local.assistant.memory.embed.EmbedKind
 import com.local.assistant.memory.embed.Embedder
 import com.local.assistant.memory.embed.Int8Vectors
@@ -11,6 +16,7 @@ import com.local.assistant.memory.prompt.Snippet
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import java.util.Locale
 
 /** An archived exchange matched by keywords, scored by [Bm25]. */
 class KeywordHit(
@@ -50,6 +56,26 @@ interface NoteSource {
     suspend fun embedded(modelId: String): List<NoteEntity>
 }
 
+/** The user's notes and lists as retrieval reads them: their parts, searched, and the notes themselves. */
+interface UserNoteSource {
+    /** Parts matching an FTS4 query. */
+    suspend fun chunksMatching(match: String): List<UserNoteChunkEntity>
+
+    /** Parts embedded by [modelId]. */
+    suspend fun embeddedChunks(modelId: String): List<UserNoteChunkEntity>
+
+    suspend fun notes(ids: Collection<Long>): List<UserNoteEntity>
+
+    /** Every note, pinned first, then the latest changed. */
+    suspend fun all(): List<UserNoteEntity>
+}
+
+/**
+ * A note or list this turn is about, as it is now, and which of its parts matched ([parts]: the
+ * ordinals; all of a short note is one part). The envelope shows the parts that fit.
+ */
+data class RecalledNote(val note: UserNoteEntity, val parts: List<UserNoteChunkEntity>, val score: Float)
+
 /** A saved image this turn is about: its line in the envelope, and the image to attach. */
 data class RecalledImage(val noteId: Long, val title: String, val details: String, val path: String, val at: Long)
 
@@ -60,6 +86,8 @@ data class Recall(
     val trace: RecallTrace,
     /** A saved image the message is about, to be looked at again. */
     val image: RecalledImage? = null,
+    /** Notes and lists the message is about, best first. */
+    val notes: List<RecalledNote> = emptyList(),
 ) {
     companion object {
         val NONE = Recall(emptyList(), emptyList(), RecallTrace(gated = true))
@@ -106,6 +134,8 @@ class Retriever(
     private val embedder: Embedder,
     private val notes: NoteSource? = null,
     private val logScores: Boolean = false,
+    /** The user's notes and lists; none when null. */
+    private val userNotes: UserNoteSource? = null,
     /** Turns are started from the main thread; scoring and fusion must not run there. */
     private val dispatcher: CoroutineDispatcher = Dispatchers.Default,
 ) {
@@ -122,6 +152,7 @@ class Retriever(
         maxFacts: Int,
         maxSnippets: Int,
         embedQuery: Boolean = embedder.isReady,
+        maxNotes: Int = 0,
     ): Recall = withContext(dispatcher) {
         if (QueryText.isTrivial(text)) return@withContext Recall.NONE
         val started = System.nanoTime()
@@ -142,6 +173,7 @@ class Retriever(
         val snippets = candidates.filter { it.injected }.take(maxSnippets).map { Snippet(it.chunk.text, it.chunk.createdAt) }
         // An image sent in this conversation's window is already in front of the model.
         val image = recallImage(terms, rare, query, threshold) { inWindow(it.chatId, it.sourceMessageId) }
+        val recalledNotes = if (maxNotes > 0) recallNotes(text, terms, rare, query, threshold).take(maxNotes) else emptyList()
         val trace = RecallTrace(
             gated = false,
             keywordHits = search.keywordHits,
@@ -150,8 +182,90 @@ class Retriever(
             totalMs = (System.nanoTime() - started) / 1_000_000,
             candidates = candidates,
         )
-        if (logScores) log(text, trace, threshold, image)
-        Recall(recalledFacts, snippets, trace, image)
+        if (logScores) log(text, trace, threshold, image, recalledNotes)
+        Recall(recalledFacts, snippets, trace, image, recalledNotes)
+    }
+
+    /**
+     * The notes the message is about, best first, each with the parts that matched. A note comes
+     * when the message names it ("my shopping list", "the Goa packing one", "the grocery list"
+     * for the "Shopping list"), when a part is close enough in meaning or shares a rare word, or
+     * when the message speaks of one of the user's lists or notes ("is bread on my list?") and a
+     * part has one of its words. Asked only "what's on my list?", the latest ones of that kind.
+     *
+     * "List" and "note" alone are no one's name: every list has the word in its title, so a hit
+     * on it says nothing (it brought every list with any message that said "list"). "Make a list
+     * of tips" isn't about the user's lists: only "my", "the", "our" lists and notes are.
+     */
+    private suspend fun recallNotes(text: String, terms: List<String>, rare: Set<String>, query: ByteArray?, threshold: Float): List<RecalledNote> {
+        val source = userNotes ?: return emptyList()
+        val all = source.all()
+        if (all.isEmpty()) return emptyList()
+        val lower = text.lowercase(Locale.ROOT)
+        val ofLists = THEIR_LIST.containsMatchIn(lower)
+        val ofNotes = THEIR_NOTE.containsMatchIn(lower)
+        val aboutNotes = ofLists || ofNotes
+        val content = terms.filter { NoteEdits.singular(it) !in NOTE_WORDS }
+        val byKeyword = QueryText.ftsMatch(content)?.let { runCatching { source.chunksMatching(it) }.getOrNull() }.orEmpty()
+        val modelId = embedder.modelId
+        val byVector = if (query != null && modelId != null) source.embeddedChunks(modelId) else emptyList()
+        val keywordIds = byKeyword.map { it.id }.toSet()
+        // The message's own words (not "what", "is"), as a note's name is matched.
+        val named = content.flatMap { NoteMatch.keys(it) }.toSet()
+        val namedIds = all.filter { note ->
+            val keys = NoteMatch.keys(note.title)
+            // All of its name ("Goa trip packing"), or some of it beside "list" or "note" ("my Goa list").
+            keys.isNotEmpty() && (named.containsAll(keys) || (aboutNotes && keys.any { it in named }))
+        }.map { it.id }.toSet()
+
+        val parts = (byKeyword + byVector).distinctBy { it.id }
+        val scoredParts = parts.mapNotNull { part ->
+            val similarity = part.embedding?.takeIf { query != null && part.modelId == modelId }
+                ?.let { Int8Vectors.similarity(Int8Vectors.cosineDistance(it, query!!)) }
+            val words = QueryText.words(part.text).map { it.lowercase(Locale.ROOT) }.toSet()
+            val rareHit = rare.any { it in words }
+            val keywordHit = part.id in keywordIds
+            val passes = (similarity ?: -1f) >= threshold || rareHit || part.noteId in namedIds || (aboutNotes && keywordHit)
+            if (!passes) return@mapNotNull null
+            part to (similarity ?: 0f) + (if (rareHit) RARE_BONUS else 0f) + (if (keywordHit) KEYWORD_BONUS else 0f)
+        }
+        val byNote = scoredParts.groupBy { it.first.noteId }
+        val ids = byNote.keys + namedIds
+        val found = all.filter { it.id in ids }.map { note ->
+            val hits = byNote[note.id].orEmpty()
+            val score = (hits.maxOfOrNull { it.second } ?: 0f) + (if (note.id in namedIds) NAMED_BONUS else 0f)
+            RecalledNote(note, hits.map { it.first }.sortedBy { it.ordinal }, score)
+        }
+        if (found.isEmpty() && aboutNotes && rare.isEmpty()) {
+            // "What's on my list?", "read me my notes": the latest of that kind, whole.
+            val kind = when {
+                ofLists && !ofNotes -> NoteKind.LIST
+                ofNotes && !ofLists -> NoteKind.NOTE
+                else -> null
+            }
+            return all.filter { kind == null || it.kind == kind }.sortedByDescending { it.updatedAt }.map { RecalledNote(it, emptyList(), 0f) }
+        }
+        return found.sortedWith(compareByDescending<RecalledNote> { it.score }.thenByDescending { it.note.updatedAt })
+    }
+
+    /** Notes for search_memory: the model asked, so any keyword hit or a meaning a little under the threshold. */
+    suspend fun searchNotes(query: String, limit: Int): List<UserNoteEntity> = withContext(dispatcher) {
+        val source = userNotes ?: return@withContext emptyList()
+        val terms = QueryText.terms(query)
+        val keyword = QueryText.ftsMatch(terms)?.let { runCatching { source.chunksMatching(it) }.getOrNull() }.orEmpty()
+        val (vector, _) = queryVector(query, embedQuery = true)
+        val modelId = embedder.modelId
+        val threshold = embedder.similarityThreshold - SEARCH_THRESHOLD_SLACK
+        val close = if (vector != null && modelId != null) {
+            source.embeddedChunks(modelId).filter { part ->
+                part.embedding?.let { Int8Vectors.similarity(Int8Vectors.cosineDistance(it, vector)) >= threshold } == true
+            }
+        } else {
+            emptyList()
+        }
+        val ids = (keyword + close).map { it.noteId }.distinct().take(limit)
+        val found = source.notes(ids).associateBy { it.id }
+        ids.mapNotNull { found[it] }
     }
 
     /** The message as a query vector, and how long that took; nulls when there is no model to ask. */
@@ -295,8 +409,9 @@ class Retriever(
         return (about + matching).distinctBy { it.id }.take(limit)
     }
 
-    private fun log(text: String, trace: RecallTrace, threshold: Float, image: RecalledImage?) {
+    private fun log(text: String, trace: RecallTrace, threshold: Float, image: RecalledImage?, notes: List<RecalledNote>) {
         image?.let { Log.d(TAG, "recall \"${text.take(60)}\": attaching saved image \"${it.title}\"") }
+        notes.forEach { Log.d(TAG, "recall \"${text.take(60)}\": note ${it.note.id} parts ${it.parts.map { p -> p.ordinal }} score ${"%.3f".format(it.score)}") }
         Log.d(
             TAG,
             "recall \"${text.take(60)}\": ${trace.keywordHits} keyword, ${trace.vectorHits} vector, " +
@@ -325,6 +440,19 @@ class Retriever(
 
         /** A rare word naming the image outweighs a small difference in similarity. */
         private const val RARE_BONUS = 0.2f
+
+        /** A note the message names ("my shopping list") ranks above one only close in meaning. */
+        private const val NAMED_BONUS = 0.5f
+        private const val KEYWORD_BONUS = 0.1f
+
+        /** Words that say a message is about a note or list (singular, as [NoteEdits.singular] makes them). */
+        private val NOTE_WORDS = setOf("list", "note", "checklist", "noted", "jotted", "wrote", "written")
+
+        /** "My list", "the shopping list", "our packing checklist": one of the user's own. */
+        private val THEIR_LIST = Regex("\\b(?:my|our|the|that|this)\\s+(?:[\\w'’-]+\\s+){0,2}?(?:list|lists|checklist)\\b")
+
+        /** "My notes", "the wifi note", "what I noted down". */
+        private val THEIR_NOTE = Regex("\\b(?:(?:my|our|the|that|this)\\s+(?:[\\w'’-]+\\s+){0,2}?notes?|i\\s+(?:noted|jotted|wrote)(?:\\s+\\w+)?\\s+down)\\b")
         private const val LOGGED_CANDIDATES = 8
     }
 }

@@ -47,6 +47,15 @@ data class MemoryBudget(
     val snippetsCap: Int,
     /** The line describing a recalled saved image; the image itself is charged separately. */
     val savedImageTokens: Int,
+    /**
+     * The user's notes and lists recalled for a message, all of them together. Like the saved
+     * image, on top of [envelopeCap]: the user asked for them to be kept. Only a message about a
+     * note pays it; most pay nothing.
+     */
+    val noteTokens: Int,
+    val maxNotes: Int,
+    /** "Notes and lists:" in the prefix, their names only. */
+    val notesIndexCap: Int,
 
     // Totals.
     val promptTarget: Int,
@@ -65,7 +74,7 @@ data class MemoryBudget(
     val nowRefreshMinutes: Long,
 ) {
     val staticPrefixCap: Int
-        get() = instructionsCap + toolDeclarationsCap + coreCap + summaryCap + agendaCap
+        get() = instructionsCap + toolDeclarationsCap + coreCap + summaryCap + agendaCap + notesIndexCap
 
     /** Room the window must still have once the prompt is at its ceiling. */
     val headroom: Int
@@ -95,6 +104,9 @@ data class MemoryBudget(
             snippetTokens = 110,
             snippetsCap = 450,
             savedImageTokens = 300,
+            noteTokens = 360,
+            maxNotes = 2,
+            notesIndexCap = 100,
             promptTarget = 10_000,
             promptCeiling = 12_000,
             compactionTrigger = 9_000,
@@ -129,6 +141,10 @@ data class MemoryBudget(
             maxSnippets = 2,
             snippetsCap = 225,
             savedImageTokens = 150,
+            // A shopping list of 30 items is about 120 tokens.
+            noteTokens = 180,
+            maxNotes = 2,
+            notesIndexCap = 60,
             promptTarget = 4_400,
             promptCeiling = 5_200,
             compactionTrigger = 4_000,
@@ -166,6 +182,8 @@ data class MemoryBudget(
             envelopeCap = s(envelopeCap),
             snippetsCap = s(snippetsCap),
             savedImageTokens = s(savedImageTokens),
+            noteTokens = s(noteTokens),
+            notesIndexCap = s(notesIndexCap),
             promptTarget = s(promptTarget),
             promptCeiling = s(promptCeiling),
             compactionTrigger = s(compactionTrigger),

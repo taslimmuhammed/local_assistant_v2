@@ -130,6 +130,8 @@ object ActionClaims {
         near("put|set|changed|muted|silenced|enabled|disabled|activated|deactivated", "phone|$SWITCHABLE", words = 4),
         near("opened|launched|started|played|pulled up", APPS),
         near("saved|stored|noted down|added", "memory|that|this|preference|number|address|details|fact|contacts?|shopping list"),
+        // "I've added eggs and milk to your shopping list": a list or note of theirs, not one written in the reply.
+        "$I_DID(?:added|put|removed|deleted|ticked|checked|crossed|struck|marked|noted|jotted|saved|written|wrote)\\b[^.!?\\n]{0,60}?\\b(?:to|from|on|in|into|off)\\s+(?:your|the)\\s+(?:[\\w'’-]+\\s+){0,2}?(?:list|note|notes)\\b(?!\\s+(?:below|above))",
         near("marked", "done|complete|completed|finished"),
         near("ordered|reserved|placed", "orders?|pizza|food|meal|groceries|cab|taxi|uber|ola|ride|table|seats?|tickets?|room"),
         near("transferred", "money|rupees|rs|amount|funds|payment|\\d+"),

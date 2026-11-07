@@ -33,6 +33,8 @@ object ToolCatalog {
     const val TAKE_SCREENSHOT = "take_screenshot"
     /** Not "get_health": beside get_upcoming the model could blend the two, as it did search tools. */
     const val HEALTH = "health_data"
+    /** Notes and lists. Not "save_note" or "update_note": beside save_fact and update_task the names could blend. */
+    const val EDIT_NOTE = "edit_note"
 
     /**
      * Not a tool the model calls: the TOOL row that keeps the photos shown under a reply because
@@ -42,7 +44,7 @@ object ToolCatalog {
     const val RELATED_PHOTOS = "related_photos"
 
     /** Tools that change something, as opposed to reading it. */
-    val WRITES = setOf(ADD_TASK, UPDATE_TASK, ADD_EVENT, SAVE_FACT, FORGET, SET_ALARM, REMEMBER_IMAGE)
+    val WRITES = setOf(ADD_TASK, UPDATE_TASK, ADD_EVENT, SAVE_FACT, FORGET, SET_ALARM, REMEMBER_IMAGE, EDIT_NOTE)
 
     /** The everyday tools (`DeviceTools`): they act on the phone, never on memory. */
     val DEVICE = setOf(CALL, SEND_MESSAGE, SET_TIMER, OPEN_APP, PHONE_SETTING, CALCULATE, TAKE_SCREENSHOT)
@@ -60,7 +62,7 @@ object ToolCatalog {
     val LOOKUPS = setOf(CALCULATE, WEB_SEARCH, SEARCH_MEMORY, GET_UPCOMING, HEALTH)
 
     /** Tools that carry words a lookup's answer could go into: a reminder's title, a message. */
-    val TAKES_ANSWERS = setOf(ADD_TASK, ADD_EVENT, SEND_MESSAGE, SAVE_FACT)
+    val TAKES_ANSWERS = setOf(ADD_TASK, ADD_EVENT, SEND_MESSAGE, SAVE_FACT, EDIT_NOTE)
 
     /** Tools that do something for the user: a turn that ran one was a command, however it was put. */
     val ACTS = WRITES + DEVICE_ACTIONS
@@ -196,6 +198,19 @@ object ToolCatalog {
             "details" to "string",
         ),
         function(
+            EDIT_NOTE,
+            "Use to make, change or delete the user's own notes and lists: shopping, packing, ideas, anything they ask you to note down or keep. note: its name or id (note 3); a name not there makes a new one. add: items to add, comma-separated, or text to add to a note. remove, check, uncheck: items, comma-separated; all, or done for the ticked ones. text: the whole new text. title: a new name. delete: true to delete it.",
+            required = listOf("note"),
+            "note" to "string",
+            "add" to "string",
+            "remove" to "string",
+            "check" to "string",
+            "uncheck" to "string",
+            "text" to "string",
+            "title" to "string",
+            "delete" to "boolean",
+        ),
+        function(
             FORGET,
             "Use when the user asks you to forget or delete something they told you.",
             required = listOf("subject"),
@@ -256,6 +271,7 @@ object ToolCatalog {
         - Reminders and to-dos → add_task, with the user's own time words in when, or for one on reaching a place ("near DMart", "when I get home") the place in place.
         - Alarms ("set an alarm", "wake me up") → set_alarm, which rings in the phone's clock app.
         - "Remember this" about an image → remember_image, with everything you can read in details (not save_fact).
+        - Shopping, packing and other lists, and notes they ask you to keep or write down → edit_note (not save_fact); reminders and to-dos stay add_task. Use the names under "Notes and lists:".
         - Calls, messages, timers, apps and phone settings only when asked for now: "remind me to call amma at 6" is add_task, "I should call her" is no tool.
         - Screenshots: "take a screenshot" → take_screenshot; sending or sharing it with someone → send_message with screenshot=true, its text saying what's on it if they asked. Calls and messages only open the app: say it's ready to send, never that it was sent.
         - Any arithmetic or unit conversion → calculate.

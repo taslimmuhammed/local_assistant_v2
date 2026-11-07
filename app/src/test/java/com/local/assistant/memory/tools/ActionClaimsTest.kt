@@ -104,6 +104,28 @@ class ActionClaimsTest {
     }
 
     @Test
+    fun `saying a list or note was changed is a claim, writing one out is not`() {
+        for (text in listOf(
+            "I've added eggs and bread to your shopping list.",
+            "I've removed milk from the list.",
+            "I've ticked milk off your grocery list.",
+            "I've noted the gate code in your notes.",
+            "Done, I've put sunscreen on the Goa packing list.",
+        )) {
+            assertTrue(text, ActionClaims.claims(text))
+        }
+        for (text in listOf(
+            "I've created a list of tips for you:",
+            "Here is a shopping list for a week of meals:",
+            "I've added a few more ideas to the list below:",
+            "I've turned your notes into a table.",
+            "Would you like me to add eggs to your shopping list?",
+        )) {
+            assertTrue(text, !ActionClaims.claims(text))
+        }
+    }
+
+    @Test
     fun `saying a message was written counts only when the message isn't shown`() {
         // As in the panel and the email to Hitesh: no draft anywhere.
         assertTrue(ActionClaims.unshownDraft("I've drafted the email for you. Would you like me to send it now?"))

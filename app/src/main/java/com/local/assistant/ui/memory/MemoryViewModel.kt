@@ -252,7 +252,7 @@ class MemoryViewModel(
 
     fun forgetEverything() = launch {
         forgetAll()
-        _notices.emit(Notice("Forgot everything. Your chats are still there."))
+        _notices.emit(Notice("Forgot everything. Your chats and notes are still there."))
     }
 
     fun export(uri: Uri, resolver: ContentResolver) = launch {

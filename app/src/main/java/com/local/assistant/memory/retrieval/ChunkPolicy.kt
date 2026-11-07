@@ -48,8 +48,10 @@ object ChunkPolicy {
      * searching, so no photos were shown (2026-10-26, 2 of 2 turns in a fresh chat). health_data
      * for the same reason: today's steps are out of date within the hour, and recalled they'd be
      * read out again as if new; and so the readings aren't kept in the archive and its vectors.
+     * edit_note too: the note itself is recalled as it is now, while "added eggs" from last week
+     * would be recalled beside it after the eggs were bought and removed.
      */
-    val UTILITY_TOOLS = setOf("calculate", "set_timer", "open_app", "phone_setting", "find_photos", "health_data")
+    val UTILITY_TOOLS = setOf("calculate", "set_timer", "open_app", "phone_setting", "find_photos", "health_data", "edit_note")
 
     /**
      * Whether an exchange is left out of the archive: all it did was work something out or work

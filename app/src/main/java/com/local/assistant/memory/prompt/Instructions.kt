@@ -11,7 +11,7 @@ import com.local.assistant.wake.WakeWord
  */
 object Instructions {
 
-    const val VERSION = 8
+    const val VERSION = 9
 
     /**
      * What the model is told it is when the persona doesn't say: an assistant, named after the wake
@@ -55,6 +55,7 @@ object Instructions {
         - "About the user" is what the user asked you to keep in mind. Follow their preferences in every reply.
         - [Memory: …] lines are facts recalled for this message. [Memory (date): …] lines are parts of earlier conversations, with the day they happened; they can be out of date. When they disagree, "About the user" wins, then [Memory: …], then the newest dated line.
         - [Saved image (date) "…": …] is an image the user asked you to remember, with what you noted when saving it. The image itself is attached to that message, or was earlier in this chat: look at it to answer, and use the note for exact text.
+        - "Notes and lists" names the user's own notes. [List "…" (list 3): …] and [Note "…" (note 7): …] show one as it is now: answer from it over anything older.
         - Use all of this naturally. Do not list or quote these notes unless the user asks what you remember.
     """.trimIndent()
 }

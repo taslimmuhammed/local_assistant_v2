@@ -4,6 +4,9 @@ import androidx.room.TypeConverter
 import com.local.assistant.memory.db.FactCategory
 import com.local.assistant.memory.db.FactOrigin
 import com.google.gson.Gson
+import com.google.gson.reflect.TypeToken
+import com.local.assistant.memory.db.NoteItem
+import com.local.assistant.memory.db.NoteKind
 import com.local.assistant.memory.db.SummaryStatus
 import com.local.assistant.memory.db.TaskPlace
 import com.local.assistant.memory.db.TaskStatus
@@ -51,7 +54,21 @@ class Converters {
     @TypeConverter
     fun stringToTaskPlace(value: String?): TaskPlace? = value?.let { gson.fromJson(it, TaskPlace::class.java) }
 
+    @TypeConverter
+    fun noteKindToString(value: NoteKind): String = value.name
+
+    @TypeConverter
+    fun stringToNoteKind(value: String): NoteKind = NoteKind.valueOf(value)
+
+    @TypeConverter
+    fun noteItemsToString(value: List<NoteItem>): String = gson.toJson(value)
+
+    @TypeConverter
+    fun stringToNoteItems(value: String): List<NoteItem> =
+        gson.fromJson<List<NoteItem>>(value, NOTE_ITEMS).orEmpty()
+
     private companion object {
         val gson = Gson()
+        val NOTE_ITEMS = object : TypeToken<List<NoteItem>>() {}.type
     }
 }

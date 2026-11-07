@@ -49,7 +49,8 @@ class PromptAssembler(
         val core = coreRenderer.render(inputs.coreFacts, coreCap)
         val summary = inputs.summary?.let { renderSummary(it, summaryCap) }.orEmpty()
         val agenda = renderAgenda(inputs)
-        val text = listOf(inputs.instructions.trim(), core.text, summary, agenda)
+        val notes = renderNoteIndex(inputs.notes)
+        val text = listOf(inputs.instructions.trim(), core.text, summary, agenda, notes)
             .filter { it.isNotEmpty() }
             .joinToString("\n\n")
         return SystemPrefix(
@@ -58,7 +59,29 @@ class PromptAssembler(
             core = core,
             summaryTokens = estimator.estimate(summary),
             agendaTokens = estimator.estimate(agenda),
+            notesTokens = estimator.estimate(notes),
         )
+    }
+
+    /**
+     * "Notes and lists: “Shopping list” (list 3), “Wifi details” (note 7), and 2 more": their names,
+     * within [MemoryBudget.notesIndexCap], so the model can tell "add eggs to the grocery list"
+     * means the "Shopping list" and name it in edit_note. What's in them comes only with a message
+     * about one, so ticking an item never changes the prefix.
+     */
+    private fun renderNoteIndex(notes: List<NoteTitle>): String {
+        if (notes.isEmpty()) return ""
+        val shown = mutableListOf<String>()
+        for ((i, note) in notes.withIndex()) {
+            val name = "“${FactLabels.inline(note.title)}” (${if (note.list) "list" else "note"} ${note.id})"
+            val more = notes.size - i - 1
+            val candidate = NOTES_HEADING + (shown + name).joinToString(", ") + if (more > 0) ", and $more more" else ""
+            if (estimator.estimate(candidate) > budget.notesIndexCap) break
+            shown += name
+        }
+        if (shown.isEmpty()) return ""
+        val more = notes.size - shown.size
+        return NOTES_HEADING + shown.joinToString(", ") + if (more > 0) ", and $more more" else ""
     }
 
     fun summaryCapFor(summary: SummaryBlock?): Int = when (summary?.kind) {
@@ -125,6 +148,7 @@ class PromptAssembler(
         }
         val imageLine = inputs.savedImage?.let(::renderSavedImage)
         val photosLine = renderPhotos(inputs.photos) ?: SEARCH_PHOTOS.takeIf { inputs.asksForPhotos }
+        val (noteLines, keptNotes) = renderNotes(inputs.notes)
 
         // Hold the app-added part to its cap: snippets go before facts. The image line has its
         // own allowance ([MemoryBudget.savedImageTokens]) on top: the user asked for it to be kept.
@@ -143,7 +167,7 @@ class PromptAssembler(
 
         val screenLine = SCREEN.takeIf { inputs.screen }
         val said = if (inputs.heard) heard(inputs.userText) else inputs.userText
-        val text = (header() + listOfNotNull(imageLine, photosLine, screenLine) + said).joinToString("\n")
+        val text = (header() + noteLines + listOfNotNull(imageLine, photosLine, screenLine) + said).joinToString("\n")
         val attachments = inputs.attachmentTokens +
             (if (inputs.screen) visionTokensPerImage else 0) +
             (if (imageLine != null && inputs.savedImage.attached) visionTokensPerImage else 0) +
@@ -156,7 +180,48 @@ class PromptAssembler(
             showedNow = nowLine != null,
             savedImage = inputs.savedImage.takeIf { imageLine != null },
             photos = inputs.photos,
+            notes = keptNotes,
         )
+    }
+
+    /**
+     * The notes' lines, within [MemoryBudget.noteTokens] together: each whole if it fits, else the
+     * parts that matched, cut short if even they don't. One already in the conversation as it is
+     * now is only pointed at. The lines, and the notes that made it in.
+     */
+    private fun renderNotes(notes: List<NoteLine>): Pair<List<String>, List<NoteLine>> {
+        val lines = mutableListOf<String>()
+        val kept = mutableListOf<NoteLine>()
+        var room = budget.noteTokens
+        for (note in notes) {
+            val line = renderNote(note, room) ?: break
+            room -= estimator.estimate(line)
+            lines += line
+            kept += note
+        }
+        return lines to kept
+    }
+
+    /** "[List “Shopping list” (list 3): Milk; Eggs (ticked); Bread]"; null when not even its name fits in [room]. */
+    private fun renderNote(note: NoteLine, room: Int): String? {
+        val kind = if (note.list) "List" else "Note"
+        val head = "[$kind “${FactLabels.inline(note.title)}” (${kind.lowercase(Locale.ROOT)} ${note.id})"
+        val separator = if (note.list) "; " else " / "
+        fun joined(lines: List<String>) = lines.joinToString(separator) { FactLabels.inline(it) }
+        // Each as the opening and what follows it.
+        val candidates = when {
+            note.shownAbove -> listOf("$head: " to "as shown above, unchanged.")
+            note.whole.isEmpty() -> listOf("$head: " to "empty")
+            else -> listOfNotNull(
+                "$head: " to joined(note.whole),
+                note.matched.takeIf { it.isNotEmpty() && it.size < note.whole.size }?.let { "$head, the part about this (more in it): " to joined(it) },
+            )
+        }
+        candidates.map { (open, body) -> "$open$body]" }.firstOrNull { estimator.estimate(it) <= room }?.let { return it }
+        // Even the matched part is too long: as much of it as fits.
+        val (open, body) = candidates.last()
+        val cut = truncateToTokens(body, room - estimator.estimate("$open]"))
+        return if (cut.isEmpty()) null else "$open$cut]"
     }
 
     /**
@@ -260,15 +325,17 @@ class PromptAssembler(
         var facts = envelopeInputs.facts
         var image = envelopeInputs.savedImage
         var photos = envelopeInputs.photos
+        var notes = envelopeInputs.notes
         var summaryCap = summaryCapFor(prefixInputs.summary)
         var maxTurns = budget.maxVerbatimTurns
         var coreCap = budget.coreCap
 
         while (true) {
-            val envelope = buildEnvelope(envelopeInputs.copy(facts = facts, snippets = snippets, savedImage = image, photos = photos))
+            val envelope = buildEnvelope(envelopeInputs.copy(facts = facts, snippets = snippets, savedImage = image, photos = photos, notes = notes))
             // Shedding inside buildEnvelope already applied; carry its result forward.
             snippets = envelope.snippets
             facts = envelope.facts
+            notes = envelope.notes
 
             val prefix = buildPrefix(prefixInputs, coreCap = coreCap, summaryCap = summaryCap)
             val rolling = if (prefixInputs.summary?.kind == SummaryBlock.Kind.EARLIER_IN_CHAT) prefix.summaryTokens else 0
@@ -289,6 +356,10 @@ class PromptAssembler(
                 facts.isNotEmpty() -> {
                     facts = facts.dropLast(1)
                     shed.addOnce(ShedStep.FACTS)
+                }
+                notes.isNotEmpty() -> {
+                    notes = notes.dropLast(1)
+                    shed.addOnce(ShedStep.NOTES)
                 }
                 image != null -> {
                     image = null
@@ -323,16 +394,19 @@ class PromptAssembler(
         var facts = inputs.facts
         var image = inputs.savedImage
         var photos = inputs.photos
+        var notes = inputs.notes
         while (true) {
-            val envelope = buildEnvelope(inputs.copy(facts = facts, snippets = snippets, savedImage = image, photos = photos))
+            val envelope = buildEnvelope(inputs.copy(facts = facts, snippets = snippets, savedImage = image, photos = photos, notes = notes))
             if (liveTokens + envelope.tokens <= budget.promptCeiling) return envelope
             snippets = envelope.snippets
             facts = envelope.facts
+            notes = envelope.notes
             when {
                 snippets.isNotEmpty() -> snippets = snippets.dropLast(1)
                 // A photo costs as much as several snippets; the least likely goes first.
                 photos.isNotEmpty() -> photos = photos.dropLast(1)
                 facts.isNotEmpty() -> facts = facts.dropLast(1)
+                notes.isNotEmpty() -> notes = notes.dropLast(1)
                 image != null -> image = null
                 else -> return null
             }
@@ -384,6 +458,8 @@ class PromptAssembler(
             "[The phone's speech recogniser wrote this voice message down as: \"$words\". It may have misheard a name or a number.]"
 
         const val DEFAULT_VISION_TOKENS = 256
+
+        const val NOTES_HEADING = "Notes and lists: "
         private const val MIN_SUMMARY_TOKENS = 50
         private const val CORE_STEP_TOKENS = 100
 

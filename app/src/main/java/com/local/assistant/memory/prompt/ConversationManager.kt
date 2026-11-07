@@ -18,7 +18,10 @@ import com.local.assistant.memory.tools.ToolCatalog
 import com.local.assistant.memory.tools.ToolSteps
 import com.local.assistant.memory.db.MemoryRepository
 import com.local.assistant.memory.retrieval.QueryText
+import com.local.assistant.memory.db.NoteItem
+import com.local.assistant.memory.db.NoteKind
 import com.local.assistant.memory.retrieval.Recall
+import com.local.assistant.memory.retrieval.RecalledNote
 import com.local.assistant.memory.retrieval.Retriever
 import com.local.assistant.memory.summary.Summarizer
 import com.local.assistant.memory.work.ModelAccess
@@ -88,6 +91,8 @@ class ConversationManager(
     private val clock: () -> Long = System::currentTimeMillis,
     /** A one-shot job ([withModelFree]) closed the live conversation and is done with the model. */
     private val onModelFreed: () -> Unit = {},
+    /** The user's notes and lists, named in the prefix; none when not wired in. */
+    private val noteIndex: suspend () -> List<NoteTitle> = { emptyList() },
 ) : ModelAccess {
 
     /**
@@ -141,6 +146,8 @@ class ConversationManager(
         val attachedNotes: MutableSet<Long> = mutableSetOf(),
         /** Gallery photos already attached to a turn of this conversation, likewise. */
         val attachedPhotos: MutableSet<Long> = mutableSetOf(),
+        /** Notes shown to a turn of this conversation, by id, and the version shown (its updatedAt). */
+        val shownNotes: MutableMap<Long, Long> = mutableMapOf(),
     )
 
     /** Plain turns' text and real cost, gathered until there is enough to learn from. */
@@ -260,11 +267,13 @@ class ConversationManager(
         // Two pictures at most: a saved image the user asked to keep comes first.
         val photoLines = found.take(MAX_RECALLED_IMAGES - if (image != null && image.noteId !in current.attachedNotes) 1 else 0)
         fun line(attach: Boolean) = image?.let { SavedImageLine(it.title, it.details, it.at, attached = attach) }
+        val noteLines = recall.notes.map { noteLine(it, shownAbove = current.shownNotes[it.note.id] == it.note.updatedAt) }
         var inputs = EnvelopeInputs(
             now = now,
             showNow = assembler.shouldShowNow(current.lastNowShown, now),
             facts = recall.facts,
             snippets = recall.snippets,
+            notes = noteLines,
             // Once in the conversation, the image is not attached again: a second copy garbled
             // long numbers on the phone. The line still points the model back at it.
             savedImage = line(attach = image != null && image.noteId !in current.attachedNotes),
@@ -294,11 +303,13 @@ class ConversationManager(
             }
             // The new conversation holds no saved image, so it goes with this message after all. A
             // photo it held has no file now; it goes, and those found for this message stay.
-            inputs = inputs.copy(savedImage = line(attach = true), photos = photoLines.filter { it.attached })
+            inputs = inputs.copy(savedImage = line(attach = true), photos = photoLines.filter { it.attached }, notes = noteLines.map { it.copy(shownAbove = false) })
             current = rebuild(chatId, history, budget, capabilities, next = inputs)
             envelope = assembler.buildEnvelope(inputs.copy(showNow = true))
         }
         if (envelope.showedNow) current.lastNowShown = now
+        envelope.notes.forEach { current.shownNotes[it.id] = it.updatedAt }
+        if (envelope.notes.isNotEmpty()) Log.i(TAG, "Notes for this message: ${envelope.notes.map { "${it.id}${if (it.shownAbove) " (above)" else ""}" }}")
         val attached = image?.takeIf { envelope.savedImage?.attached == true }
         if (attached != null) current.attachedNotes += attached.noteId
         image?.let {
@@ -343,7 +354,7 @@ class ConversationManager(
     private suspend fun recall(chatId: Long, userText: String, windowStartId: Long, budget: MemoryBudget): Recall {
         val retriever = retriever ?: return Recall.NONE
         return try {
-            retriever.recall(chatId, userText, windowStartId, budget.maxEnvelopeFacts, budget.maxSnippets)
+            retriever.recall(chatId, userText, windowStartId, budget.maxEnvelopeFacts, budget.maxSnippets, maxNotes = budget.maxNotes)
         } catch (e: kotlinx.coroutines.CancellationException) {
             throw e
         } catch (e: Exception) {
@@ -723,7 +734,30 @@ class ConversationManager(
             summary = summary,
             agendaDate = now().toLocalDate(),
             agenda = memory.agenda(clock(), budget.agendaItems),
+            notes = noteIndex(),
         )
+    }
+
+    /**
+     * [recalled] as the envelope shows it: all its items (ticked ones marked) or lines, and those of
+     * the parts that matched, for when all of it won't fit.
+     */
+    private fun noteLine(recalled: RecalledNote, shownAbove: Boolean): NoteLine {
+        val note = recalled.note
+        fun item(it: NoteItem) = if (it.done) "${it.text} (ticked)" else it.text
+        val (whole, matched) = when (note.kind) {
+            NoteKind.LIST -> note.items.map(::item) to recalled.parts.flatMap { part ->
+                note.items.subList(part.fromIndex.coerceIn(0, note.items.size), part.toIndex.coerceIn(part.fromIndex.coerceIn(0, note.items.size), note.items.size)).map(::item)
+            }
+            NoteKind.NOTE -> {
+                fun lines(text: String) = text.lines().map { it.trim() }.filter { it.isNotEmpty() }
+                lines(note.body) to recalled.parts.flatMap { part ->
+                    val from = part.fromIndex.coerceIn(0, note.body.length)
+                    lines(note.body.substring(from, part.toIndex.coerceIn(from, note.body.length)))
+                }
+            }
+        }
+        return NoteLine(note.id, note.title, note.kind == NoteKind.LIST, whole, matched, note.updatedAt, shownAbove)
     }
 
     private fun instructions() = Instructions.render(

@@ -34,6 +34,8 @@ class EmbeddingQueue(
     private val unloadWhenDrained: Boolean,
     /** Saved images, embedded by their title and details so recall can find them by meaning. */
     private val notes: com.local.assistant.memory.db.NoteDao? = null,
+    /** The parts of the user's notes and lists, remade (unembedded) each time a note changes. */
+    private val userNotes: com.local.assistant.memory.db.UserNoteDao? = null,
 ) {
 
     private var job: Job? = null
@@ -108,7 +110,30 @@ class EmbeddingQueue(
         }
         if (embedded > 0) Log.i(TAG, "Embedded $embedded chunks; ${_remaining.value} left")
         embedNotes(modelId)
+        embedUserNotes(modelId)
         if (unloadWhenDrained && !inForeground()) embedder.unload()
+    }
+
+    /** Parts of notes not yet embedded by this model: a changed note's new parts, a batch at a time. */
+    private suspend fun embedUserNotes(modelId: String) {
+        val dao = userNotes ?: return
+        var embedded = 0
+        while (embedder.modelId == modelId) {
+            val pending = dao.unembeddedChunks(modelId, BATCH)
+            if (pending.isEmpty()) break
+            val finished = runWhenIdle {
+                for (part in pending) {
+                    coroutineContext.ensureActive()
+                    val vector = embedder.embed(part.text, EmbedKind.DOCUMENT)?.let(Int8Vectors::quantize)
+                    if (vector == null && !embedder.isReady) return@runWhenIdle false
+                    dao.setChunkEmbedding(part.id, vector, if (vector == null) com.local.assistant.memory.retrieval.ChunkPolicy.FAILED_PREFIX + modelId else modelId)
+                    embedded++
+                }
+                true
+            }
+            if (!finished) break
+        }
+        if (embedded > 0) Log.i(TAG, "Embedded $embedded parts of notes")
     }
 
     /** Saved images not yet embedded by this model: few, and each one the user asked for. */

@@ -26,6 +26,8 @@ import com.local.assistant.ui.gallery.PhotoAccess
 import com.local.assistant.ui.gallery.GalleryViewModel
 import com.local.assistant.ui.memory.MemoryScreen
 import com.local.assistant.ui.memory.RemindersScreen
+import com.local.assistant.ui.notes.NotesScreen
+import com.local.assistant.ui.notes.NotesViewModel
 import com.local.assistant.ui.memory.MemoryViewModel
 import com.local.assistant.ui.profile.ProfileScreen
 import com.local.assistant.ui.profile.ProfileViewModel
@@ -115,6 +117,8 @@ private fun AppRoot(
     var showModelScreen by remember { mutableStateOf(false) }
     var showMemoryScreen by remember { mutableStateOf(false) }
     var showRemindersScreen by remember { mutableStateOf(false) }
+    var showNotesScreen by remember { mutableStateOf(false) }
+    var notesFromChat by remember { mutableStateOf(false) }
     var showProfileScreen by remember { mutableStateOf(false) }
     var showWebSearchScreen by remember { mutableStateOf(false) }
     var showPhotosScreen by remember { mutableStateOf(false) }
@@ -145,6 +149,7 @@ private fun AppRoot(
         showModelScreen = false
         showMemoryScreen = false
         showRemindersScreen = false
+        showNotesScreen = false
         showProfileScreen = false
         showWebSearchScreen = false
         showPhotosScreen = false
@@ -155,6 +160,7 @@ private fun AppRoot(
         showModelScreen = false
         showMemoryScreen = false
         showRemindersScreen = false
+        showNotesScreen = false
         showProfileScreen = false
         showWebSearchScreen = false
         showPhotosScreen = false
@@ -270,6 +276,17 @@ private fun AppRoot(
         return
     }
 
+    // The Notes screen's own, kept by the activity: a list under a reply opens in it, and ticks there.
+    val notesViewModel: NotesViewModel = viewModel(factory = NotesViewModel.factory(container))
+    if (showNotesScreen) {
+        BackHandler {
+            notesViewModel.close()
+            showNotesScreen = false
+        }
+        NotesScreen(viewModel = notesViewModel, onBack = { showNotesScreen = false }, backToChat = notesFromChat)
+        return
+    }
+
     // For the blank chat's hello; read again on coming back from Settings, where it is edited.
     val userName by produceState<String?>(null, showSettings) {
         value = container.memoryControls.profile()["name"]?.trim()?.substringBefore(' ')?.takeIf { it.isNotEmpty() }
@@ -294,6 +311,17 @@ private fun AppRoot(
         canFindPhotos = container.photoSearchReady(),
         userName = userName,
         reminders = memoryViewModel,
+        notes = notesViewModel,
+        onOpenNotes = {
+            notesViewModel.close()
+            notesFromChat = false
+            showNotesScreen = true
+        },
+        onOpenNote = { note ->
+            notesViewModel.open(note)
+            notesFromChat = true
+            showNotesScreen = true
+        },
     )
 }
 

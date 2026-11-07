@@ -7,6 +7,7 @@ import com.local.assistant.memory.db.FactEntity
 import com.local.assistant.memory.db.ForgetResult
 import com.local.assistant.memory.db.TaskEntity
 import com.local.assistant.memory.db.TaskPlace
+import com.local.assistant.memory.db.UserNoteEntity
 import com.local.assistant.memory.prompt.Snippet
 
 /**
@@ -33,8 +34,10 @@ data class MemoryChip(
     val photos: PhotoSet? = null,
     /** A place reminder's place, shown instead of a time: "near DMart". */
     val place: String? = null,
+    /** The note or list edit_note made or changed, shown as it is now under the chip; null once deleted. */
+    val noteId: Long? = null,
 ) {
-    enum class Kind { FACT, TASK, EVENT, FORGET, ALARM, IMAGE, CALL, MESSAGE, TIMER, APP, SETTING, WEB, PHOTOS, SCREENSHOT, HEALTH }
+    enum class Kind { FACT, TASK, EVENT, FORGET, ALARM, IMAGE, CALL, MESSAGE, TIMER, APP, SETTING, WEB, PHOTOS, SCREENSHOT, HEALTH, NOTE }
 }
 
 /**
@@ -64,7 +67,13 @@ data class UndoToken(
     val createdEventId: Long? = null,
     val previousEvent: EventEntity? = null,
     val forgotten: ForgetResult? = null,
+    /** A saved image (remember_image). */
     val createdNoteId: Long? = null,
+    /** A note or list edit_note made. */
+    val createdUserNoteId: Long? = null,
+    /** A note or list as it was before edit_note changed or deleted it, and as it left it (null when deleted). */
+    val previousUserNote: UserNoteEntity? = null,
+    val writtenUserNote: UserNoteEntity? = null,
 )
 
 /**

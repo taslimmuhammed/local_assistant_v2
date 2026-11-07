@@ -27,6 +27,10 @@ import com.local.assistant.memory.db.SessionDao
 import com.local.assistant.memory.db.SessionEntity
 import com.local.assistant.memory.db.SubjectAliasEntity
 import com.local.assistant.memory.db.TaskEntity
+import com.local.assistant.memory.db.UserNoteChunkEntity
+import com.local.assistant.memory.db.UserNoteChunkFts
+import com.local.assistant.memory.db.UserNoteDao
+import com.local.assistant.memory.db.UserNoteEntity
 import com.local.assistant.memory.retrieval.SqliteVec
 import kotlinx.coroutines.Dispatchers
 
@@ -50,8 +54,11 @@ import kotlinx.coroutines.Dispatchers
         AppStateEntity::class,
         NoteEntity::class,
         NoteFts::class,
+        UserNoteEntity::class,
+        UserNoteChunkEntity::class,
+        UserNoteChunkFts::class,
     ],
-    version = 8,
+    version = 9,
     exportSchema = true,
 )
 @TypeConverters(Converters::class)
@@ -72,6 +79,8 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun maintenanceDao(): MaintenanceDao
 
     abstract fun noteDao(): NoteDao
+
+    abstract fun userNoteDao(): UserNoteDao
 
     /** The vector index is a derived table outside Room's schema, created where it can be. */
     object VectorTableCallback : Callback() {
@@ -138,7 +147,29 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
-        val MIGRATIONS: Array<Migration> = arrayOf(MIGRATION_1_2, MIGRATION_2_3, Migration3To4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8)
+        /**
+         * The user's notes and lists, and their parts for recall. Copied from `schemas/…/9.json`,
+         * which Room validates the result against, keyword index and its triggers included.
+         */
+        private val MIGRATION_8_9 = object : Migration(8, 9) {
+            override fun migrate(connection: SQLiteConnection) {
+                listOf(
+                    "CREATE TABLE IF NOT EXISTS `user_notes` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `title` TEXT NOT NULL, `kind` TEXT NOT NULL, `body` TEXT NOT NULL, `items` TEXT NOT NULL, `pinned` INTEGER NOT NULL, `sourceMessageId` INTEGER, `createdAt` INTEGER NOT NULL, `updatedAt` INTEGER NOT NULL, FOREIGN KEY(`sourceMessageId`) REFERENCES `messages`(`id`) ON UPDATE NO ACTION ON DELETE SET NULL )",
+                    "CREATE INDEX IF NOT EXISTS `index_user_notes_sourceMessageId` ON `user_notes` (`sourceMessageId`)",
+                    "CREATE INDEX IF NOT EXISTS `index_user_notes_updatedAt` ON `user_notes` (`updatedAt`)",
+                    "CREATE TABLE IF NOT EXISTS `user_note_chunks` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `noteId` INTEGER NOT NULL, `ordinal` INTEGER NOT NULL, `text` TEXT NOT NULL, `fromIndex` INTEGER NOT NULL, `toIndex` INTEGER NOT NULL, `embedding` BLOB, `modelId` TEXT, FOREIGN KEY(`noteId`) REFERENCES `user_notes`(`id`) ON UPDATE NO ACTION ON DELETE CASCADE )",
+                    "CREATE INDEX IF NOT EXISTS `index_user_note_chunks_noteId` ON `user_note_chunks` (`noteId`)",
+                    "CREATE INDEX IF NOT EXISTS `index_user_note_chunks_modelId` ON `user_note_chunks` (`modelId`)",
+                    "CREATE VIRTUAL TABLE IF NOT EXISTS `user_note_chunks_fts` USING FTS4(`text` TEXT NOT NULL, tokenize=unicode61, content=`user_note_chunks`)",
+                    "CREATE TRIGGER IF NOT EXISTS room_fts_content_sync_user_note_chunks_fts_BEFORE_UPDATE BEFORE UPDATE ON `user_note_chunks` BEGIN DELETE FROM `user_note_chunks_fts` WHERE `docid`=OLD.`rowid`; END",
+                    "CREATE TRIGGER IF NOT EXISTS room_fts_content_sync_user_note_chunks_fts_BEFORE_DELETE BEFORE DELETE ON `user_note_chunks` BEGIN DELETE FROM `user_note_chunks_fts` WHERE `docid`=OLD.`rowid`; END",
+                    "CREATE TRIGGER IF NOT EXISTS room_fts_content_sync_user_note_chunks_fts_AFTER_UPDATE AFTER UPDATE ON `user_note_chunks` BEGIN INSERT INTO `user_note_chunks_fts`(`docid`, `text`) VALUES (NEW.`rowid`, NEW.`text`); END",
+                    "CREATE TRIGGER IF NOT EXISTS room_fts_content_sync_user_note_chunks_fts_AFTER_INSERT AFTER INSERT ON `user_note_chunks` BEGIN INSERT INTO `user_note_chunks_fts`(`docid`, `text`) VALUES (NEW.`rowid`, NEW.`text`); END",
+                ).forEach(connection::execSQL)
+            }
+        }
+
+        val MIGRATIONS: Array<Migration> = arrayOf(MIGRATION_1_2, MIGRATION_2_3, Migration3To4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9)
 
         /**
          * [withVectors]: sqlite-vec loaded on this device (see [SqliteVec.probe]). Its table is
