@@ -27,7 +27,9 @@ import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
@@ -106,9 +108,12 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.layout.Layout
+import androidx.compose.ui.layout.layout
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
@@ -116,7 +121,7 @@ import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -134,6 +139,7 @@ import kotlinx.coroutines.launch
 import java.util.Locale
 import kotlin.math.PI
 import kotlin.math.absoluteValue
+import kotlin.math.roundToInt
 import kotlin.math.sin
 
 /**
@@ -219,39 +225,58 @@ fun WelcomeTour(firstRun: Boolean, onDone: () -> Unit) {
     }
 }
 
-/** One page: the picture on its pane of glass, then what it is, in a few lines. */
+/**
+ * One page: the picture on its pane of glass, then what it is, in a few lines. The words come
+ * first in size: the picture takes the height they leave (seen on a 363 × 792 dp phone: at a fixed
+ * height, half of each page's points were under the fold), and its contents shrink to fit.
+ * Only where even the smallest picture leaves too little room does the page scroll.
+ */
 @Composable
 private fun TourPageContent(tour: TourPage, playing: Boolean, away: Float, firstRun: Boolean) {
-    Column(
-        Modifier
-            .fillMaxSize()
-            .fadingEdges(top = 8.dp, bottom = 20.dp)
-            .verticalScroll(rememberScrollState())
-            .padding(horizontal = 24.dp, vertical = 8.dp),
-    ) {
-        // The picture trails the swipe a little and dims as it goes, so the pages feel layered.
-        Box(
+    BoxWithConstraints(Modifier.fillMaxSize()) {
+        val room = maxHeight - PAGE_PADDING * 2
+        Column(
             Modifier
-                .fillMaxWidth()
-                .height(SCENE_HEIGHT)
-                .graphicsLayer {
-                    translationX = away * size.width * 0.18f
-                    val gone = away.absoluteValue.coerceIn(0f, 1f)
-                    alpha = 1f - gone * 0.6f
-                    scaleX = 1f - gone * 0.06f
-                    scaleY = 1f - gone * 0.06f
-                }
-                .liquidGlass(SceneShape, Glass.Pane, sheen = 0.4f)
-                .background(Brush.radialGradient(listOf(tour.accent.copy(alpha = 0.10f), Color.Transparent)))
-                .clearAndSetSemantics { contentDescription = tour.sceneDescription }
-                .padding(16.dp),
+                .fillMaxSize()
+                .fadingEdges(top = PAGE_PADDING, bottom = PAGE_PADDING)
+                .verticalScroll(rememberScrollState())
+                .padding(horizontal = 24.dp, vertical = PAGE_PADDING),
         ) {
-            Scene(tour.scene, playing)
+            PictureOverWords(
+                room,
+                picture = {
+                    // The picture trails the swipe a little and dims as it goes, so the pages feel layered.
+                    Box(
+                        Modifier
+                            .fillMaxSize()
+                            .graphicsLayer {
+                                translationX = away * size.width * 0.18f
+                                val gone = away.absoluteValue.coerceIn(0f, 1f)
+                                alpha = 1f - gone * 0.6f
+                                scaleX = 1f - gone * 0.06f
+                                scaleY = 1f - gone * 0.06f
+                            }
+                            .liquidGlass(SceneShape, Glass.Pane, sheen = 0.4f)
+                            .background(Brush.radialGradient(listOf(tour.accent.copy(alpha = 0.10f), Color.Transparent)))
+                            .clearAndSetSemantics { contentDescription = tour.sceneDescription }
+                            .padding(SCENE_PADDING),
+                    ) {
+                        Box(Modifier.fillMaxSize().scaledToFit(SCENE_HEIGHT - SCENE_PADDING * 2)) { Scene(tour.scene, playing) }
+                    }
+                },
+                words = { TourWords(tour, playing, firstRun) },
+            )
         }
+    }
+}
 
-        Spacer(Modifier.height(22.dp))
+/** The label, the title, a few lines, the points and where to find it. */
+@Composable
+private fun TourWords(tour: TourPage, playing: Boolean, firstRun: Boolean) {
+    Column {
+        Spacer(Modifier.height(18.dp))
         Row(verticalAlignment = Alignment.CenterVertically) {
-            Bead(tour.icon, tour.accent, size = 30.dp)
+            Bead(tour.icon, tour.accent, size = 28.dp)
             Spacer(Modifier.width(8.dp))
             Text(
                 tour.label.uppercase(Locale.getDefault()),
@@ -259,17 +284,17 @@ private fun TourPageContent(tour: TourPage, playing: Boolean, away: Float, first
                 color = tour.accent,
             )
         }
-        Spacer(Modifier.height(10.dp))
-        Text(tour.title, style = TitleStyle, color = AppColors.TextPrimary, modifier = Modifier.semantics { heading() })
         Spacer(Modifier.height(8.dp))
-        Text(tour.body, style = MaterialTheme.typography.bodyLarge, color = AppColors.TextSecondary)
+        Text(tour.title, style = TitleStyle, color = AppColors.TextPrimary, modifier = Modifier.semantics { heading() })
+        Spacer(Modifier.height(6.dp))
+        Text(tour.body, style = BodyStyle, color = AppColors.TextSecondary)
 
-        Spacer(Modifier.height(16.dp))
+        Spacer(Modifier.height(10.dp))
         tour.points.forEachIndexed { index, point ->
             Rise(playing, beat = 3 + index) {
-                Row(Modifier.padding(vertical = 5.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Box(Modifier.size(32.dp).glass(CircleShape, Glass.Raised), contentAlignment = Alignment.Center) {
-                        Icon(point.icon, contentDescription = null, tint = AppColors.TextPrimary, modifier = Modifier.size(17.dp))
+                Row(Modifier.padding(vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Box(Modifier.size(30.dp).glass(CircleShape, Glass.Raised), contentAlignment = Alignment.Center) {
+                        Icon(point.icon, contentDescription = null, tint = AppColors.TextPrimary, modifier = Modifier.size(16.dp))
                     }
                     Spacer(Modifier.width(12.dp))
                     Text(point.text, style = MaterialTheme.typography.bodyMedium, color = AppColors.TextPrimary)
@@ -279,17 +304,53 @@ private fun TourPageContent(tour: TourPage, playing: Boolean, away: Float, first
 
         val where = if (firstRun && tour.scene == SceneKind.PRIVACY) FIRST_RUN_NEXT else tour.where
         if (where != null) {
-            Spacer(Modifier.height(14.dp))
+            Spacer(Modifier.height(10.dp))
             Text(
                 where,
                 style = MaterialTheme.typography.bodySmall,
                 color = AppColors.TextSecondary,
                 modifier = Modifier
                     .glass(RoundedCornerShape(14.dp), Glass.Raised)
-                    .padding(horizontal = 12.dp, vertical = 8.dp),
+                    .padding(horizontal = 12.dp, vertical = 7.dp),
             )
         }
-        Spacer(Modifier.height(8.dp))
+    }
+}
+
+/**
+ * [picture] over [words], the picture as tall as [room] less the words, between [MIN_SCENE] and
+ * [SCENE_HEIGHT]. Measured here rather than by weight, since the page scrolls when even that
+ * isn't enough, and a scrolling column has no height to share out.
+ */
+@Composable
+private fun PictureOverWords(room: Dp, picture: @Composable () -> Unit, words: @Composable () -> Unit) {
+    Layout(contents = listOf(picture, words)) { (pictureParts, wordParts), constraints ->
+        val width = constraints.maxWidth
+        val placedWords = wordParts.single().measure(Constraints(maxWidth = width))
+        val pictureHeight = (room.roundToPx() - placedWords.height).coerceIn(MIN_SCENE.roundToPx(), SCENE_HEIGHT.roundToPx())
+        val placedPicture = pictureParts.single().measure(Constraints.fixed(width, pictureHeight))
+        layout(width, pictureHeight + placedWords.height) {
+            placedPicture.place(0, 0)
+            placedWords.place(0, pictureHeight)
+        }
+    }
+}
+
+/**
+ * Lays the content out at [design] height (and as wide as fits at that scale) and draws it scaled
+ * down to the height it is given: a shorter screen sees the same picture, smaller, not a cut one.
+ */
+private fun Modifier.scaledToFit(design: Dp): Modifier = layout { measurable, constraints ->
+    val width = constraints.maxWidth
+    val height = constraints.maxHeight
+    val scale = minOf(1f, height / design.toPx())
+    val placeable = measurable.measure(Constraints.fixed((width / scale).roundToInt(), (height / scale).roundToInt()))
+    layout(width, height) {
+        placeable.placeWithLayer(0, 0) {
+            scaleX = scale
+            scaleY = scale
+            transformOrigin = TransformOrigin(0f, 0f)
+        }
     }
 }
 
@@ -713,7 +774,11 @@ private fun PrivacyScene(playing: Boolean) {
             }
         }
         Spacer(Modifier.height(12.dp))
-        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+        // Whole chips to the next line on a narrow screen, never a word of one.
+        FlowRow(
+            horizontalArrangement = Arrangement.spacedBy(6.dp, Alignment.CenterHorizontally),
+            verticalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
             listOf("No account", "No ads", "No tracking").forEachIndexed { index, words ->
                 Rise(playing, 5 + index) { SceneChip(words, Icons.Filled.Check) }
             }
@@ -763,7 +828,7 @@ private fun SceneChip(text: String, icon: ImageVector? = null) {
             Icon(icon, contentDescription = null, tint = AppColors.TextPrimary, modifier = Modifier.size(13.dp))
             Spacer(Modifier.width(5.dp))
         }
-        Text(text, style = SceneSmall, color = AppColors.TextPrimary, textAlign = TextAlign.Center)
+        Text(text, style = SceneSmall, color = AppColors.TextPrimary, maxLines = 1, softWrap = false)
     }
 }
 
@@ -922,10 +987,17 @@ private val MapWater = Color(0xFFBFDDF5)
 private val PinRed = Color(0xFFE5484D)
 
 private const val BEAT_MS = 110L
+/** The picture's height where there is room; it is drawn for this, and scaled down from it. */
 private val SCENE_HEIGHT = 272.dp
+
+/** The least the picture shrinks to before the page scrolls instead. */
+private val MIN_SCENE = 188.dp
+private val SCENE_PADDING = 16.dp
+private val PAGE_PADDING = 12.dp
 private val SceneShape = RoundedCornerShape(28.dp)
 private val PanelShape = RoundedCornerShape(22.dp)
-private val TitleStyle = TextStyle(fontSize = 28.sp, lineHeight = 34.sp, fontWeight = FontWeight.SemiBold, letterSpacing = (-0.5).sp)
+private val TitleStyle = TextStyle(fontSize = 26.sp, lineHeight = 31.sp, fontWeight = FontWeight.SemiBold, letterSpacing = (-0.5).sp)
+private val BodyStyle = TextStyle(fontSize = 15.sp, lineHeight = 21.sp)
 private val SceneText = TextStyle(fontSize = 14.sp, lineHeight = 19.sp)
 private val SceneSmall = TextStyle(fontSize = 12.sp, lineHeight = 16.sp)
 private val SceneTiny = TextStyle(fontSize = 10.sp, lineHeight = 12.sp)
