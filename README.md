@@ -12,10 +12,11 @@ phone for it to think.
 
 Android 8 or newer · 64-bit phone · 8 GB of RAM or more · about 4.5 GB free
 
-<img src="promo/source/assets/screens/s_assist.png" width="190" alt="The assistant over the home screen, opened by holding the power button">&nbsp;
-<img src="promo/source/assets/screens/s_fact.png" width="190" alt="It remembers what you tell it">&nbsp;
-<img src="promo/source/assets/screens/s_reminder.png" width="190" alt="A reminder set by voice">&nbsp;
-<img src="promo/source/assets/screens/s_websearch.png" width="190" alt="An answer from the web">
+<img src="docs/screens/assist.jpg" width="160" alt="The assistant over the home screen, opened by holding the power button">&nbsp;
+<img src="docs/screens/home.jpg" width="160" alt="A new chat, with suggestions to start from">&nbsp;
+<img src="docs/screens/place_reminder.jpg" width="160" alt="A reminder that rings on reaching Munnar, with its map">&nbsp;
+<img src="docs/screens/web_search.jpg" width="160" alt="An answer from the web">&nbsp;
+<img src="docs/screens/drawer.jpg" width="160" alt="Past chats, with Photos, Notes, Reminders, About you and Settings">
 
 [Watch the one-minute tour](promo/LocalAssistant_Promo_720p.mp4)
 
@@ -23,15 +24,30 @@ Android 8 or newer · 64-bit phone · 8 GB of RAM or more · about 4.5 GB free
 
 ## What it can do
 
-- **Answers from the power button.** Hold it over any app, like Gemini: it listens, sends when you
-  pause, and answers out loud in a voice you pick.
-- **Remembers you.** Your profile, facts you mention ("my dentist is Dr. Rao"), photos you ask it
-  to keep, and what you talked about in earlier chats.
-- **Gets things done.** Reminders and events, alarms and timers, calls and messages (it opens the
-  dialer or messaging app ready to send), apps, the flashlight and silent mode, and sums.
+- **Answers from the power button.** Hold it over any app, like Gemini, or say "Hey Luna": it
+  listens, sends when you pause, and answers out loud in a voice you pick. It can see the screen
+  you called it over: "summarise this", "share this with Anjali".
+- **Remembers you.** Your profile, facts you mention ("my dentist is Dr. Rao"), images you ask it
+  to keep, and what you talked about in earlier chats. **About you** shows what it knows, to edit
+  or delete.
+- **Reminds you.** Reminders and events, repeating ones too ("every Monday"), and reminders for a
+  place: "buy milk when I'm near DMart" rings when you get there. Alarms and timers too.
+- **Keeps notes and lists.** "Add bread to my shopping list", "is bread on my list?"
+- **Calls and messages.** It opens the dialer, SMS, WhatsApp or email ready to send, and finds the
+  right contact even when a name is misheard. You tap send.
+- **Runs your phone.** Opens apps, turns on the flashlight, sets silent or vibrate, the volume and
+  Do Not Disturb, takes screenshots, and works out sums and unit conversions. Ask for several at
+  once: "call Mom and set an alarm for 7".
+- **Finds your photos and videos** by what's in them, who's in them, where and when: "beach
+  videos", "photos of Anjali in Munnar last December". It names faces from your contacts' photos.
+- **Reads your health data** from Health Connect: steps, distance, calories, heart rate, sleep and
+  workouts.
+- **Tells you what you missed** (off by default). When you come back to your phone, a card shows
+  who called and who's waiting on a reply, with replies ready to send.
 - **Looks things up** on the web, once you add a free [Tavily](https://tavily.com) key.
 - **Sees and hears.** Send it a photo or a voice message.
-- **Stays private.** Everything runs on the phone.
+- **Stays private.** It thinks on the phone, and keeps card numbers, ID numbers and photos of your
+  documents hidden until you confirm it's you with your fingerprint, face or PIN.
 
 ## Install
 
@@ -84,6 +100,11 @@ In the same place:
   get it again from Settings → Model and memory search. Without it, past chats are still found by
   keywords.
 - **Web search**: Settings → Web search, and paste a free key from [tavily.com](https://tavily.com).
+- **Photos**: tap **Photos** in the chat drawer and turn on photo search, a 0.39 GB download.
+  There, **Find people in your photos** groups faces and names them from your contacts' photos.
+- **Health data**: Settings → Health data → **Manage access**, to let it read Health Connect.
+- **While you were away**: Settings → While you were away, then allow notification access. The
+  notifications are read on the phone and kept for two days.
 
 ### Models and licences
 
@@ -105,10 +126,16 @@ In the same place:
 
 ## Privacy
 
-- The model runs on your phone. Your chats, what it remembers, your photos and your voice stay on
-  the phone.
-- The internet is used only to download the models and, if you turn it on, for web searches:
-  then your search goes to Tavily.
+- The model runs on your phone. Your chats, what it remembers, your photos, your health data and
+  your voice stay on the phone.
+- The internet is used to download the models, and for these only when you use them:
+  - **Web search**, once you add a key: your search goes to Tavily.
+  - **Place reminders**: the place's name ("DMart") and a rough area about 30 km across go to
+    OpenStreetMap's [Nominatim](https://nominatim.openstreetmap.org) search, to find it. Never the
+    reminder, nor exactly where you are.
+  - **Maps** for place reminders load from [OpenFreeMap](https://openfreemap.org).
+- Card numbers, ID numbers and photos of your documents stay hidden until you confirm it's you
+  with your fingerprint, face or PIN.
 - No account, no ads, no analytics.
 
 ## Troubleshooting
