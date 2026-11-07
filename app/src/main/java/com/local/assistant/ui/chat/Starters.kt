@@ -29,12 +29,16 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ArrowForward
 import androidx.compose.material.icons.outlined.Calculate
+import androidx.compose.material.icons.outlined.Checklist
+import androidx.compose.material.icons.outlined.DoneAll
 import androidx.compose.material.icons.outlined.Edit
 import androidx.compose.material.icons.outlined.Event
 import androidx.compose.material.icons.outlined.FlashlightOn
 import androidx.compose.material.icons.outlined.Lightbulb
+import androidx.compose.material.icons.outlined.MonitorHeart
 import androidx.compose.material.icons.outlined.NotificationsActive
 import androidx.compose.material.icons.outlined.PhotoLibrary
+import androidx.compose.material.icons.outlined.Place
 import androidx.compose.material.icons.outlined.Psychology
 import androidx.compose.material.icons.outlined.Public
 import androidx.compose.material.icons.outlined.Refresh
@@ -85,10 +89,15 @@ import kotlin.random.Random
 
 /** A first message to tap on a blank chat: one of the things the assistant can do. */
 data class Starter(val text: String, val kind: Kind, val needs: Needs = Needs.NOTHING) {
-    enum class Kind { GREETING, REMINDER, TIMER, AGENDA, MEMORY, PHOTOS, WEB, MATHS, PHONE, WRITING, IDEAS, FOOD, LANGUAGE, TRAVEL }
+    /** [plainChat]: what any chatbot answers, with none of this assistant's own abilities. */
+    enum class Kind(val plainChat: Boolean = false) {
+        GREETING, REMINDER, TIMER, AGENDA, MEMORY, PHOTOS, WEB, MATHS, PHONE,
+        WRITING(true), IDEAS(true), FOOD(true), LANGUAGE(true), TRAVEL(true),
+        PLACE, NOTES, HEALTH, SEVERAL,
+    }
 
     /** What must be set up first: a suggestion the assistant can't do yet isn't offered. */
-    enum class Needs { NOTHING, WEB, PHOTOS }
+    enum class Needs { NOTHING, WEB, PHOTOS, HEALTH }
 }
 
 object Starters {
@@ -96,24 +105,39 @@ object Starters {
     /**
      * Each one runs as it reads, so a tap shows off a real ability. Nothing that calls or messages
      * someone, or changes a setting that's hard to undo: a tap shouldn't do anything the user
-     * would regret. A reminder or timer comes with its Undo chip.
+     * would regret. A reminder or timer comes with its Undo chip; a note or list can be deleted.
      */
     val ALL = listOf(
         Starter("Remind me to drink water in an hour", Starter.Kind.REMINDER),
         Starter("Remind me to call mom tomorrow at 7 pm", Starter.Kind.REMINDER),
+        Starter("Remind me every Sunday at 8 pm to plan the week", Starter.Kind.REMINDER),
+        Starter("Remind me to water the plants when I get home", Starter.Kind.PLACE),
+        Starter("Remind me to charge my laptop when I reach the office", Starter.Kind.PLACE),
         Starter("Set a 10 minute timer for my tea", Starter.Kind.TIMER),
         Starter("What's on my schedule this week?", Starter.Kind.AGENDA),
+        Starter("Add a dentist visit on Friday at 4 pm", Starter.Kind.AGENDA),
+        Starter("Add milk, eggs and bread to my shopping list", Starter.Kind.NOTES),
+        Starter("Make a packing list for a weekend trip", Starter.Kind.NOTES),
         Starter("What do you know about me?", Starter.Kind.MEMORY),
         Starter("What did we talk about yesterday?", Starter.Kind.MEMORY),
+        Starter("Remember that I parked on level 2", Starter.Kind.MEMORY),
         Starter("Show me my sunset photos", Starter.Kind.PHOTOS, Starter.Needs.PHOTOS),
         Starter("Show me my photos from last month", Starter.Kind.PHOTOS, Starter.Needs.PHOTOS),
+        Starter("Find my beach videos", Starter.Kind.PHOTOS, Starter.Needs.PHOTOS),
         Starter("Find my driving licence", Starter.Kind.PHOTOS, Starter.Needs.PHOTOS),
+        Starter("How many steps have I walked today?", Starter.Kind.HEALTH, Starter.Needs.HEALTH),
+        Starter("How far did I walk this week?", Starter.Kind.HEALTH, Starter.Needs.HEALTH),
         Starter("What's the latest tech news?", Starter.Kind.WEB, Starter.Needs.WEB),
         Starter("What's the weather like today?", Starter.Kind.WEB, Starter.Needs.WEB),
         Starter("Who won the last cricket match?", Starter.Kind.WEB, Starter.Needs.WEB),
         Starter("What's an 18% tip on ₹2,450?", Starter.Kind.MATHS),
         Starter("Split ₹3,600 between 7 friends", Starter.Kind.MATHS),
+        Starter("How many km is a 26 mile marathon?", Starter.Kind.MATHS),
+        Starter("What's 98.6 °F in Celsius?", Starter.Kind.MATHS),
         Starter("Turn on the flashlight", Starter.Kind.PHONE),
+        Starter("Open the camera", Starter.Kind.PHONE),
+        Starter("Turn on the flashlight and set a 5 minute timer", Starter.Kind.SEVERAL),
+        Starter("Add coffee to my shopping list and remind me to shop at 6 pm", Starter.Kind.SEVERAL),
         Starter("Help me write a leave email to my manager", Starter.Kind.WRITING),
         Starter("Write a birthday wish for my best friend", Starter.Kind.WRITING),
         Starter("Explain black holes like I'm ten", Starter.Kind.IDEAS),
@@ -134,16 +158,22 @@ object Starters {
         Starter.Kind.GREETING,
     )
 
-    /** The greeting and [count] others at random, no two of a kind, only ones that are set up. */
-    fun pick(random: Random, hour: Int, web: Boolean, photos: Boolean, count: Int = 3): List<Starter> {
+    /**
+     * The greeting and [count] others at random, no two of a kind, only ones that are set up. At
+     * most one is [plain chat][Starter.Kind.plainChat]: the rest show what only this assistant does.
+     */
+    fun pick(random: Random, hour: Int, web: Boolean, photos: Boolean, health: Boolean = false, count: Int = 3): List<Starter> {
         val possible = ALL.filter {
             when (it.needs) {
                 Starter.Needs.NOTHING -> true
                 Starter.Needs.WEB -> web
                 Starter.Needs.PHOTOS -> photos
+                Starter.Needs.HEALTH -> health
             }
         }
-        return listOf(greeting(hour)) + possible.shuffled(random).distinctBy { it.kind }.take(count)
+        val (chat, own) = possible.shuffled(random).distinctBy { it.kind }.partition { it.kind.plainChat }
+        val shown = (own.take(count - 1) + chat.take(1) + own.drop(count - 1)).take(count)
+        return listOf(greeting(hour)) + shown.shuffled(random)
     }
 }
 
@@ -169,13 +199,14 @@ fun StarterPanel(
     name: String?,
     web: Boolean,
     photos: Boolean,
+    health: Boolean,
     enabled: Boolean,
     onPick: (String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val now = remember(chatKey) { LocalDateTime.now() }
     var shuffles by rememberSaveable(chatKey) { mutableIntStateOf(0) }
-    val starters = remember(chatKey, shuffles, web, photos) { Starters.pick(Random.Default, now.hour, web, photos, count = 4) }
+    val starters = remember(chatKey, shuffles, web, photos, health) { Starters.pick(Random.Default, now.hour, web, photos, health, count = 4) }
 
     Column(
         modifier
@@ -331,6 +362,10 @@ private fun icon(kind: Starter.Kind): ImageVector = when (kind) {
     Starter.Kind.FOOD -> Icons.Outlined.Restaurant
     Starter.Kind.LANGUAGE -> Icons.Outlined.Translate
     Starter.Kind.TRAVEL -> Icons.Outlined.TravelExplore
+    Starter.Kind.PLACE -> Icons.Outlined.Place
+    Starter.Kind.NOTES -> Icons.Outlined.Checklist
+    Starter.Kind.HEALTH -> Icons.Outlined.MonitorHeart
+    Starter.Kind.SEVERAL -> Icons.Outlined.DoneAll
 }
 
 private fun label(kind: Starter.Kind): String = when (kind) {
@@ -348,6 +383,10 @@ private fun label(kind: Starter.Kind): String = when (kind) {
     Starter.Kind.FOOD -> "Cooking"
     Starter.Kind.LANGUAGE -> "Languages"
     Starter.Kind.TRAVEL -> "Travel"
+    Starter.Kind.PLACE -> "Place reminders"
+    Starter.Kind.NOTES -> "Notes and lists"
+    Starter.Kind.HEALTH -> "Health"
+    Starter.Kind.SEVERAL -> "Two at once"
 }
 
 /** Each kind keeps its colour, so a reminder always looks like a reminder. */

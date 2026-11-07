@@ -81,6 +81,7 @@ import androidx.compose.material.icons.outlined.PowerSettingsNew
 import androidx.compose.material.icons.outlined.Psychology
 import androidx.compose.material.icons.outlined.RecordVoiceOver
 import androidx.compose.material.icons.outlined.Schedule
+import androidx.compose.material.icons.outlined.ScreenLockPortrait
 import androidx.compose.material.icons.outlined.ScreenshotMonitor
 import androidx.compose.material.icons.outlined.Search
 import androidx.compose.material.icons.outlined.Swipe
@@ -745,7 +746,7 @@ private fun StepRing(playing: Boolean, fraction: Float, modifier: Modifier) {
     }
 }
 
-/** A lens with a lock, a card number kept hidden, and what the app doesn't have. */
+/** A lens with a lock, a card number kept hidden, a command taken on the lock screen, and what the app doesn't have. */
 @Composable
 private fun PrivacyScene(playing: Boolean) {
     Column(Modifier.fillMaxSize(), horizontalAlignment = Alignment.CenterHorizontally) {
@@ -770,6 +771,19 @@ private fun PrivacyScene(playing: Boolean) {
                 Text("Card  •••• •••• •••• ••••", style = SceneText, color = AppColors.TextPrimary)
                 Spacer(Modifier.width(10.dp))
                 Icon(Icons.Outlined.Fingerprint, contentDescription = null, tint = Glass.Ink[0], modifier = Modifier.size(18.dp))
+            }
+        }
+        Spacer(Modifier.height(8.dp))
+        Rise(playing, 4) {
+            Row(
+                Modifier.glass(GlassShapes.Pill, Glass.Raised).padding(horizontal = 14.dp, vertical = 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Icon(Icons.Outlined.ScreenLockPortrait, contentDescription = null, tint = AppColors.TextSecondary, modifier = Modifier.size(15.dp))
+                Spacer(Modifier.width(8.dp))
+                Text("“Set a 10 minute timer”", style = SceneText, color = AppColors.TextPrimary)
+                Spacer(Modifier.width(10.dp))
+                Icon(Icons.Filled.Check, contentDescription = null, tint = Glass.Ink[1], modifier = Modifier.size(18.dp))
             }
         }
         Spacer(Modifier.height(12.dp))
@@ -953,9 +967,10 @@ private val TourPages = listOf(
             TourPoint(Icons.Outlined.Fingerprint, "Card and ID numbers hidden until your fingerprint, face or PIN"),
             TourPoint(Icons.Outlined.CloudOff, "The internet only for downloads, web search and finding places"),
             TourPoint(Icons.Outlined.Block, "No account, no ads, no tracking"),
+            TourPoint(Icons.Outlined.ScreenLockPortrait, "On the lock screen it takes commands, but says nothing about you"),
         ),
-        where = null,
-        sceneDescription = "A lock, and a card number kept hidden.",
+        where = "Lock screen use is off until you turn it on: Settings → Calling the assistant",
+        sceneDescription = "A lock, a card number kept hidden, and a timer set from the lock screen.",
     ),
 )
 

@@ -21,9 +21,27 @@ class StartersTest {
     @Test
     fun nothingThatIsNotSetUp() {
         repeat(50) { seed ->
-            val picked = Starters.pick(Random(seed), hour = 20, web = false, photos = false)
+            val picked = Starters.pick(Random(seed), hour = 20, web = false, photos = false, health = false, count = 4)
             assertTrue(picked.all { it.needs == Starter.Needs.NOTHING })
         }
+    }
+
+    @Test
+    fun atMostOnePlainChatAndTheRestItsOwn() {
+        repeat(200) { seed ->
+            val picked = Starters.pick(Random(seed), hour = 9, web = false, photos = false, count = 4).drop(1)
+            assertEquals(4, picked.size)
+            assertTrue(picked.count { it.kind.plainChat } <= 1)
+        }
+    }
+
+    @Test
+    fun everyKindTurnsUp() {
+        // The new abilities among them: place reminders, lists, health, two at once.
+        val seen = (0 until 400).flatMap { seed ->
+            Starters.pick(Random(seed), hour = 9, web = true, photos = true, health = true, count = 4).map { it.kind }
+        }.toSet()
+        assertEquals(Starter.Kind.entries.toSet(), seen)
     }
 
     @Test

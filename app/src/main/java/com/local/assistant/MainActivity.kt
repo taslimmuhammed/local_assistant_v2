@@ -329,6 +329,7 @@ private fun AppRoot(
         // Read again each time a screen closes: a key added or photos allowed shows up here.
         canSearchWeb = container.webSearch.enabled,
         canFindPhotos = container.photoSearchReady(),
+        canReadHealth = container.healthTools.available(),
         userName = userName,
         reminders = memoryViewModel,
         notes = notesViewModel,

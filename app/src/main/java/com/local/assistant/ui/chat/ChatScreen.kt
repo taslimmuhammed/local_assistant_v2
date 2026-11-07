@@ -145,9 +145,10 @@ fun ChatScreen(
     onOpenReminders: () -> Unit,
     onOpenPhotos: () -> Unit,
     onOpenSettings: () -> Unit,
-    /** Which starter suggestions can run: the web and photo ones need setting up first. */
+    /** Which starter suggestions can run: the web, photo and health ones need setting up first. */
     canSearchWeb: Boolean = false,
     canFindPhotos: Boolean = false,
+    canReadHealth: Boolean = false,
     /** The user's first name, for the hello on a blank chat. */
     userName: String? = null,
     /** Reminders as the Reminders screen has them: a place reminder's map in a reply opens its editor here. */
@@ -371,6 +372,7 @@ fun ChatScreen(
                             name = userName,
                             web = canSearchWeb,
                             photos = canFindPhotos,
+                            health = canReadHealth,
                             enabled = canSend && !isGenerating,
                             onPick = viewModel::send,
                             modifier = Modifier.fillMaxSize(),
