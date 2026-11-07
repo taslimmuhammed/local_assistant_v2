@@ -27,6 +27,7 @@ import androidx.compose.material.icons.automirrored.outlined.ArrowBack
 import androidx.compose.material.icons.automirrored.outlined.KeyboardArrowRight
 import androidx.compose.material.icons.outlined.FavoriteBorder
 import androidx.compose.material.icons.outlined.History
+import androidx.compose.material.icons.outlined.Explore
 import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material.icons.outlined.Memory
 import androidx.compose.material.icons.outlined.Mic
@@ -142,6 +143,7 @@ fun SettingsScreen(
     onOpenProfile: () -> Unit,
     onOpenModel: () -> Unit,
     onOpenWebSearch: () -> Unit,
+    onOpenTour: () -> Unit,
 ) {
     val snackbar = remember { SnackbarHostState() }
     LaunchedEffect(memory) { memory.notices.collect { snackbar.showSnackbar(it.message) } }
@@ -177,7 +179,7 @@ fun SettingsScreen(
                 // Each page is one card of glass, the brief's.
                 GlassCard(Modifier.padding(start = 12.dp, end = 12.dp, top = 8.dp), padding = 6.dp) {
                 when (section) {
-                    null -> MainPage(settings, webSearchOn, memory, health, onSection, onOpenProfile, onOpenWebSearch)
+                    null -> MainPage(settings, webSearchOn, memory, health, onSection, onOpenProfile, onOpenWebSearch, onOpenTour)
                     SettingsSection.CALLING -> CallingSettings(settings)
                     SettingsSection.VOICE -> VoiceSettings(settings, speaker, voicePacks)
                     SettingsSection.AWAY -> AwaySettings(settings, awayBrief)
@@ -216,6 +218,7 @@ private fun MainPage(
     onSection: (SettingsSection) -> Unit,
     onOpenProfile: () -> Unit,
     onOpenWebSearch: () -> Unit,
+    onOpenTour: () -> Unit,
 ) {
     val context = LocalContext.current
     val healthAccess = rememberHealthAccess(health)
@@ -261,6 +264,7 @@ private fun MainPage(
         SettingsSection.MEMORY.title,
         if (paused) "Memory paused" else "Remembering \u00b7 " + if (retention == 0) "chats kept for good" else "chats kept for ${retentionLabel(retention)}",
     ) { onSection(SettingsSection.MEMORY) }
+    SectionRow(Icons.Outlined.Explore, "Take the tour", "What the assistant can do, in eight short pages", onOpenTour)
     SectionRow(Icons.Outlined.Info, SettingsSection.ABOUT.title, "The models the app runs, and their licences") { onSection(SettingsSection.ABOUT) }
     if (WakeSamples.available(context)) {
         SectionRow(Icons.Outlined.Science, SettingsSection.TEST_BUILD.title, "Wake word samples for training") { onSection(SettingsSection.TEST_BUILD) }

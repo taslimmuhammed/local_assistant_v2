@@ -37,6 +37,7 @@ import com.local.assistant.ui.settings.SettingsScreen
 import com.local.assistant.ui.settings.SettingsSection
 import com.local.assistant.ui.setup.ModelScreen
 import com.local.assistant.ui.setup.PreparingScreen
+import com.local.assistant.ui.setup.WelcomeTour
 import com.local.assistant.ui.web.WebSearchScreen
 import com.local.assistant.ui.web.WebSearchViewModel
 import com.local.assistant.ui.theme.LocalAssistantTheme
@@ -122,6 +123,8 @@ private fun AppRoot(
     var showProfileScreen by remember { mutableStateOf(false) }
     var showWebSearchScreen by remember { mutableStateOf(false) }
     var showPhotosScreen by remember { mutableStateOf(false) }
+    var showTour by remember { mutableStateOf(false) }
+    var tourSeen by remember { mutableStateOf(container.settings.tourSeen) }
     var profileAsked by remember { mutableStateOf(container.settings.profileAsked) }
     var webSearchAsked by remember { mutableStateOf(container.settings.webSearchAsked || container.webSearch.enabled) }
 
@@ -153,6 +156,7 @@ private fun AppRoot(
         showProfileScreen = false
         showWebSearchScreen = false
         showPhotosScreen = false
+        showTour = false
     }
     // The lock-screen notice: straight to Settings, where talking on the lock screen is turned on.
     LaunchedEffect(settingsToOpen) {
@@ -164,12 +168,22 @@ private fun AppRoot(
         showProfileScreen = false
         showWebSearchScreen = false
         showPhotosScreen = false
+        showTour = false
         showSettings = true
         settingsSection = SettingsSection.CALLING
         onSettingsOpened()
     }
 
-    // First launch: a few details about the user before anything else. Skippable.
+    // First launch: what the app can do, before anything is asked. Skippable.
+    if (!tourSeen) {
+        WelcomeTour(firstRun = true, onDone = {
+            container.settings.tourSeen = true
+            tourSeen = true
+        })
+        return
+    }
+
+    // Then a few details about the user. Skippable.
     if (!profileAsked) {
         val profileViewModel: ProfileViewModel = viewModel(factory = ProfileViewModel.factory(container))
         ProfileScreen(viewModel = profileViewModel, onboarding = true, onDone = { profileAsked = true })
@@ -224,6 +238,11 @@ private fun AppRoot(
         WebSearchScreen(viewModel = webViewModel, onBack = { showWebSearchScreen = false })
         return
     }
+    // The tour again, from Settings, and back to it.
+    if (showTour) {
+        WelcomeTour(firstRun = false, onDone = { showTour = false })
+        return
+    }
     if (showSettings) {
         BackHandler {
             showSettings = false
@@ -248,6 +267,7 @@ private fun AppRoot(
             onOpenProfile = { showProfileScreen = true },
             onOpenModel = { showModelScreen = true },
             onOpenWebSearch = { showWebSearchScreen = true },
+            onOpenTour = { showTour = true },
         )
         return
     }
