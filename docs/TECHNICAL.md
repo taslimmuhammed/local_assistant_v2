@@ -179,7 +179,10 @@ models are never compared: changing the embedder sends the archive back to the b
 The embedder is optional and set up under Settings → Model and memory search. It is the photo
 model's text side, **EmbeddingGemma 2** (see Photos): one engine, `gallery/GalleryEmbedder`,
 serves both, so they share one download and one copy in memory (`memory/embed/PhotoModelEmbedder`).
-Memory search holds it from its first use in the foreground until it is unloaded; photo search
+Memory search holds it while the app is in front: it loads as the app or the overlay comes up
+(`EmbeddingQueue`, about half a second) and goes once the app is out of sight and the backlog
+is done (on every phone since 7 Nov 2026, so the home screen has ≈190 MB less to take back when
+the app is left; before, only on phones of 8 GB or less). Photo search
 releases it when done, which reopens it without the vision encoder if an image had loaded it
 (≈350 MB of the engine's memory). It downloads by itself right after the first chat model
 (`AppContainer.fetchPhotoModelAfterFirstModel`), and from the screen above. An embedder imported
@@ -1111,8 +1114,11 @@ So the model answers in under a second; the waiting was loading it and reading t
 - `ConversationManager.prepareFresh` opens and prefills a conversation for a chat not begun yet,
   and a new chat's first message takes it over if its prompt still matches. The overlay asks for
   it as it opens, so the prefill runs while the user talks; with the assistant kept ready, it is
-  also done a minute after the app goes to the background, and 30 s after background model work
-  (summaries, extraction) closed it. Only one conversation ever exists, so a chat left open in the
+  also done once the app is away and the screen has been off for a minute (five minutes away if
+  the screen stays on), and 30 s after background model work (summaries, extraction) closed it.
+  Until 7 Nov 2026 it was a minute after the app left, screen on or not: its prefill re-reads
+  ~860 MB of the model and the phone frees ~1.5 GB for it, which stuttered the screen for a
+  second or two (≈455 allocation stalls on the OnePlus). Only one conversation ever exists, so a chat left open in the
   app is rebuilt when the user returns to it.
 - **Keep the assistant ready** (Settings → Model, on by default): the model isn't released
   when the app goes to the background, and `assist/KeepReadyService`, a foreground service with a
@@ -1150,11 +1156,17 @@ installed, or the engine fails to load).
   once a piece reaches 12 words. Before 2026-10-29 only whole sentences went, so the voice waited
   for the first full stop and then for that whole sentence to be made (the user heard the lag);
   a one-sentence reply was only spoken once the text was done. `NaturalVoiceEvalTest#whileWriting`
-  compares both ways on real streaming replies.
+  compares both ways on real streaming replies. Text that arrives in a burst is cut as if it had
+  come a word at a time: the reply's opening is held back until it is known not to claim an
+  action (Tools), then arrives whole, and cut as one it made the whole first sentence the first
+  piece. On the OnePlus (7 Nov 2026) a 30-word first sentence was heard 6–9 s after the text was
+  all there; streamed, the first piece is 9 words.
 - **Playback**: the pieces are synthesised one after another on a
   6-thread engine while the previous one plays through an `AudioTrack` (assistant usage, float
   PCM at 24 kHz). The model loads as the overlay opens (`Speaker.prepare`, beside
-  `prepareFresh`) and is released after two quiet minutes or when Android trims memory.
+  `prepareFresh`) and is released after two quiet minutes, as soon as it is quiet once the app is
+  out of sight (`Speaker.setAway`; a reply being read goes on to its end), or when Android trims
+  memory.
 - **Measured on the OnePlus** (`NaturalVoiceEvalTest`, `-e eval natural-voice`; `#speed` and
   `#firstSound`): install 178 s download plus 145 s check and unpack; loads in 0.8–1.3 s; PSS
   +472–481 MB loaded, +604–613 MB peak. Speed over two runs, × real time: 0.85–0.90 on 2

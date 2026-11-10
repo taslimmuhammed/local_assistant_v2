@@ -68,6 +68,14 @@ sealed interface PlaceWords {
         }
 
         /**
+         * Whether [text], given as when something should ring, says arriving somewhere rather
+         * than a time: "when I reach avilora", "before I reach Bangalore", "5 km before Munnar".
+         * Gemma passed an alarm's place so (8 Nov 2026), as set_alarm's when.
+         */
+        fun isArrival(text: String): Boolean =
+            (ARRIVAL.containsMatchIn(text) || DistanceWords.find(text) != null) && strip(text).any(Char::isLetter)
+
+        /**
          * [raw] without the words around a place's name: "near the nearest DMart store" is "DMart
          * store", and "5 km before I reach Munnar" is "Munnar" (the distance is [DistanceWords]').
          */
@@ -86,9 +94,13 @@ sealed interface PlaceWords {
         /** Said before a place, never part of it. */
         private val LEADING = Regex(
             "^(?:when i (?:reach|get to|arrive at)|when i(?:'m| am) at|i (?:reach|get to)|reaching|reach|get to|arrive at|" +
+                "before|once|as soon as|on|" +
                 "near to|nearby|near|close to|around|next to|at|to|in|the|any|a|an|some|nearest|closest|one of the)(?:\\s+|$)",
             RegexOption.IGNORE_CASE,
         )
+
+        /** Arriving, as against a time: "when I reach", "get to", "near". */
+        private val ARRIVAL = Regex("\\b(?:reach|reaching|reaches|get to|arrive|arriving|near|close to)\\b", RegexOption.IGNORE_CASE)
 
         /** Said after a place, never part of it. */
         private val TRAILING = Regex("\\s+(?:nearby|near me|close by|anywhere|branch|branches|outlet|outlets)$", RegexOption.IGNORE_CASE)

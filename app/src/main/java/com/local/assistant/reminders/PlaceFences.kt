@@ -20,6 +20,7 @@ import com.google.android.gms.location.GeofenceStatusCodes
 import com.google.android.gms.location.GeofencingRequest
 import com.google.android.gms.location.LocationServices
 import com.google.android.gms.common.api.ApiException
+import com.local.assistant.assist.KeepReadyService
 import com.local.assistant.memory.db.TaskPlace
 
 /**
@@ -36,6 +37,9 @@ interface PlaceFences {
     /** Stops watching reminder [taskId]'s spots; nothing to do if it had none. */
     fun stopWatching(taskId: Long)
 
+    /** The reminders whose spots are watched, or wait to be until location is allowed. */
+    fun watched(): Set<Long>
+
     companion object {
         /**
          * Play Services' geofencing where the phone has it: it watches with the least power,
@@ -50,6 +54,9 @@ interface PlaceFences {
                 ProximityFences(context)
             }
 
+        /** Whether an arrival may come for some reminder, so the app must stay awake for it ([Watched]). */
+        fun watching(context: Context): Boolean = allowed(context) && Watched(context).ids().isNotEmpty()
+
         /** Whether Android will tell this app of an arrival with the app closed. */
         fun allowed(context: Context): Boolean {
             fun granted(permission: String) = ContextCompat.checkSelfPermission(context, permission) == PackageManager.PERMISSION_GRANTED
@@ -62,15 +69,27 @@ interface PlaceFences {
 /**
  * How many spots each reminder has watched, so stopping one knows which fences to take down,
  * and a reminder at a time (most of them) costs nothing to cancel.
+ *
+ * Whether any are watched also keeps the app awake ([KeepReadyService]): with the screen off,
+ * OxygenOS freezes a background app, and an arrival Play Services sent waited until the screen
+ * came on (the user, 9 Nov 2026), so the alarm rang on a phone in use, as a banner.
  */
-private class Watched(context: Context) {
+private class Watched(private val context: Context) {
     private val prefs = context.getSharedPreferences("place_fences", Context.MODE_PRIVATE)
 
     fun count(taskId: Long): Int? = prefs.getInt(taskId.toString(), -1).takeIf { it >= 0 }
 
-    fun set(taskId: Long, count: Int) = prefs.edit { putInt(taskId.toString(), count) }
+    fun ids(): Set<Long> = prefs.all.keys.mapNotNull { it.toLongOrNull() }.toSet()
 
-    fun remove(taskId: Long) = prefs.edit { remove(taskId.toString()) }
+    fun set(taskId: Long, count: Int) {
+        prefs.edit { putInt(taskId.toString(), count) }
+        KeepReadyService.update(context)
+    }
+
+    fun remove(taskId: Long) {
+        prefs.edit { remove(taskId.toString()) }
+        KeepReadyService.update(context)
+    }
 }
 
 /**
@@ -82,6 +101,7 @@ class PlayGeofences(private val context: Context, private val initialEnter: Bool
 
     private val client by lazy { LocationServices.getGeofencingClient(context) }
     private val watched = Watched(context)
+    private val lookout = PlaceLookout(context)
 
     @SuppressLint("MissingPermission")
     override fun watch(taskId: Long, place: TaskPlace) {
@@ -119,14 +139,20 @@ class PlayGeofences(private val context: Context, private val initialEnter: Bool
         } catch (e: SecurityException) {
             Log.w(TAG, "Location permission withdrawn; reminder $taskId not watched", e)
         }
+        // The geofences alone wait for the screen to come on (see PlaceLookout).
+        lookout.start()
     }
 
     override fun stopWatching(taskId: Long) {
         val count = watched.count(taskId) ?: return
         watched.remove(taskId)
         if (count > 0) client.removeGeofences((0 until count).map { PlaceAlerts.fenceId(taskId, it) })
+        lookout.forget(taskId)
+        if (watched.ids().isEmpty()) lookout.stop()
         Log.i(TAG, "Stopped watching reminder $taskId")
     }
+
+    override fun watched(): Set<Long> = watched.ids()
 
     private companion object {
         const val TAG = "PlaceFences"
@@ -169,6 +195,8 @@ class ProximityFences(private val context: Context) : PlaceFences {
         watched.remove(taskId)
         (0 until count).forEach { manager?.removeProximityAlert(intent(taskId, it)) }
     }
+
+    override fun watched(): Set<Long> = watched.ids()
 
     /** One intent per spot, told apart by its data; Android adds whether the phone is entering. */
     private fun intent(taskId: Long, spot: Int): PendingIntent = PendingIntent.getBroadcast(

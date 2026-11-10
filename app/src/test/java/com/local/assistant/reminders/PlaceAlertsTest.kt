@@ -37,6 +37,29 @@ class PlaceAlertsTest {
     }
 
     @Test
+    fun `once it rings it is over, and next time opens it again for another visit`() {
+        val rang = PlaceAlerts.rang(task, now)
+        assertEquals(TaskStatus.DONE, rang.status)
+        assertEquals(now, rang.completedAt)
+        assertEquals(now, rang.place!!.rangAt)
+        assertFalse(PlaceAlerts.shouldRing(rang, now + PlaceAlerts.QUIET_MS))
+
+        val again = PlaceAlerts.nextTime(rang, now + 60_000L)!!
+        assertEquals(TaskStatus.OPEN, again.status)
+        assertNull(again.completedAt)
+        assertEquals(place.spots, again.place!!.spots)
+        // Not on the visit it rang on: on the next one.
+        assertFalse(PlaceAlerts.shouldRing(again, now + 60_000L))
+        assertTrue(PlaceAlerts.shouldRing(again, now + PlaceAlerts.QUIET_MS))
+    }
+
+    @Test
+    fun `next time does nothing for a reminder deleted since, or one at a time`() {
+        assertNull(PlaceAlerts.nextTime(task.copy(status = TaskStatus.CANCELLED), now))
+        assertNull(PlaceAlerts.nextTime(task.copy(place = null, dueAt = now), now))
+    }
+
+    @Test
     fun `done, cancelled or timed reminders don't ring at a place`() {
         assertFalse(PlaceAlerts.shouldRing(task.copy(status = TaskStatus.DONE), now))
         assertFalse(PlaceAlerts.shouldRing(task.copy(status = TaskStatus.CANCELLED), now))

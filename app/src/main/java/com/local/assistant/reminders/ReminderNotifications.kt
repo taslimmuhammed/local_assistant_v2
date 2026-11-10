@@ -34,10 +34,13 @@ object ReminderNotifications {
     private const val FIRST_CHANNEL = "reminders"
 
     /**
-     * Arriving at a place: its own channel, so it can ring longer and be set apart in the
-     * system's settings. Same tone and stream as reminders, so silent mode still holds.
+     * Arriving at a place: an alarm, on the alarm stream, so it rings through silent mode as the
+     * clock's alarms do. A place reminder is about now, and on the notification stream it was one
+     * more line among the others (the user, 8 Nov 2026). A new channel, since a channel's sound
+     * can't be changed; the first, on the notification stream, is removed.
      */
-    private const val PLACE_CHANNEL = "place_alerts"
+    private const val PLACE_CHANNEL = "place_alarms"
+    private const val FIRST_PLACE_CHANNEL = "place_alerts"
 
     /**
      * Reminders play the phone's alarm tone — music, rather than a ding that is easy to miss —
@@ -63,12 +66,13 @@ object ReminderNotifications {
             vibrationPattern = longArrayOf(0, 400, 200, 400)
         }
         manager.createNotificationChannel(channel)
-        val place = NotificationChannel(PLACE_CHANNEL, "Place reminders", NotificationManager.IMPORTANCE_HIGH).apply {
-            description = "Reminders that ring when you reach a place, like a shop or your office"
+        manager.deleteNotificationChannel(FIRST_PLACE_CHANNEL)
+        val place = NotificationChannel(PLACE_CHANNEL, "Place alarms", NotificationManager.IMPORTANCE_HIGH).apply {
+            description = "Reminders and alarms that ring when you reach a place, like a shop or a town. They ring like an alarm, even on silent."
             setSound(
                 tone,
                 AudioAttributes.Builder()
-                    .setUsage(AudioAttributes.USAGE_NOTIFICATION_EVENT)
+                    .setUsage(AudioAttributes.USAGE_ALARM)
                     .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
                     .build(),
             )
@@ -111,45 +115,39 @@ object ReminderNotifications {
     }
 
     /**
-     * "Buy milk" — "You're near DMart, Hoodi Main Road". Rings like an alarm: the tone repeats
-     * until the user looks (opening the shade or the notification stops it), since a place
-     * reminder is about now, and a ding in a pocket in a shop is easy to miss.
+     * "Buy milk" — "You're near DMart, Hoodi Main Road", as an alarm: on a locked or sleeping
+     * phone the whole screen ([PlaceAlarmActivity]), in use a banner that stays until answered.
+     * The tone repeats until Dismiss or Next time, or the notification is opened: a ding in a
+     * pocket in a shop is easy to miss.
      */
     fun showPlace(context: Context, task: TaskEntity, spot: PlaceSpot?) {
         if (!canPost(context)) return
         val place = task.place ?: return
         val id = task.id.toInt()
-        val open = PendingIntent.getActivity(
-            context,
-            id,
-            Intent(context, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP),
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
-        )
-        val nextTime = PendingIntent.getBroadcast(
-            context,
-            id,
-            Intent(context, PlaceReminderReceiver::class.java)
-                .setAction(PlaceReminderReceiver.ACTION_NEXT_TIME)
-                .putExtra(ReminderReceiver.EXTRA_TASK_ID, task.id),
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
-        )
         val where = listOfNotNull(place.name, spot?.label?.takeUnless { it.equals(place.name, ignoreCase = true) }).joinToString(", ")
+        val text = when (val reach = place.distance) {
+            null -> "You're near $where"
+            else -> if (reach.beforeArriving) "You're about ${reach.words()} from $where" else "You're within ${reach.words()} of $where"
+        }
+        val screen = PendingIntent.getActivity(
+            context,
+            id,
+            PlaceAlarmActivity.intent(context, task.id, task.title, text),
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+        )
         val notification = NotificationCompat.Builder(context, PLACE_CHANNEL)
             .setSmallIcon(R.drawable.ic_notification_reminder)
             .setContentTitle(task.title)
-            .setContentText(
-                when (val reach = place.distance) {
-                    null -> "You're near $where"
-                    else -> if (reach.beforeArriving) "You're about ${reach.words()} from $where" else "You're within ${reach.words()} of $where"
-                },
-            )
-            .setCategory(NotificationCompat.CATEGORY_REMINDER)
+            .setContentText(text)
+            .setCategory(NotificationCompat.CATEGORY_ALARM)
             .setPriority(NotificationCompat.PRIORITY_MAX)
-            .setAutoCancel(true)
-            .setContentIntent(open)
+            .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
+            .setOngoing(true)
+            .setContentIntent(screen)
+            .setFullScreenIntent(screen, true)
             .setShowWhen(true)
-            .addAction(0, "Done", action(context, task.id, ReminderActionReceiver.ACTION_DONE))
-            .addAction(0, "Next time", nextTime)
+            .addAction(0, "Dismiss", placeAction(context, task.id, PlaceReminderReceiver.ACTION_DISMISS))
+            .addAction(0, "Next time", placeAction(context, task.id, PlaceReminderReceiver.ACTION_NEXT_TIME))
             .build()
         notification.flags = notification.flags or Notification.FLAG_INSISTENT
         try {
@@ -207,4 +205,20 @@ object ReminderNotifications {
         Intent(context, ReminderActionReceiver::class.java).setAction(action).putExtra(ReminderReceiver.EXTRA_TASK_ID, taskId),
         PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
     )
+
+    /** A place alarm's own buttons, also sent by its full screen. */
+    fun placeAction(context: Context, taskId: Long, action: String): PendingIntent = PendingIntent.getBroadcast(
+        context,
+        taskId.toInt(),
+        Intent(context, PlaceReminderReceiver::class.java).setAction(action).putExtra(ReminderReceiver.EXTRA_TASK_ID, taskId),
+        PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+    )
+
+    /**
+     * Whether a place alarm can take the whole screen of a locked phone: from Android 14 only an
+     * alarm or calling app may, unless the user allows it. Without it, it rings as a banner.
+     */
+    fun canUseFullScreen(context: Context): Boolean =
+        Build.VERSION.SDK_INT < Build.VERSION_CODES.UPSIDE_DOWN_CAKE ||
+            context.getSystemService(NotificationManager::class.java).canUseFullScreenIntent()
 }

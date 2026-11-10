@@ -183,10 +183,11 @@ class LlmService(
         }
         exactDigits = precision == ModelPrecision.Outcome.PATCHED || precision == ModelPrecision.Outcome.ALREADY_FP32
         Log.i(TAG, "Text decoder precision: $precision")
-        val modalities = withContext(Dispatchers.IO) { probeModalities(modelPath) }
+        val declared = withContext(Dispatchers.IO) { declarations(modelPath) }
+        val modalities = declared.modalities
         _modalities.value = modalities
-        visionTokensPerImage = withContext(Dispatchers.IO) { probeVisionTokens(modelPath) }
-        val features = withContext(Dispatchers.IO) { probeFeatures(modelPath) }
+        visionTokensPerImage = declared.visionTokens
+        val features = declared.features
 
         val died = settings.initInFlightTokens
         if (died > SettingsStore.DEFAULT_CONTEXT_TOKENS && died == settings.contextTokens) {
@@ -285,27 +286,49 @@ class LlmService(
         }
     }
 
-    /** The model's own vision token budget, used when costing images against the window. */
-    private fun probeVisionTokens(modelPath: String): Int = runCatching {
-        ModelInfo.from(modelPath).use { it.maxVisionTokenBudget() }
-    }.getOrNull()?.takeIf { it > 0 } ?: DEFAULT_VISION_TOKENS
-
-    /** Reads the model file's own declaration of what it accepts. Cheap: it does not load it. */
-    private fun probeModalities(modelPath: String): SupportedModalities? = runCatching {
-        ModelInfo.from(modelPath).use { it.inputModalities() }
-    }.onFailure { Log.w(TAG, "Could not read model capabilities", it) }.getOrNull()
-
     private data class ModelFeatures(val functionCalling: Boolean, val thinking: Boolean, val speculative: Boolean)
 
-    /** What the model file says it can do. Unknown reads as "no", never as "yes". */
-    private fun probeFeatures(modelPath: String): ModelFeatures = runCatching {
-        ModelInfo.from(modelPath).use {
-            val llm = it as? ModelInfo.Llm ?: error("Not a chat model: ${it.modelType}")
-            ModelFeatures(llm.supportsFunctionCalling(), llm.supportsThinking(), llm.hasSpeculativeDecodingSupport())
+    /**
+     * What the model file declares: the inputs it accepts, its vision token budget (used when
+     * costing images against the window) and what it can do. Unknown reads as "no", never as
+     * "yes". Cheap next to loading: it does not load the model.
+     */
+    private data class Declarations(val modalities: SupportedModalities?, val visionTokens: Int, val features: ModelFeatures)
+
+    /** The last file read, with its size and date, so a reload of the same file doesn't read it again. */
+    private var declared: Pair<String, Declarations>? = null
+
+    /**
+     * [Declarations], from one opening of the file: three, one per question, took about half a
+     * second of each load on the OnePlus (7 Nov 2026).
+     */
+    private fun declarations(modelPath: String): Declarations {
+        val file = File(modelPath)
+        val key = "$modelPath:${file.length()}:${file.lastModified()}"
+        declared?.let { (forKey, known) -> if (forKey == key) return known }
+        val started = SystemClock.elapsedRealtime()
+        val read = runCatching {
+            ModelInfo.from(modelPath).use { info ->
+                Declarations(
+                    modalities = runCatching { info.inputModalities() }
+                        .onFailure { Log.w(TAG, "Could not read model capabilities", it) }
+                        .getOrNull(),
+                    visionTokens = runCatching { info.maxVisionTokenBudget() }.getOrNull()?.takeIf { it > 0 } ?: DEFAULT_VISION_TOKENS,
+                    features = runCatching {
+                        val llm = info as? ModelInfo.Llm ?: error("Not a chat model: ${info.modelType}")
+                        ModelFeatures(llm.supportsFunctionCalling(), llm.supportsThinking(), llm.hasSpeculativeDecodingSupport())
+                    }
+                        .onFailure { Log.w(TAG, "Could not read model features", it) }
+                        .getOrDefault(UNKNOWN_FEATURES),
+                )
+            }
         }
-    }.onFailure { Log.w(TAG, "Could not read model features", it) }
-        .getOrDefault(ModelFeatures(functionCalling = false, thinking = false, speculative = false))
-        .also { Log.i(TAG, "Model features: $it") }
+            .onFailure { Log.w(TAG, "Could not read the model file's declarations", it) }
+            .getOrNull()
+        Log.i(TAG, "Model features: ${read?.features ?: UNKNOWN_FEATURES}, read in ${SystemClock.elapsedRealtime() - started} ms")
+        // Not kept when the file couldn't be read: the next load tries again.
+        return read?.also { declared = key to it } ?: Declarations(null, DEFAULT_VISION_TOKENS, UNKNOWN_FEATURES)
+    }
 
     /** Loads the engine if needed and waits for it. Null if no model can be loaded. */
     suspend fun awaitEngine(): Engine? = ensureEngine()
@@ -402,6 +425,8 @@ class LlmService(
         private const val TAG = "LlmService"
         private const val NEARLY_FULL_FRACTION = 0.85f
         private const val DEFAULT_VISION_TOKENS = 256
+
+        private val UNKNOWN_FEATURES = ModelFeatures(functionCalling = false, thinking = false, speculative = false)
 
     }
 }

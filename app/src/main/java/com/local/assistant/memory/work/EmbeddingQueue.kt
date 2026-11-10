@@ -30,8 +30,6 @@ class EmbeddingQueue(
     private val scheduler: ModelScheduler,
     private val scope: CoroutineScope,
     private val inForeground: () -> Boolean,
-    /** Small-memory devices give the embedder's memory back once the backlog is done. */
-    private val unloadWhenDrained: Boolean,
     /** Saved images, embedded by their title and details so recall can find them by meaning. */
     private val notes: com.local.assistant.memory.db.NoteDao? = null,
     /** The parts of the user's notes and lists, remade (unembedded) each time a note changes. */
@@ -111,7 +109,11 @@ class EmbeddingQueue(
         if (embedded > 0) Log.i(TAG, "Embedded $embedded chunks; ${_remaining.value} left")
         embedNotes(modelId)
         embedUserNotes(modelId)
-        if (unloadWhenDrained && !inForeground()) embedder.unload()
+        // Out of sight, the model's ≈190 MB goes back once the backlog is done; it was small phones
+        // only until 7 Nov 2026. Held, it is that much more the home screen has to take back when
+        // the app is left (≈2,000 allocation stalls on the OnePlus as Home was pressed). Coming
+        // back, or the power button, loads it again in about half a second (above).
+        if (!inForeground()) embedder.unload()
     }
 
     /** Parts of notes not yet embedded by this model: a changed note's new parts, a batch at a time. */

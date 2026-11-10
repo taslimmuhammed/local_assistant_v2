@@ -62,6 +62,9 @@
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
     <uses-permission android:name="android.permission.ACCESS_BACKGROUND_LOCATION" />
 
+    <!-- A place alarm takes the whole screen of a locked phone, as the clock's alarms do. -->
+    <uses-permission android:name="android.permission.USE_FULL_SCREEN_INTENT" />
+
     <!-- "Turn on Do Not Disturb": the user still has to allow it in Settings. -->
     <uses-permission android:name="android.permission.ACCESS_NOTIFICATION_POLICY" />
 
@@ -181,6 +184,18 @@
             android:windowSoftInputMode="adjustResize|stateHidden"
             android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboard|keyboardHidden|navigation|uiMode|density" />
 
+        <!-- A place alarm ringing on a locked or sleeping phone: the whole screen, over the lock
+             screen, opened by its notification. See-through like the overlay, so what's behind
+             shows frosted. Its own task, out of Recents. -->
+        <activity
+            android:name=".reminders.PlaceAlarmActivity"
+            android:exported="false"
+            android:excludeFromRecents="true"
+            android:launchMode="singleTask"
+            android:taskAffinity="com.local.assistant.alarm"
+            android:theme="@style/Theme.LocalAssistant.Assist"
+            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboard|keyboardHidden|navigation|uiMode|density" />
+
         <!-- Reads incoming notifications for "While you were away", once the user has turned it on
              and given the app notification access in Android's settings. What it keeps stays on
              the phone, in its own database, for two days. Only the system can bind it. -->
@@ -228,7 +243,7 @@
             android:foregroundServiceType="specialUse|microphone">
             <property
                 android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
-                android:value="Keeps the on-device assistant model loaded so holding the power button gets an answer at once" />
+                android:value="Keeps the on-device assistant model loaded so holding the power button gets an answer at once, and keeps the app awake while a place reminder is set so it rings on arrival with the screen off" />
         </service>
 
         <receiver android:name=".reminders.ReminderReceiver" android:exported="false" />

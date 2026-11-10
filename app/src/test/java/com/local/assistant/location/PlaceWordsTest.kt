@@ -60,6 +60,21 @@ class PlaceWordsTest {
     }
 
     @Test
+    fun `arriving words given as a time are a place, and a time is not`() {
+        // As Gemma passed set_alarm's when (8 Nov 2026).
+        assertTrue(PlaceWords.isArrival("when I reach avilora"))
+        assertTrue(PlaceWords.isArrival("before I reach Bangalore"))
+        assertTrue(PlaceWords.isArrival("5 km before Munnar"))
+        assertTrue(PlaceWords.isArrival("when I get to office"))
+        assertFalse(PlaceWords.isArrival("6am"))
+        assertFalse(PlaceWords.isArrival("tomorrow at 5:30"))
+        assertFalse(PlaceWords.isArrival("in 10 minutes"))
+        assertFalse(PlaceWords.isArrival("when I reach"))
+        assertEquals(PlaceWords.Named("Bangalore", null), read("before I reach Bangalore"))
+        assertEquals(PlaceWords.Named("Munnar", null), read("as soon as I reach Munnar"))
+    }
+
+    @Test
     fun `nothing left is no place`() {
         assertNull(read("near the"))
         assertNull(read("  "))

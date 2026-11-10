@@ -112,6 +112,8 @@ class ConversationManager(
         val fresh: Boolean = false,
         /** The voice message's recording, to send with the envelope (which says its words are the phone's hearing). */
         val recording: String? = null,
+        /** The user's message before this one, if it came just before ([ToolContext.earlierText]). */
+        val earlierText: String = "",
     )
 
     private class Live(
@@ -334,6 +336,9 @@ class ConversationManager(
             prefix = current.acknowledgedPrefix,
             fresh = carriedOn == null || current !== carriedOn,
             recording = recording,
+            earlierText = history.lastOrNull { it.role == Role.USER }
+                ?.takeIf { earlier -> userMessage == null || userMessage.createdAt - earlier.createdAt <= EARLIER_MS }
+                ?.text.orEmpty(),
         )
     }
 
@@ -823,6 +828,9 @@ class ConversationManager(
 
         /** How long a chat must be quiet after a reply before an idle rebuild may start. */
         const val IDLE_BEFORE_REBUILD_MS = 30_000L
+
+        /** How soon after the user's last message this one is still taken as answering its question. */
+        const val EARLIER_MS = 10 * 60_000L
 
         /** After a failed compaction, how long before trying that chat again. */
         const val COMPACTION_RETRY_MS = 10 * 60_000L

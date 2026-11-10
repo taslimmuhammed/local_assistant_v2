@@ -19,6 +19,7 @@ import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -1173,10 +1174,13 @@ class ToolRoutingTest {
 
     // ---- Place reminders ----
 
-    /** As [turn], with what the user said (or, [locked], said on the lock screen). */
-    private fun said(text: String, vararg calls: ToolCall, locked: Boolean = false): Pair<ScriptedSession, List<LoopEvent>> {
+    /**
+     * As [turn], with what the user said (or, [locked], said on the lock screen), and [earlier]
+     * what they said just before.
+     */
+    private fun said(text: String, vararg calls: ToolCall, locked: Boolean = false, earlier: String = ""): Pair<ScriptedSession, List<LoopEvent>> {
         val session = ScriptedSession(ArrayDeque(listOf(ScriptedSession.calls(*calls), ScriptedSession.says("Done."))))
-        val events = runBlocking { loop.run(session, "envelope", emptyList(), context.copy(userText = text, locked = locked)).toList() }
+        val events = runBlocking { loop.run(session, "envelope", emptyList(), context.copy(userText = text, locked = locked, earlierText = earlier)).toList() }
         return session to events
     }
 
@@ -1426,6 +1430,86 @@ class ToolRoutingTest {
         val (session, _) = said("remind me to buy eggs near DMart", call("add_task", "title" to "Buy eggs", "place" to "DMart"))
         assertEquals(false, result(session)["ok"])
         assertTrue(result(session)["error"].toString().contains("at most 100"))
+    }
+
+    // ---- Alarms at a place ----
+
+    /** What Gemma did on the phone (8 Nov 2026): the place as the alarm's time, "set alarm" as its name. */
+    @Test
+    fun `set alarm when I reach a place, passed to set_alarm as its time, is an alarm there`() {
+        val (session, events) = said("set alarm when I reach Munnar", call("set_alarm", "label" to "set alarm", "when" to "when I reach Munnar"))
+
+        val task = store.tasks.values.single()
+        assertEquals("Alarm", task.title)
+        assertNull(task.dueAt)
+        assertEquals(mapOf(task.id to task.place), reminders.places)
+        // Not the clock app's: it only knows times.
+        assertTrue(clock.set.isEmpty())
+        assertEquals(true, result(session)["ok"])
+        val chip = events.filterIsInstance<LoopEvent.Memory>().single().chip
+        assertEquals(Triple("Alarm", "", "near Munnar"), Triple(chip.label, chip.detail, chip.place))
+        assertNotNull("undone like a reminder", log.records.values.single().undo)
+    }
+
+    /** The other way Gemma tried it: add_task titled "set alarm", sent on to set_alarm, which had no place. */
+    @Test
+    fun `an add_task titled set alarm with a place is an alarm there`() {
+        val (session, events) = said("set alarm when I reach Munnar", call("add_task", "title" to "set alarm", "place" to "Munnar"))
+
+        assertEquals("Alarm", store.tasks.values.single().title)
+        assertEquals(true, result(session)["ok"])
+        assertEquals("Alarm", events.filterIsInstance<LoopEvent.Memory>().single().chip.label)
+    }
+
+    @Test
+    fun `an alarm before a place, with a distance or without, rings on the way`() {
+        said("set an alarm 5 km before I reach Munnar", call("set_alarm", "when" to "5 km before I reach Munnar"))
+        val near = store.tasks.values.single()
+        assertEquals("Almost at Munnar", near.title)
+        assertEquals(PlaceDistance(5000, beforeArriving = true), near.place!!.distance)
+
+        said("set an alarm before I reach Bangalore", call("set_alarm", "when" to "before I reach Bangalore"))
+        val bengaluru = store.tasks.values.last()
+        assertEquals("Alarm", bengaluru.title)
+        assertNull(bengaluru.place!!.distance)
+    }
+
+    @Test
+    fun `an alarm at a place keeps a name the user gave it`() {
+        said("set an alarm for medicines when I reach Munnar", call("set_alarm", "when" to "when I reach Munnar", "label" to "medicines"))
+        assertEquals("Medicines", store.tasks.values.single().title)
+    }
+
+    // ---- A reminder's name ----
+
+    /** "remind me when I reach avilora" was saved as "Buy chicken", a reminder from days before (8 Nov 2026). */
+    @Test
+    fun `a reminder the user gave no name doesn't take an open reminder's`() {
+        buyMilk()
+        val (_, events) = said("remind me when I reach Munnar", call("add_task", "title" to "remind me to buy milk", "place" to "Munnar"))
+
+        assertEquals("Reminder", store.tasks.values.last().title)
+        val chip = events.filterIsInstance<LoopEvent.Memory>().single().chip
+        assertEquals("Reminder" to "", chip.label to chip.detail)
+
+        said("remind me at 6pm", call("add_task", "title" to "Buy milk", "when" to "6pm"))
+        val timed = store.tasks.values.last()
+        assertEquals("Reminder" to at(9, 21, 18), timed.title to timed.dueAt)
+    }
+
+    @Test
+    fun `an open reminder's name is kept when the user said it, just before or now, or pointed back to it`() {
+        buyMilk()
+        // Answering "where?", asked about it.
+        said("when I reach Munnar", call("add_task", "title" to "Buy milk", "place" to "Munnar"), earlier = "remind me to buy milk")
+        assertEquals("Buy milk", store.tasks.values.last().title)
+
+        said("remind me to buy milk at 6pm too", call("add_task", "title" to "Buy milk", "when" to "6pm"))
+        assertEquals("Buy milk", store.tasks.values.last().title)
+
+        said("remind me about that again at 7pm", call("add_task", "title" to "Buy milk", "when" to "7pm"))
+        assertEquals("Buy milk", store.tasks.values.last().title)
+        assertEquals(4, store.tasks.values.count { it.title == "Buy milk" })
     }
 
     /** A quote left unescaped in a description once made the app crash as it started. */

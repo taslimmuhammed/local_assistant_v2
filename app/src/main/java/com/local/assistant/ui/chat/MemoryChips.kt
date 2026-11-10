@@ -96,7 +96,12 @@ fun MemoryChips(
             val place = reminder?.place
             // As it is now: renamed, its circle changed or a pin dropped, since the reply.
             val shown = if (reminder != null && place != null) {
-                val now = item.chip.copy(detail = reminder.title, place = place.where(), note = place.which()?.replaceFirstChar { it.titlecase(Locale.ROOT) })
+                // One with no name of its own is titled what the chip already says: "Alarm".
+                val now = item.chip.copy(
+                    detail = reminder.title.takeUnless { it.equals(item.chip.label, ignoreCase = true) }.orEmpty(),
+                    place = place.where(),
+                    note = place.which()?.replaceFirstChar { it.titlecase(Locale.ROOT) },
+                )
                 item.copy(chip = now)
             } else {
                 item

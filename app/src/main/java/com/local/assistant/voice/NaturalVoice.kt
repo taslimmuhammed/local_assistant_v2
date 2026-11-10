@@ -81,8 +81,22 @@ class NaturalVoice(
 
     private val releaseWhenIdle = Runnable { releaseEngine() }
 
+    /** The app is out of sight ([setAway]): the model goes as soon as it falls quiet. */
+    @Volatile
+    private var away = false
+
     /** Installed, and not known to fail. */
     fun usable(): Boolean = chosen()?.let { it != failedOn } ?: false
+
+    /**
+     * The app went out of sight, or came back. Away, the ~480 MB model goes as soon as nothing is
+     * left to say rather than after [IDLE_RELEASE_MS]: held, it is that much more the home screen
+     * has to take back as the app is left. A reply still being read goes on to its end first.
+     */
+    fun setAway(away: Boolean) {
+        this.away = away
+        if (away && outstanding.get() == 0) releaseEngine()
+    }
 
     /** Loads the model now, so the first sentence doesn't wait for it. */
     fun prepare() {
@@ -235,7 +249,7 @@ class NaturalVoice(
         }
         main.post {
             if (generation.get() != gen) return@post
-            if (outstanding.decrementAndGet() == 0) main.postDelayed(releaseWhenIdle, IDLE_RELEASE_MS)
+            if (outstanding.decrementAndGet() == 0) main.postDelayed(releaseWhenIdle, if (away) 0 else IDLE_RELEASE_MS)
             changed()
         }
     }

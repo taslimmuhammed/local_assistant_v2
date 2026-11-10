@@ -267,7 +267,7 @@ class ToolExecutor(
             ToolCatalog.GET_UPCOMING -> getUpcoming(args)
             ToolCatalog.SEARCH_MEMORY -> searchMemory(args)
             ToolCatalog.FORGET -> forget(args)
-            ToolCatalog.SET_ALARM -> setAlarm(args, context.userText)
+            ToolCatalog.SET_ALARM -> if (place != null) placeAlarm(args, context, place) else setAlarm(args, context.userText)
             ToolCatalog.REMEMBER_IMAGE -> if (memoryPaused()) {
                 throw ToolError("Memory is paused, so nothing was saved. Tell the user; they can turn memory back on in 'What I know about you'.")
             } else {
@@ -282,13 +282,20 @@ class ToolExecutor(
     // ---- Tasks ----
 
     /**
-     * Where an add_task with a place rings, found before its transaction; null for any other call.
-     * A place the user never said is the model's own idea ("call the office at 5" names a place
-     * but is a reminder at 5), so the reminder is made as if it hadn't been given.
+     * Where an add_task with a place rings, or a set_alarm on arriving somewhere, found before its
+     * transaction; null for any other call. A place the user never said is the model's own idea
+     * ("call the office at 5" names a place but is a reminder at 5), so the reminder is made as if
+     * it hadn't been given.
      */
     private suspend fun placeFor(call: ToolCall, context: ToolContext): PlaceFinding? {
-        if (call.name != ToolCatalog.ADD_TASK) return null
-        val said = Args(call.arguments).text("place") ?: return null
+        val args = Args(call.arguments)
+        val said = when (call.name) {
+            ToolCatalog.ADD_TASK -> args.text("place")
+            // "Set alarm when I reach avilora" came as when (8 Nov 2026): the clock app only knows
+            // times, so an alarm on arriving rings from here, as a place reminder does.
+            ToolCatalog.SET_ALARM -> args.text("place") ?: args.text("when")?.takeIf(PlaceWords::isArrival)
+            else -> null
+        } ?: return null
         if (!context.heard && !PlaceWords.mentioned(said, context.userText)) {
             Log.i(TAG, "Place '$said' isn't in the user's words; made without it")
             return null
@@ -298,24 +305,31 @@ class ToolExecutor(
     }
 
     private suspend fun addTask(args: Args, context: ToolContext, place: PlaceFinding?): Applied {
-        val title = tidyTitle(args.required("title"))
+        val title = unborrowed(tidyTitle(args.required("title")), context)
+        // Arriving is when it rings: a time given with it is dropped. An alarm there is one of
+        // these, as a place reminder rings as an alarm: "set alarm when I reach avilora" came as
+        // add_task titled "set alarm" (8 Nov 2026), and was sent on to set_alarm, which had no place.
+        if (place != null) {
+            val alarm = title.lowercase(Locale.ROOT) in ALARM_TITLES || SpokenCommands.isGarbledCommand(title)
+            return addPlaceTask(if (alarm) "" else title, args.text("place"), context, place, alarm)
+        }
         // "Sarlamat 4:30 p.m. today" made a reminder named "Sarlamat" (2 Nov 2026): it was an alarm.
         if (SpokenCommands.isGarbledCommand(title) && alarms.available()) {
             throw ToolError("'$title' is \"set alarm\" misheard: the user asked for an alarm. Call set_alarm with the same time, and no label.")
         }
-        // Arriving is when it rings: a time given with it is dropped.
-        if (place != null) return addPlaceTask(title, args.text("place"), context, place)
         val rule = args.text("repeat")?.let { RepeatRule.parse(it) ?: throw ToolError("I couldn't understand repeat '$it'. Ask how often.") }
         val now = now()
         val due: ZonedDateTime? = when (val whenText = args.text("when")) {
             null -> rule?.let { firstOccurrence(it, now) }
             else -> future(whenText, now).at
         }
+        // No name of its own, as the user may give none: a reminder at a time is "Reminder".
+        val name = title.ifEmpty { if (due != null) REMINDER else throw ToolError("What should it remind the user of? Ask them.") }
 
         val nowMs = nowMs()
         val id = store.insertTask(
             TaskEntity(
-                title = title,
+                title = name,
                 dueAt = due?.millis(),
                 repeatRule = rule?.toRrule(),
                 sourceMessageId = context.userMessageId,
@@ -327,8 +341,8 @@ class ToolExecutor(
             result = ok("id" to id, "due" to due?.let(::modelTime), "repeats" to rule?.let { true }),
             chip = MemoryChip(
                 kind = MemoryChip.Kind.TASK,
-                label = if (due != null) "Reminder" else "To-do",
-                detail = title,
+                label = if (due != null) REMINDER else "To-do",
+                detail = name.takeUnless { it == REMINDER }.orEmpty(),
                 at = due?.millis(),
                 note = lateNote(due != null),
                 editable = true,
@@ -343,9 +357,10 @@ class ToolExecutor(
      * A reminder that rings on arriving at [found]'s place: "buy milk" near the nearest DMarts. Or
      * further out, when a distance was said ("5 km before I reach Munnar"): in the model's title or
      * [placeSaid], or in the user's own words. Not in the recogniser's words for a message the
-     * model heard: a number in them may be misheard ([ToolContext.heard]).
+     * model heard: a number in them may be misheard ([ToolContext.heard]). An [alarm] is the same,
+     * named "Alarm" rather than "Reminder" when the user gave it no name.
      */
-    private suspend fun addPlaceTask(title: String, placeSaid: String?, context: ToolContext, found: PlaceFinding): Applied {
+    private suspend fun addPlaceTask(title: String, placeSaid: String?, context: ToolContext, found: PlaceFinding, alarm: Boolean = false): Applied {
         // Android watches at most MAX_FENCES places per app, across every place reminder.
         val watched = store.openTasks().sumOf { it.place?.spots?.size ?: 0 }
         val room = PlaceAlerts.MAX_FENCES - watched
@@ -359,10 +374,13 @@ class ToolExecutor(
         val spots = found.place.spots.take(room).map { spot -> reach?.let { spot.copy(radiusM = it.radiusFor(spot.radiusM)) } ?: spot }
         val place = found.place.copy(spots = spots, distance = reach)
         // "Reminder before 5 kilometer" says only where: it is named for it, not for the distance
-        // again, which the chip and the agenda show beside it.
+        // again, which the chip and the agenda show beside it. With no distance either, it is
+        // only a reminder, or an alarm.
         val words = tidyTitle(DistanceWords.remove(title))
+        val label = if (alarm) ALARM else REMINDER
         val name = when {
-            words.lowercase(Locale.ROOT) !in BARE_TITLES || reach == null -> words
+            words.lowercase(Locale.ROOT) !in BARE_TITLES -> words
+            reach == null -> label
             reach.beforeArriving -> "Almost at ${place.name}"
             else -> "Near ${place.name}"
         }
@@ -391,8 +409,8 @@ class ToolExecutor(
             ),
             chip = MemoryChip(
                 kind = MemoryChip.Kind.TASK,
-                label = "Reminder",
-                detail = name,
+                label = label,
+                detail = name.takeUnless { it == label }.orEmpty(),
                 note = when {
                     !found.canRing -> "Rings once location is allowed all the time"
                     inside -> "You're already there: rings the next time you arrive"
@@ -630,6 +648,17 @@ class ToolExecutor(
         )
     }
 
+    /**
+     * An alarm on arriving somewhere ("set an alarm when I reach Bangalore"): the clock app only
+     * knows times, so it is a place reminder, which rings as an alarm. Named by its label if the
+     * user gave one, else "Alarm".
+     */
+    private suspend fun placeAlarm(args: Args, context: ToolContext, found: PlaceFinding): Applied {
+        val label = args.text("label")?.let(::alarmName)
+            ?.takeIf { it.lowercase(Locale.ROOT) !in ALARM_TITLES && saidIn(it, context.userText) }
+        return addPlaceTask(label.orEmpty(), args.text("place") ?: args.text("when"), context, found, alarm = true)
+    }
+
     private data class ClockAlarm(val hour: Int, val minute: Int, val days: Set<DayOfWeek>)
 
     /** Alarms set from here, with their names and until when a new name is a rename: the clock app can't be asked. */
@@ -641,6 +670,24 @@ class ToolExecutor(
      */
     private fun alarmName(raw: String): String? =
         tidyTitle(raw.replace(TASK_LISTING, "")).takeUnless { it.isEmpty() || it.equals("alarm", ignoreCase = true) || SpokenCommands.isGarbledCommand(it) }
+
+    /**
+     * [title], or "" for none when it is an open reminder's, copied though the user never said it:
+     * "remind me when I reach avilora" was saved as "Buy chicken", a reminder from days before
+     * (8 Nov 2026). Theirs to reuse if they said it just before (it answers a question about it),
+     * or point back to it ("that", "again"). Only for Latin-script words: a title the model put
+     * into English from other words can't be checked against them.
+     */
+    private suspend fun unborrowed(title: String, context: ToolContext): String {
+        val said = context.userText
+        if (said.isBlank() || said.none { it in 'a'..'z' || it in 'A'..'Z' }) return title
+        val earlier = context.earlierText
+        if (saidIn(title, said) || earlier.isNotBlank() && saidIn(title, earlier)) return title
+        if (REFER_BACK.containsMatchIn(said)) return title
+        if (store.openTasks().none { it.title.equals(title, ignoreCase = true) }) return title
+        Log.i(TAG, "Title '$title' is an open reminder's, and not in the user's words; made without it")
+        return ""
+    }
 
     /** Whether the user said any of [name]'s words in [userText]; with no text to check, it stands. */
     private fun saidIn(name: String, userText: String): Boolean {
@@ -1201,6 +1248,18 @@ class ToolExecutor(
 
         /** A reminder's title that says nothing but that it is one: "Reminder", once the distance is gone. */
         private val BARE_TITLES = setOf("", "reminder", "a reminder", "remind me", "set a reminder", "set reminder", "alert", "an alert", "notify me")
+
+        /** What a reminder or alarm the user gave no name is called. */
+        private const val REMINDER = "Reminder"
+        private const val ALARM = "Alarm"
+
+        /** A title that says only that it's an alarm: "set alarm", "wake me up". */
+        private val ALARM_TITLES = setOf(
+            "alarm", "an alarm", "the alarm", "set alarm", "set an alarm", "set the alarm", "set a alarm", "alarm me", "wake me", "wake me up",
+        )
+
+        /** Words pointing back at something said before, whose title a call may reuse: "remind me again", "that one too". */
+        private val REFER_BACK = Regex("\\b(?:again|also|too|same|another|that|this|it|them|those|one more)\\b", RegexOption.IGNORE_CASE)
 
         /** How long after a repeating alarm is set a new name for it is taken as a rename. */
         private const val RENAME_WINDOW_MS = 12 * 60 * 60 * 1000L

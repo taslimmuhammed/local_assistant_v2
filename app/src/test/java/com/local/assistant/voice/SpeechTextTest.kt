@@ -98,6 +98,17 @@ class SpeechChunkerTest {
     }
 
     @Test
+    fun `a burst is cut as if it had come a word at a time`() {
+        val opening = "Here are three quick tips for falling asleep faster: Keep the same bedtime every day, even on weekends. "
+        val burst = SpeechChunker()
+        assertEquals(
+            listOf("Here are three quick tips for falling asleep faster:", "Keep the same bedtime every day, even on weekends."),
+            burst.push(opening),
+        )
+        assertEquals(listOf("Avoid screens before bed."), burst.finish(opening + "Avoid screens before bed."))
+    }
+
+    @Test
     fun `a one-word clause waits for more`() {
         val chunker = SpeechChunker()
         assertEquals(emptyList<String>(), chunker.push("Sure, it is"))

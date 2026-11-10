@@ -108,7 +108,7 @@ class TurnRunner(
                 val recording = turn.recording?.let { PromptAttachment(it, AttachmentKind.AUDIO) }
                 val sent = listOfNotNull(screenshot?.takeIf { showScreen }?.let { PromptAttachment(it, AttachmentKind.IMAGE) }) +
                     (attachment?.let(::listOf) ?: recording?.let(::listOf) ?: turn.recalledImages.map { PromptAttachment(it, AttachmentKind.IMAGE) })
-                val context = ToolContext(chatId, userMessageId, userText, locked, screenshot, heard = recording != null)
+                val context = ToolContext(chatId, userMessageId, userText, locked, screenshot, heard = recording != null, earlierText = turn.earlierText)
                 tools.run(turn.session, turn.envelope.text, sent, context, sources = listOf(turn.prefix), canRebuild = !turn.fresh && !rebuiltForPhotos).collect { event ->
                     when (event) {
                         is LoopEvent.Text -> {

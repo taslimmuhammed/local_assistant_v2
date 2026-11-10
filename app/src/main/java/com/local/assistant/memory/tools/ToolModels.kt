@@ -108,6 +108,11 @@ data class ToolContext(
      * against [userText] would put the recogniser's mistakes back ("2450" made "200450").
      */
     val heard: Boolean = false,
+    /**
+     * The user's message before this one, when it came just before: a call may finish what it
+     * asked ("when I reach avilora" after "remind me to buy chicken"), so its words are theirs too.
+     */
+    val earlierText: String = "",
 )
 
 /** Persists tool calls as TOOL rows in the chat. */

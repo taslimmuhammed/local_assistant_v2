@@ -34,5 +34,21 @@ object PlaceAlerts {
         return now - rang >= QUIET_MS
     }
 
+    /**
+     * [task] once it has rung: over, like a one-off reminder at a time once it has rung — off the
+     * lists and the agenda, its places no longer watched. When it rang is kept, for [nextTime].
+     */
+    fun rang(task: TaskEntity, now: Long): TaskEntity =
+        task.copy(status = TaskStatus.DONE, completedAt = now, updatedAt = now, place = task.place?.copy(rangAt = now))
+
+    /**
+     * "Next time": [task] open again, to ring on the next arrival. The visit it rang on stays
+     * quiet ([QUIET_MS]). Null if it isn't a place reminder, or was deleted since.
+     */
+    fun nextTime(task: TaskEntity, now: Long): TaskEntity? {
+        if (task.place == null || task.status == TaskStatus.CANCELLED) return null
+        return task.copy(status = TaskStatus.OPEN, completedAt = null, updatedAt = now)
+    }
+
     private const val PREFIX = "place:"
 }

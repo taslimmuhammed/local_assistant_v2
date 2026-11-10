@@ -6,6 +6,7 @@ import android.content.ComponentCallbacks2
 import android.content.Context
 import android.content.pm.ApplicationInfo
 import android.net.Uri
+import android.os.PowerManager
 import android.util.Log
 import androidx.lifecycle.ProcessLifecycleOwner
 import com.local.assistant.gallery.GalleryDatabase
@@ -126,6 +127,7 @@ class AppContainer(context: Context) {
     val appForeground: AppForeground = AppForeground(
         onForeground = {
             backgroundJobs.onForeground()
+            speaker.setAway(false)
             if (settings.modelPath != null) llmService.warmUp()
             embeddingQueue.kick()
             // Started while visible, as Android requires; from then on it keeps the app alive.
@@ -138,18 +140,38 @@ class AppContainer(context: Context) {
             sensitiveLock.lock()
             // Out of sight, the photos wait for the charger at night.
             appScope.launch { galleryIndex.pause() }
-            // Away for a while: have the next new chat's conversation ready, so the power button
-            // is answered at once. Not straight away: a quick trip out and back finds its chat
-            // still open.
-            if (settings.keepAssistantReady) prepareForNextAsk(AWAY_BEFORE_PREPARING_MS)
+            // What only the app in use needs goes back, so the home screen has less to take back:
+            // the natural voice once it falls quiet, memory search once its backlog is done.
+            speaker.setAway(true)
+            embeddingQueue.kick()
+            if (settings.keepAssistantReady) prepareWhileAway(screenOn = power.isInteractive)
         },
     )
 
+    private val power = context.getSystemService(PowerManager::class.java)
+
+    /** The screen went off or on: with the app away, it decides when the next new chat is made ready. */
+    fun onScreen(on: Boolean) {
+        if (settings.keepAssistantReady && !appForeground.isForeground) prepareWhileAway(screenOn = on)
+    }
+
+    /**
+     * Away for a while: have the next new chat's conversation ready, so the power button is
+     * answered at once. Its prefill re-reads ~860 MB of the model and the phone frees ~1.5 GB for
+     * it, which stutters the screen for a second or two (≈455 allocation stalls on the OnePlus,
+     * 7 Nov 2026), so it waits for the screen to go off: a minute of it, so a quick look away
+     * finds its chat still open. With the screen left on it goes after five minutes; until then
+     * the panel makes the conversation itself as it opens, while the user talks.
+     */
+    private fun prepareWhileAway(screenOn: Boolean) {
+        if (screenOn) prepareForNextAsk(AWAY_SCREEN_ON_MS) else prepareForNextAsk(AWAY_SCREEN_OFF_MS) { !power.isInteractive }
+    }
+
     /** With the assistant kept ready and the app out of sight: a conversation for the next new chat. */
-    private fun prepareForNextAsk(delayMs: Long) {
+    private fun prepareForNextAsk(delayMs: Long, alsoWanted: () -> Boolean = { true }) {
         // Behind any other background work: the nightly job's batches each close the conversation.
         conversations.prepareFresh(delayMs, ModelScheduler.Priority.IDLE_WARM_UP) {
-            settings.keepAssistantReady && !appForeground.isForeground
+            settings.keepAssistantReady && !appForeground.isForeground && alsoWanted()
         }
     }
 
@@ -347,7 +369,6 @@ class AppContainer(context: Context) {
         scheduler = modelScheduler,
         scope = appScope,
         inForeground = { appForeground.isForeground },
-        unloadWhenDrained = totalMemoryBytes(context) <= SMALL_DEVICE_BYTES,
         notes = database.noteDao(),
         userNotes = database.userNoteDao(),
     )
@@ -731,8 +752,11 @@ class AppContainer(context: Context) {
         /** The longest the setup screen waits for the first chat to be ready. */
         const val FIRST_CHAT_READY_MS = 90_000L
 
-        /** How long the app is away before the next new chat's conversation is prepared. */
-        const val AWAY_BEFORE_PREPARING_MS = 60_000L
+        /** How long the screen is off, with the app away, before the next new chat's conversation is prepared. */
+        const val AWAY_SCREEN_OFF_MS = 60_000L
+
+        /** How long the app is away with the screen on before that happens anyway. */
+        const val AWAY_SCREEN_ON_MS = 5 * 60_000L
 
         /**
          * After background model work closed the conversation, before preparing it again: long
@@ -740,7 +764,7 @@ class AppContainer(context: Context) {
          */
         const val AFTER_MODEL_WORK_MS = 30_000L
 
-        /** At or below this, memory search's model (≈250 MB) is given back whenever it is idle in the background. */
+        /** At or below this, the photo model's memory goes back as soon as the Photos screen closes. */
         const val SMALL_DEVICE_BYTES = 8L * 1024 * 1024 * 1024
 
         /** EmbeddingGemma 300M's key, from before the photo model did memory search too. */
@@ -767,9 +791,13 @@ class AssistantApplication : Application() {
         androidx.core.content.ContextCompat.registerReceiver(
             this,
             object : android.content.BroadcastReceiver() {
-                override fun onReceive(context: android.content.Context, intent: android.content.Intent) = container.sensitiveLock.lock()
+                override fun onReceive(context: android.content.Context, intent: android.content.Intent) {
+                    val on = intent.action == android.content.Intent.ACTION_SCREEN_ON
+                    if (!on) container.sensitiveLock.lock()
+                    container.onScreen(on)
+                }
             },
-            android.content.IntentFilter(android.content.Intent.ACTION_SCREEN_OFF),
+            android.content.IntentFilter(android.content.Intent.ACTION_SCREEN_OFF).apply { addAction(android.content.Intent.ACTION_SCREEN_ON) },
             androidx.core.content.ContextCompat.RECEIVER_NOT_EXPORTED,
         )
         ReminderNotifications.createChannel(this)

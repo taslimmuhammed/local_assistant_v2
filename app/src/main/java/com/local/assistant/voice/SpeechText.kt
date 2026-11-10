@@ -85,7 +85,26 @@ class SpeechChunker(private val clauses: Boolean = true) {
     /** Words handed out so far: under [EARLY_WORDS], the reply is still starting. */
     private var wordsOut = 0
 
+    /** How much of the reply [push] has looked at. */
+    private var scannedUpTo = 0
+
+    /**
+     * Text that comes in a burst is cut as if it had come a word at a time. The opening of a
+     * reply is held back until it is known not to claim something was done, then arrives whole;
+     * cut as one, its first piece was its whole first sentence, which the voice makes in full
+     * before a sound plays: 30 words, heard 6–9 s after the text was all there (OnePlus,
+     * NaturalVoiceEvalTest, 7 Nov 2026), where streamed it starts on 9.
+     */
     fun push(reply: String): List<String> {
+        val pieces = ArrayList<String>()
+        for (i in maxOf(scannedUpTo, spokenUpTo) until reply.length) {
+            if (reply[i].isWhitespace()) pieces += cut(reply.substring(0, i + 1))
+        }
+        scannedUpTo = reply.length
+        return pieces + cut(reply)
+    }
+
+    private fun cut(reply: String): List<String> {
         var end = lastBoundary(reply)
         if (clauses) end = maxOf(end, clauseBoundary(reply, end))
         if (end <= spokenUpTo) return emptyList()
@@ -177,12 +196,7 @@ class SpeechChunker(private val clauses: Boolean = true) {
          */
         fun pieces(reply: String): List<String> {
             val chunker = SpeechChunker()
-            val pieces = ArrayList<String>()
-            // A word at a time, as the model wrote it.
-            for (i in reply.indices) {
-                if (reply[i].isWhitespace()) pieces += chunker.push(reply.substring(0, i + 1))
-            }
-            return pieces + chunker.finish(reply)
+            return chunker.push(reply) + chunker.finish(reply)
         }
     }
 }

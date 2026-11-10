@@ -94,6 +94,9 @@ class Speaker(context: Context, private val settings: SettingsStore, installed: 
         if (useNatural()) natural.prepare()
     }
 
+    /** The app went out of sight or came back: away, the natural voice goes once it is quiet. */
+    fun setAway(away: Boolean) = natural.setAway(away)
+
     /** The natural voice is chosen and can speak. */
     fun naturalVoiceInUse(): Boolean = useNatural()
 
