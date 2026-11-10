@@ -265,7 +265,7 @@ private fun MainPage(
         if (paused) "Memory paused" else "Remembering \u00b7 " + if (retention == 0) "chats kept for good" else "chats kept for ${retentionLabel(retention)}",
     ) { onSection(SettingsSection.MEMORY) }
     SectionRow(Icons.Outlined.Explore, "Take the tour", "What the assistant can do, in eight short pages", onOpenTour)
-    SectionRow(Icons.Outlined.Info, SettingsSection.ABOUT.title, "The models the app runs, and their licences") { onSection(SettingsSection.ABOUT) }
+    SectionRow(Icons.Outlined.Info, SettingsSection.ABOUT.title, "The models, data and libraries the app uses, and their licences") { onSection(SettingsSection.ABOUT) }
     if (WakeSamples.available(context)) {
         SectionRow(Icons.Outlined.Science, SettingsSection.TEST_BUILD.title, "Wake word samples for training") { onSection(SettingsSection.TEST_BUILD) }
     }
@@ -995,6 +995,43 @@ private fun LicenceEntries() {
             "Apache License 2.0" to "https://www.apache.org/licenses/LICENSE-2.0",
             "CC BY 4.0" to "https://creativecommons.org/licenses/by/4.0/",
             "BSD 3-Clause License" to "https://opensource.org/license/bsd-3-clause",
+        ),
+    )
+    Entry(
+        "Faces (People, in photo search)",
+        "From OpenCV Zoo, converted to TensorFlow Lite: the YuNet face detector by Shiqi Yu and contributors " +
+            "(MIT License), and the SFace face recognizer (Apache License 2.0), its weights stored as 8-bit.",
+        listOf(
+            "MIT License" to "https://opensource.org/license/mit",
+            "Apache License 2.0" to "https://www.apache.org/licenses/LICENSE-2.0",
+        ),
+    )
+    Entry(
+        "Place names (photos by where they were taken)",
+        "From GeoNames (geonames.org), CC BY 4.0. Reduced to names, coordinates, districts, states and countries.",
+        listOf("CC BY 4.0" to "https://creativecommons.org/licenses/by/4.0/"),
+    )
+    Entry(
+        "Maps and place search (place reminders)",
+        "Map data © OpenStreetMap contributors, under the Open Database License. Maps from OpenFreeMap " +
+            "(© OpenMapTiles), drawn by MapLibre Native (BSD 2-Clause License); places found with " +
+            "OpenStreetMap's Nominatim.",
+        listOf(
+            "OpenStreetMap copyright" to "https://www.openstreetmap.org/copyright",
+            "OpenFreeMap" to "https://openfreemap.org",
+            "BSD 2-Clause License" to "https://opensource.org/license/bsd-2-clause",
+        ),
+    )
+    Entry(
+        "Libraries",
+        "AndroidX and Jetpack Compose, Kotlin and kotlinx.coroutines, LiteRT-LM and LiteRT, sherpa-onnx, OkHttp, " +
+            "Gson, Health Connect and Apache Commons Compress: Apache License 2.0. This product includes software " +
+            "developed at The Apache Software Foundation (apache.org). sqlite-vec by Alex Garcia: MIT License or " +
+            "Apache License 2.0. SQLite: public domain. Google Play services' location library: Google's " +
+            "Android SDK terms.",
+        listOf(
+            "Apache License 2.0" to "https://www.apache.org/licenses/LICENSE-2.0",
+            "MIT License" to "https://opensource.org/license/mit",
         ),
     )
 }

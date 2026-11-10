@@ -1292,7 +1292,7 @@ heard it) to tune against real voices.
 - **Listening** (`wake/WakeListener`): `AudioRecord` at 16 kHz (`VOICE_RECOGNITION`), 100 ms at a
   time into both listeners, on its own thread; nothing is written down or sent. It logs which
   listener heard each wake ("Heard by model"). It runs inside
-  `KeepReadyService`, which becomes a `specialUse|microphone` foreground service while the wake
+  `KeepReadyService`, which becomes a `microphone` foreground service while the wake
   word is on (Android only lets a background app use the microphone that way, and only if the
   service was started while the app was in front: after a reboot it listens again once the app
   or the overlay has been opened). Its notification says it's listening, with **Stop listening**.

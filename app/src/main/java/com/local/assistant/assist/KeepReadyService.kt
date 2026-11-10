@@ -35,7 +35,9 @@ import com.local.assistant.wake.WakeWordMode
  *
  * And a place reminder ([PlaceFences.watching]) while the app isn't the phone's assistant: Play
  * Services tells the app of an arrival, but with the screen off the app got no GPS fix, and the
- * alarm rang only once the screen came on again (the user, 9 Nov 2026).
+ * alarm rang only once the screen came on again (the user, 9 Nov 2026). It runs as the location
+ * type then, since it is there for the fixes [com.local.assistant.reminders.PlaceLookout] asks
+ * for; it was a special-use one, which Play reviews case by case and expects this type instead.
  *
  * As the phone's assistant, neither keeping the model ready for the power button nor a place
  * reminder needs it: the system keeps [AssistantInteractionService] bound as a foreground service
@@ -60,31 +62,29 @@ class KeepReadyService : Service() {
         }
         createChannel(this)
         val listening = listens(this)
-        var types = 0
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) types = types or ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE
-        if (!listening && !watchesPlaces(this)) {
+        val places = watchesPlaces(this)
+        if (!listening && !places) {
             // Started for something that has gone since (the wake word turned off, the last place
             // reminder done): Android still wants the notification shown before the service stops.
-            runCatching { ServiceCompat.startForeground(this, NOTIFICATION_ID, notification(listening = false), types) }
+            runCatching { ServiceCompat.startForeground(this, NOTIFICATION_ID, notification(listening = false), leftoverType()) }
             stopSelf()
             return START_NOT_STICKY
         }
-        if (listening && Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) types = types or ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
+        val types = (if (listening) MICROPHONE else 0) or (if (places) LOCATION else 0)
         try {
             ServiceCompat.startForeground(this, NOTIFICATION_ID, notification(listening), types)
         } catch (e: RuntimeException) {
             // The microphone type is refused when started from the background: listen from the
             // next time the app is opened. A place reminder still wants the service without it.
-            Log.w(TAG, "No microphone for the wake word now", e)
+            Log.w(TAG, if (listening) "No microphone for the wake word now" else "Not allowed to watch place reminders now", e)
             stopWake()
-            if (!watchesPlaces(this)) {
+            if (!listening || !places) {
                 stopSelf()
                 return START_NOT_STICKY
             }
-            val withoutMic = types and ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE.inv()
             // Not allowed in the foreground at all now (a restart from the background): stop
             // rather than crash; the next time the app opens, this starts again.
-            runCatching { ServiceCompat.startForeground(this, NOTIFICATION_ID, notification(listening = false), withoutMic) }
+            runCatching { ServiceCompat.startForeground(this, NOTIFICATION_ID, notification(listening = false), LOCATION) }
                 .onFailure {
                     Log.w(TAG, "Not allowed to run in the foreground now", it)
                     stopSelf()
@@ -98,6 +98,16 @@ class KeepReadyService : Service() {
         // microphone from the background. A restart doesn't load the chat model, only the wake
         // word's few MB.
         return START_STICKY
+    }
+
+    /**
+     * A type the app may still start under, for the one notification shown before stopping: the
+     * permission behind a type has to be granted, or Android refuses it.
+     */
+    private fun leftoverType(): Int = when {
+        PlaceFences.allowed(this) -> LOCATION
+        checkSelfPermission(android.Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED -> MICROPHONE
+        else -> 0
     }
 
     /** Listening, it says so and how to stop; otherwise it is there for a place reminder. */
@@ -181,6 +191,10 @@ class KeepReadyService : Service() {
         private const val CHANNEL = "assistant_ready"
         private const val NOTIFICATION_ID = 7001
         private const val ACTION_WAKE_WORD_OFF = "com.local.assistant.action.WAKE_WORD_OFF"
+
+        /** The service's types, where the phone knows them: location from Android 10, the microphone from 11. */
+        private val LOCATION = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION else 0
+        private val MICROPHONE = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE else 0
 
         /** The wake word is on, with a model to answer it and the microphone allowed. */
         private fun listens(context: Context): Boolean {

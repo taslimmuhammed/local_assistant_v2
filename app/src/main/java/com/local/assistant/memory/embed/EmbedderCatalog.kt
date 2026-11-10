@@ -40,11 +40,14 @@ object EmbedderCatalog {
      * Apache-2.0. It was the download in the first builds; still recognised for the installs made
      * then, and when imported. Bare text on both sides: its card measured that a prefix hurts
      * retrieval.
+     *
+     * Pinned to the commit with this file: `main` has had a re-laid-out one since 8 Nov 2026
+     * (332,398,592 bytes, for LiteRT-LM 0.19).
      */
     val GRANITE = EmbedderSpec(
         key = "granite-311m-r2-wi8fc",
         displayName = "Granite Embedding 311M (multilingual)",
-        downloadUrl = "https://huggingface.co/litert-community/granite-embedding-311m-multilingual-r2/resolve/main/granite-embedding-311m-r2_wi8fc.litertlm",
+        downloadUrl = "https://huggingface.co/litert-community/granite-embedding-311m-multilingual-r2/resolve/1b10683d630c0d2877bf0430af89668cda7f26c4/granite-embedding-311m-r2_wi8fc.litertlm",
         sizeBytes = 332_365_313L,
         sha256 = "beb2be205abc766a670522e651be5713cecb4e4c33e5ef5c30f6a710d4226db5",
     )

@@ -36,9 +36,11 @@
 
     <!-- A place reminder, when the app isn't the phone's digital assistant: a foreground service
          keeps the app awake so it rings on arrival with the screen off. As the assistant, the
-         system keeps the app up itself, and the service doesn't run. -->
+         system keeps the app up itself, and the service doesn't run. Of the location type, as it
+         is there for the location fixes (reminders/PlaceLookout); Play reviews a special-use one
+         case by case, and expects this type for location. -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
-    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_LOCATION" />
     <!-- "Hey Luna": the same service listens for the wake word when that is turned on (off
          by default). Heard on the phone, by a small model in the APK; the audio goes nowhere. -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
@@ -241,11 +243,7 @@
         <service
             android:name=".assist.KeepReadyService"
             android:exported="false"
-            android:foregroundServiceType="specialUse|microphone">
-            <property
-                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
-                android:value="Keeps the app awake while a place reminder is set so it rings on arrival with the screen off" />
-        </service>
+            android:foregroundServiceType="location|microphone" />
 
         <receiver android:name=".reminders.ReminderReceiver" android:exported="false" />
         <receiver android:name=".reminders.ReminderActionReceiver" android:exported="false" />

@@ -1,5 +1,6 @@
 import java.net.URI
 import java.security.MessageDigest
+import java.util.Properties
 
 plugins {
     alias(libs.plugins.android.application)
@@ -11,10 +12,20 @@ plugins {
 /**
  * `-Pdemo`: the build checked into the repository for people to try (apk/README.md). Phones
  * only, native code compressed to keep the file small, and signed with this machine's debug key
- * so it installs without a keystore. Without it the release build is unsigned, as Play wants.
- * Build and copy it with `./gradlew :app:demoApk -Pdemo`.
+ * so it installs without a keystore. Without it the release build is signed with the upload key
+ * below. Build and copy it with `./gradlew :app:demoApk -Pdemo`.
  */
 val demo = providers.gradleProperty("demo").isPresent
+
+/**
+ * The upload key Play checks each bundle against, read from `keystore.properties` at the project
+ * root: storeFile, storePassword, keyAlias, keyPassword (see keystore.properties.example). The
+ * file and the key stay out of git. Without them the release build is unsigned, which Play
+ * refuses, so `bundleRelease` still builds for checking but can't be uploaded.
+ */
+val uploadKey = rootProject.file("keystore.properties").takeIf { it.isFile }?.let { file ->
+    Properties().apply { file.inputStream().use { load(it) } }
+}
 
 /** Downloads one file once, and fails the build unless it has the expected SHA-256. */
 abstract class FetchVerifiedFile : DefaultTask() {
@@ -75,8 +86,8 @@ android {
         applicationId = "com.local.assistant"
         minSdk = 26
         targetSdk = 36
-        versionCode = 4
-        versionName = "0.2.0"
+        versionCode = 5
+        versionName = "0.3.0"
 
         // LiteRT-LM ships native code for these two ABIs only; x86_64 is for emulators, which the
         // demo build leaves out (26 MB).
@@ -97,9 +108,23 @@ android {
     // MigrationTestHelper reads the exported schemas from the test APK's assets.
     sourceSets.getByName("androidTest").assets.srcDir("$projectDir/schemas")
 
+    signingConfigs {
+        if (uploadKey != null) {
+            create("upload") {
+                storeFile = rootProject.file(uploadKey.getProperty("storeFile"))
+                storePassword = uploadKey.getProperty("storePassword")
+                keyAlias = uploadKey.getProperty("keyAlias")
+                keyPassword = uploadKey.getProperty("keyPassword")
+            }
+        }
+    }
+
     buildTypes {
         release {
-            if (demo) signingConfig = signingConfigs.getByName("debug")
+            when {
+                demo -> signingConfig = signingConfigs.getByName("debug")
+                uploadKey != null -> signingConfig = signingConfigs.getByName("upload")
+            }
             // Not minified: tool results are read with Gson by reflection, and a shrunk build
             // would need keep rules checked on a device before anyone downloads it.
             isMinifyEnabled = false

@@ -25,10 +25,13 @@ object GalleryModel {
 
     const val SIZE_BYTES = 387_710_976L
 
+    /** The repository's commit, not `main`, so a file re-published in place can't change under the app (see ModelCatalog). */
+    private const val REVISION = "e301f74d5551b0c2641bd5cb4652a76239d5c5f8"
+
     val FILE = ModelFile(
         kind = ModelFormat.Kind.GALLERY,
         fileName = FILE_NAME,
-        downloadUrl = "https://huggingface.co/litert-community/embeddinggemma-2-text-vision-440m-litert-lm/resolve/main/$FILE_NAME",
+        downloadUrl = "https://huggingface.co/litert-community/embeddinggemma-2-text-vision-440m-litert-lm/resolve/$REVISION/$FILE_NAME",
         sizeBytes = SIZE_BYTES,
         sha256 = "92dcbea108899e5d6e30d919b0744f90d9967e80c67a4ab5503ac16d54f62eb0",
         directory = "gallery",
