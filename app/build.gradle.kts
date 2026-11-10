@@ -83,7 +83,9 @@ android {
     ndkVersion = "28.2.13676358"
 
     defaultConfig {
-        applicationId = "com.local.assistant"
+        // The Play listing's name, fixed for good once uploaded. The code keeps its package
+        // (namespace above); only the installed app's name changed, from com.local.assistant.
+        applicationId = "com.taslim.localassistant"
         minSdk = 26
         targetSdk = 36
         versionCode = 5
@@ -120,7 +122,15 @@ android {
     }
 
     buildTypes {
+        // A separate app beside the one from Play: Android won't install a debug-signed build
+        // over a Play-signed one without uninstalling it, which would take its model and chats.
+        debug {
+            applicationIdSuffix = ".dev"
+        }
         release {
+            // The demo APK is signed with a debug key, so it gets its own name too: under Play's
+            // name it would block installing the app from Play on the same phone.
+            if (demo) applicationIdSuffix = ".demo"
             when {
                 demo -> signingConfig = signingConfigs.getByName("debug")
                 uploadKey != null -> signingConfig = signingConfigs.getByName("upload")
@@ -170,6 +180,34 @@ android {
 
 ksp {
     arg("room.schemaLocation", "$projectDir/schemas")
+}
+
+/**
+ * Writes res/xml/shortcuts.xml from src/main/shortcuts.xml with the variant's applicationId in
+ * it: a shortcut's intent has to name its package literally. Resources can't take the manifest's
+ * ${applicationId}, and Android doesn't resolve a @string there (the shortcut pointed at
+ * "@2131623967").
+ */
+abstract class ShortcutsXml : DefaultTask() {
+    @get:InputFile abstract val template: RegularFileProperty
+    @get:Input abstract val applicationId: Property<String>
+    @get:OutputDirectory abstract val output: DirectoryProperty
+
+    @TaskAction
+    fun write() {
+        val xml = output.get().dir("xml").asFile.apply { mkdirs() }
+        File(xml, "shortcuts.xml").writeText(template.get().asFile.readText().replace("\${applicationId}", applicationId.get()))
+    }
+}
+
+androidComponents {
+    onVariants { variant ->
+        val shortcuts = tasks.register<ShortcutsXml>("${variant.name}ShortcutsXml") {
+            template.set(layout.projectDirectory.file("src/main/shortcuts.xml"))
+            applicationId.set(variant.applicationId)
+        }
+        variant.sources.res?.addGeneratedSourceDirectory(shortcuts, ShortcutsXml::output)
+    }
 }
 
 // The demo build, where the README links to it: apk/LocalAssistant.apk.

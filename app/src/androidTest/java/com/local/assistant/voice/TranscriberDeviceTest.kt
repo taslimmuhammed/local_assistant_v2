@@ -20,7 +20,7 @@ import java.io.File
  * logged with how long it took after the last of the audio.
  *
  *     adb shell am instrument -w -e eval transcribe -e clips routing-voice \
- *         -e class com.local.assistant.voice.TranscriberDeviceTest com.local.assistant.test/androidx.test.runner.AndroidJUnitRunner
+ *         -e class com.local.assistant.voice.TranscriberDeviceTest com.taslim.localassistant.dev.test/androidx.test.runner.AndroidJUnitRunner
  *
  * `-e clips` is a folder of 16 kHz mono WAVs under the app's external files. Results go to logcat
  * (tag TranscriberEval) and `Android/data/<app>/files/transcriber-eval.txt`.

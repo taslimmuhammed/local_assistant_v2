@@ -23,7 +23,7 @@ import java.io.File
  * the first word, how fast the reply is written, and a second message in the same chat.
  *
  *     adb shell am instrument -w -e eval context -e class com.local.assistant.llm.ContextWindowEvalTest \
- *         com.local.assistant.test/androidx.test.runner.AndroidJUnitRunner
+ *         com.taslim.localassistant.dev.test/androidx.test.runner.AndroidJUnitRunner
  *
  * Results also go to files/context-window.txt in external storage. The window the user chose is
  * put back afterwards.

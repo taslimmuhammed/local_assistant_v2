@@ -34,7 +34,7 @@ import kotlin.concurrent.thread
  *
  *     adb shell am instrument -w -e eval natural-voice \
  *         -e class com.local.assistant.voice.NaturalVoiceEvalTest \
- *         com.local.assistant.test/androidx.test.runner.AndroidJUnitRunner
+ *         com.taslim.localassistant.dev.test/androidx.test.runner.AndroidJUnitRunner
  *
  * The replies are the ones the Mac comparison used (Assistant Voice Auditions). The test chat
  * is deleted afterwards.

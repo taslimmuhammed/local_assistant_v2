@@ -27,7 +27,7 @@ import java.nio.ByteOrder
  *
  *     adb shell am instrument -w -e eval wake-word \
  *         -e class com.local.assistant.wake.WakeWordEvalTest \
- *         com.local.assistant.test/androidx.test.runner.AndroidJUnitRunner
+ *         com.taslim.localassistant.dev.test/androidx.test.runner.AndroidJUnitRunner
  */
 @RunWith(AndroidJUnit4::class)
 class WakeWordEvalTest {

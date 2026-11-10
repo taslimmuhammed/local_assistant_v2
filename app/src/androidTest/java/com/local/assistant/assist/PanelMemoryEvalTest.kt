@@ -21,13 +21,13 @@ import java.io.File
  * it makes is deleted afterwards.
  *
  *     adb shell am instrument -w -e eval panelmemory [-e wait 5] -e class com.local.assistant.assist.PanelMemoryEvalTest#whatWasJustSaidInTheApp \
- *         com.local.assistant.test/androidx.test.runner.AndroidJUnitRunner
+ *         com.taslim.localassistant.dev.test/androidx.test.runner.AndroidJUnitRunner
  *
  * [spokenQuestions] asks the user's real memory by voice, as the panel does: 16 kHz mono WAVs
  * pushed to files/panel-voice/ in external storage, one new panel chat each.
  *
  *     adb shell am instrument -w -e eval panelvoice -e class com.local.assistant.assist.PanelMemoryEvalTest#spokenQuestions \
- *         com.local.assistant.test/androidx.test.runner.AndroidJUnitRunner
+ *         com.taslim.localassistant.dev.test/androidx.test.runner.AndroidJUnitRunner
  */
 @RunWith(AndroidJUnit4::class)
 class PanelMemoryEvalTest {

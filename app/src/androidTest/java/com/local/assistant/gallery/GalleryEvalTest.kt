@@ -23,9 +23,9 @@ import kotlin.math.sqrt
  * known. The 16 pictures are Wikipedia articles' lead images (Sunset, Dog, Cat, …), named after
  * the article and shrunk to 512 px, pushed to files/gallery-eval/ beforehand:
  *
- *     for f in *.jpg; do adb exec-in run-as com.local.assistant sh -c "mkdir -p files/gallery-eval && cat > files/gallery-eval/$f" < $f; done
+ *     for f in *.jpg; do adb exec-in run-as com.taslim.localassistant.dev sh -c "mkdir -p files/gallery-eval && cat > files/gallery-eval/$f" < $f; done
  *     adb shell am instrument -w -e eval gallery -e class com.local.assistant.gallery.GalleryEvalTest \
- *         com.local.assistant.test/androidx.test.runner.AndroidJUnitRunner
+ *         com.taslim.localassistant.dev.test/androidx.test.runner.AndroidJUnitRunner
  *
  * `-e vision cpu` (and `-e threads N`) keeps the vision encoder on the CPU; `-e chat loaded` loads
  * the chat model first, as "Keep the assistant ready" has it.

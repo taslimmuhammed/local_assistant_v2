@@ -33,7 +33,7 @@ import java.util.concurrent.CopyOnWriteArrayList
  *
  *     adb shell am instrument -w -e demo brief \
  *         -e class com.local.assistant.away.BriefDemoTest \
- *         com.local.assistant.test/androidx.test.runner.AndroidJUnitRunner
+ *         com.taslim.localassistant.dev.test/androidx.test.runner.AndroidJUnitRunner
  *
  * Replies "sent" from the brief land in this test and are logged (tag BriefDemo). The demo lines
  * are marked as already briefed, so if the run is cut short they don't pop up at the next unlock.

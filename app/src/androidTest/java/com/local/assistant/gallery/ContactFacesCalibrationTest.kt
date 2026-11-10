@@ -24,7 +24,7 @@ import java.io.File
  * carries the contact's name.
  *
  *     adb shell am instrument -w -e eval contactfaces -e class com.local.assistant.gallery.ContactFacesCalibrationTest \
- *         com.local.assistant.test/androidx.test.runner.AndroidJUnitRunner
+ *         com.taslim.localassistant.dev.test/androidx.test.runner.AndroidJUnitRunner
  *
  * Results go to logcat (tag ContactFaces) and `Android/data/<app>/files/contact-faces.txt`.
  */

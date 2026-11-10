@@ -23,7 +23,7 @@ import java.io.File
  * the faces as 96 px tiles, 1,000 to an atlas, in index order. Delete it after use.
  *
  *     adb shell am instrument -w -e eval facecal -e class com.local.assistant.gallery.FaceCalibrationTest \
- *         com.local.assistant.test/androidx.test.runner.AndroidJUnitRunner
+ *         com.taslim.localassistant.dev.test/androidx.test.runner.AndroidJUnitRunner
  */
 @RunWith(AndroidJUnit4::class)
 class FaceCalibrationTest {

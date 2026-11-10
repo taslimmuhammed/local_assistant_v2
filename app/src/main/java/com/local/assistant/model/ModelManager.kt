@@ -35,6 +35,8 @@ data class Transfer(
     val bytesDone: Long,
     val bytesTotal: Long,
     val bytesPerSecond: Long = 0,
+    /** All of it here, and being checked against its digest. */
+    val checking: Boolean = false,
 ) {
     val fraction: Float get() = if (bytesTotal > 0) (bytesDone.toFloat() / bytesTotal).coerceIn(0f, 1f) else 0f
 
@@ -104,6 +106,9 @@ class ModelManager(
     /** Bytes already fetched by a previous, interrupted download. */
     fun partialBytes(): Long = partFile().length()
 
+    /** All of it fetched, but not yet checked and moved into place: the app stopped first. */
+    fun fetchedNotFinished(): Boolean = !isBusy && _installed.value == null && partialBytes() == model.sizeBytes
+
     fun clearError() {
         _error.value = null
     }
@@ -118,6 +123,11 @@ class ModelManager(
 
     fun cancel() {
         job?.cancel()
+    }
+
+    /** Returns once a transfer under way has ended, however it ended. */
+    suspend fun awaitIdle() {
+        job?.join()
     }
 
     /** Removes the installed model and any partial download, freeing the disk space. */
@@ -162,6 +172,7 @@ class ModelManager(
         fetchResumable(http, url, part, model.sizeBytes, onProgress)
 
         model.sha256?.let { expected ->
+            _transfer.value = Transfer(TransferKind.DOWNLOAD, part.length(), part.length(), checking = true)
             if (sha256Of(part) != expected) {
                 part.delete()
                 throw IOException("The download was corrupted. Please try again.")
@@ -302,6 +313,12 @@ internal fun fetchResumable(
     onProgress: (Long, Long) -> Unit,
 ) {
     var alreadyHave = part.length()
+    // All of it came before, and only what follows was cut short (the check, the move): asking
+    // for the bytes after the end gets an HTTP 416.
+    if (expectedBytes > 0 && alreadyHave == expectedBytes) {
+        onProgress(alreadyHave, alreadyHave)
+        return
+    }
     val request = Request.Builder()
         .url(url)
         .apply { if (alreadyHave > 0) header("Range", "bytes=$alreadyHave-") }

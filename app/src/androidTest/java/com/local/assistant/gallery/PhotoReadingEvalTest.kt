@@ -60,7 +60,7 @@ import java.time.ZonedDateTime
  *
  *     adb shell am instrument -w -e eval photoread [-e runs 2] [-e only <words>] \
  *         -e class com.local.assistant.gallery.PhotoReadingEvalTest \
- *         com.local.assistant.test/androidx.test.runner.AndroidJUnitRunner
+ *         com.taslim.localassistant.dev.test/androidx.test.runner.AndroidJUnitRunner
  *
  * Results go to logcat (tag PhotoReadingEval) and `Android/data/<app>/files/photo-reading-eval.txt`.
  */
@@ -237,7 +237,7 @@ class PhotoReadingEvalTest {
      * in short conversations of their own, three times as the app sends it and twice sharper.
      *
      *     adb shell am instrument -w -e eval photoprobe -e class com.local.assistant.gallery.PhotoReadingEvalTest \
-     *         com.local.assistant.test/androidx.test.runner.AndroidJUnitRunner
+     *         com.taslim.localassistant.dev.test/androidx.test.runner.AndroidJUnitRunner
      */
     @Test
     fun readsNumbersOnTheirOwn() = runBlocking<Unit> {
@@ -287,7 +287,7 @@ class PhotoReadingEvalTest {
      * in a short conversation of its own; and the card number read group by group.
      *
      *     adb shell am instrument -w -e eval photoreader -e class com.local.assistant.gallery.PhotoReadingEvalTest \
-     *         com.local.assistant.test/androidx.test.runner.AndroidJUnitRunner
+     *         com.taslim.localassistant.dev.test/androidx.test.runner.AndroidJUnitRunner
      */
     @Test
     fun readerAnswers() = runBlocking<Unit> {

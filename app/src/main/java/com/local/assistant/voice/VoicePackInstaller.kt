@@ -70,6 +70,9 @@ class VoicePackInstaller(
     /** Bytes already fetched by an interrupted download. */
     fun partialBytes(): Long = archive.length()
 
+    /** All of it fetched, but not yet unpacked: the app stopped first. */
+    fun fetchedNotFinished(): Boolean = !isBusy && _installed.value == null && archive.length() == pack.archiveBytes
+
     fun download() {
         if (isBusy || _installed.value != null) return
         _error.value = null

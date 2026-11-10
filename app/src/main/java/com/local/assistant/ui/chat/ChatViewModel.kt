@@ -8,6 +8,10 @@ import androidx.lifecycle.viewmodel.viewModelFactory
 import android.net.Uri
 import com.local.assistant.AppContainer
 import com.local.assistant.chat.ChatSender
+import com.local.assistant.chat.ReplyReport
+import com.local.assistant.chat.ReplyReporter
+import com.local.assistant.chat.ReportError
+import com.local.assistant.chat.ReportReason
 import com.local.assistant.data.db.AttachmentKind
 import com.local.assistant.data.db.ChatEntity
 import com.local.assistant.data.db.MessageEntity
@@ -65,6 +69,10 @@ class ChatViewModel(
     private val transcriber: Transcriber? = null,
     /** Card numbers, PINs and the like are read out only while shown on screen ([SensitiveText.spoken]). */
     private val sensitive: SensitiveLock? = null,
+    /** Sends a reply the user reports to the developer. */
+    private val reporter: ReplyReporter? = null,
+    /** The app's version and model, which a report carries. */
+    private val appVersion: String = "",
 ) : ViewModel() {
 
     /** A tool waiting on the user's answer to a permission dialog, e.g. contacts for "call amma". */
@@ -231,6 +239,15 @@ class ChatViewModel(
         if (pieces.isEmpty()) return
         _readingAloud.value = message.id
         pieces.forEach(::say)
+    }
+
+    /**
+     * The report sheet's Send: the reply and the question before it go to the developer. Throws
+     * [ReportError], with words for the user, when the report didn't arrive.
+     */
+    suspend fun report(reply: MessageEntity, reason: ReportReason, note: String) {
+        val reporter = reporter ?: throw ReportError("Reporting isn't set up in this build of the app.")
+        reporter.send(replyReport(messages.value, reply, reason, note, appVersion))
     }
 
     /** The chat screen was left for another (Settings, Photos…): a reply read from its button stops. */
@@ -478,6 +495,8 @@ class ChatViewModel(
                     permissions = container.permissions,
                     sensitive = container.sensitiveLock,
                     transcriber = container.transcriber,
+                    reporter = container.replyReporter,
+                    appVersion = container.appVersion,
                 )
             }
         }
@@ -515,4 +534,29 @@ internal fun chipsByMessage(messages: List<MessageEntity>): Map<Long, List<ChatV
     }
     asker?.let { if (waiting.isNotEmpty()) byMessage[it] = waiting }
     return byMessage
+}
+
+/**
+ * A reported reply, as sent: the reply and the user's message just before it, with sensitive
+ * details hidden whether or not they're shown on screen. A photo or voice message is named, not
+ * sent; a voice message's words go as typed ones would.
+ */
+internal fun replyReport(
+    messages: List<MessageEntity>,
+    reply: MessageEntity,
+    reason: ReportReason,
+    note: String,
+    version: String,
+): ReplyReport {
+    val at = messages.indexOfFirst { it.id == reply.id }.takeIf { it >= 0 } ?: messages.size
+    val asked = messages.subList(0, at).lastOrNull { it.role == Role.USER }
+    val question = asked?.let { message ->
+        val attached = when (message.attachmentKind) {
+            AttachmentKind.IMAGE -> "[a photo]"
+            AttachmentKind.AUDIO -> "[a voice message]"
+            null -> null
+        }
+        listOfNotNull(attached, message.text.takeIf { it.isNotBlank() }?.let(SensitiveText::masked)).joinToString(" ")
+    }.orEmpty()
+    return ReplyReport(reason, note, question, SensitiveText.masked(reply.text), version)
 }

@@ -35,7 +35,7 @@ import java.io.File
  *
  *     adb shell am instrument -w -e eval overlay \
  *         -e class com.local.assistant.assist.OverlayToolsEvalTest \
- *         com.local.assistant.test/androidx.test.runner.AndroidJUnitRunner
+ *         com.taslim.localassistant.dev.test/androidx.test.runner.AndroidJUnitRunner
  */
 @RunWith(AndroidJUnit4::class)
 class OverlayToolsEvalTest {

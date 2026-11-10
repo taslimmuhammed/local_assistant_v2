@@ -26,7 +26,7 @@ import java.io.File
  * Delete it after use.
  *
  *     adb shell am instrument -w -e eval facerecall -e class com.local.assistant.gallery.FaceRecallTest \
- *         com.local.assistant.test/androidx.test.runner.AndroidJUnitRunner
+ *         com.taslim.localassistant.dev.test/androidx.test.runner.AndroidJUnitRunner
  */
 @RunWith(AndroidJUnit4::class)
 class FaceRecallTest {

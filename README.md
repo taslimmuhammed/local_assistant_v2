@@ -110,6 +110,9 @@ In the same place:
 
 ### Models and licences
 
+- **Local Assistant** itself: [GNU General Public License v3](LICENSE). The natural voice's
+  pronunciation comes from eSpeak NG (GPL v3), linked into the app through sherpa-onnx, so the
+  whole app is under the same licence.
 - **Gemma 4 E4B**, the assistant: by Google, from Hugging Face, Apache License 2.0.
 - **EmbeddingGemma 2 (text and vision, 440M)**, memory search and photo search: by Google,
   downloaded from litert-community on Hugging Face, Apache License 2.0.
@@ -130,6 +133,8 @@ In the same place:
     OpenStreetMap's [Nominatim](https://nominatim.openstreetmap.org) search, to find it. Never the
     reminder, nor exactly where you are.
   - **Maps** for place reminders load from [OpenFreeMap](https://openfreemap.org).
+  - **Report this reply** (the flag under a reply): that reply, the question before it and the
+    reason you pick go to the developer through a Google Form. Nothing that says who you are.
 - Card numbers, ID numbers and photos of your documents stay hidden until you confirm it's you
   with your fingerprint, face or PIN.
 - No account, no ads, no analytics.

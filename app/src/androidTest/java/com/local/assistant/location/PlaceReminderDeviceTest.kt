@@ -44,7 +44,7 @@ import org.junit.runner.RunWith
  *
  *     adb shell am instrument -w -e demo place [-e screen show] [-e via near] \
  *         -e class com.local.assistant.location.PlaceReminderDeviceTest \
- *         com.local.assistant.test/androidx.test.runner.AndroidJUnitRunner
+ *         com.taslim.localassistant.dev.test/androidx.test.runner.AndroidJUnitRunner
  *
  * Progress goes to logcat (tags PlaceReminderTest, PlaceFences, PlaceReminders).
  */

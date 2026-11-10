@@ -26,7 +26,7 @@ import kotlin.math.min
  * sides start from the same pixels, and golden.json with each face's box and print.
  *
  *     adb shell am instrument -w -e eval faces [-e chat loaded] -e class com.local.assistant.gallery.FaceEvalTest \
- *         com.local.assistant.test/androidx.test.runner.AndroidJUnitRunner
+ *         com.taslim.localassistant.dev.test/androidx.test.runner.AndroidJUnitRunner
  *
  * `-e chat loaded` loads the chat model first: LiteRT-LM and LiteRT's interpreter in one process.
  */

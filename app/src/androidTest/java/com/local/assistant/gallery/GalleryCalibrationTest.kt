@@ -26,7 +26,7 @@ import kotlin.math.sqrt
  *
  *     adb shell am instrument -w -e eval calibrate -e queries "beach,sunset,food" \
  *         -e class com.local.assistant.gallery.GalleryCalibrationTest \
- *         com.local.assistant.test/androidx.test.runner.AndroidJUnitRunner
+ *         com.taslim.localassistant.dev.test/androidx.test.runner.AndroidJUnitRunner
  *
  * Writes files/calibration/<query>.png and .csv in external storage.
  */

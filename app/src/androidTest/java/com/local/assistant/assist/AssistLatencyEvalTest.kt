@@ -30,7 +30,7 @@ import java.io.File
  *
  *     adb shell am instrument -w -e eval latency \
  *         -e class com.local.assistant.assist.AssistLatencyEvalTest \
- *         com.local.assistant.test/androidx.test.runner.AndroidJUnitRunner
+ *         com.taslim.localassistant.dev.test/androidx.test.runner.AndroidJUnitRunner
  *
  * Uses the routing eval's clip 28 ("what's the capital of Kerala?": no tool, a short answer).
  * Test chats are deleted afterwards.

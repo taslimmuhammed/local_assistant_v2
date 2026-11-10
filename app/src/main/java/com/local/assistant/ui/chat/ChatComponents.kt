@@ -22,6 +22,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.VolumeUp
+import androidx.compose.material.icons.outlined.Flag
 import androidx.compose.material.icons.outlined.StopCircle
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -58,6 +59,8 @@ fun MessageRow(
     readingAloud: Boolean = false,
     /** Gives a reply a speaker button that reads it aloud, and stops it while it is read. */
     onReadAloud: ((MessageEntity) -> Unit)? = null,
+    /** Gives a reply a flag that reports it to the developer (see ReportReplyDialog). */
+    onReport: ((MessageEntity) -> Unit)? = null,
 ) {
     when (message.role) {
         Role.USER -> UserMessage(message, modifier)
@@ -68,6 +71,7 @@ fun MessageRow(
             timeToFirstTokenMs = message.timeToFirstTokenMs,
             readingAloud = readingAloud,
             onReadAloud = onReadAloud?.let { read -> { read(message) } },
+            onReport = onReport?.let { report -> { report(message) } },
             modifier = modifier,
         )
         // Tool calls are bookkeeping, not conversation.
@@ -143,6 +147,8 @@ fun AssistantMessage(
     readingAloud: Boolean = false,
     /** The speaker button under the reply; none while it streams, or when it has nothing to say. */
     onReadAloud: (() -> Unit)? = null,
+    /** The flag beside it, to report the reply; none while it streams. */
+    onReport: (() -> Unit)? = null,
     modifier: Modifier = Modifier,
 ) {
     Column(modifier = modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp)) {
@@ -159,10 +165,12 @@ fun AssistantMessage(
         )
         val sayable = remember(text) { SpeechText.clean(text).any(Char::isLetterOrDigit) }
         val readButton = onReadAloud?.takeIf { !streaming && sayable }
-        if (readButton != null) {
-            // Pulled left by the button's own inset, so the speaker lines up with the reply's text.
-            Row(Modifier.offset(x = -READ_ALOUD_INSET), verticalAlignment = Alignment.CenterVertically) {
-                ReadAloudButton(readingAloud, readButton)
+        val reportButton = onReport?.takeIf { !streaming }
+        if (readButton != null || reportButton != null) {
+            // Pulled left by the button's own inset, so the first icon lines up with the reply's text.
+            Row(Modifier.offset(x = -ACTION_INSET), verticalAlignment = Alignment.CenterVertically) {
+                if (readButton != null) ReadAloudButton(readingAloud, readButton)
+                if (reportButton != null) ReportButton(reportButton)
                 if (footnote.isNotEmpty()) Footnote(footnote)
             }
         } else if (footnote.isNotEmpty()) {
@@ -184,19 +192,31 @@ private fun Footnote(parts: List<String>, modifier: Modifier = Modifier) {
 /** Reads the reply aloud; while it is being read, a stop button instead. */
 @Composable
 private fun ReadAloudButton(reading: Boolean, onClick: () -> Unit) {
-    IconButton(onClick = onClick, modifier = Modifier.size(READ_ALOUD_SIZE)) {
+    IconButton(onClick = onClick, modifier = Modifier.size(ACTION_SIZE)) {
         Icon(
             if (reading) Icons.Outlined.StopCircle else Icons.AutoMirrored.Outlined.VolumeUp,
             contentDescription = if (reading) "Stop reading aloud" else "Read aloud",
             tint = if (reading) AppColors.TextPrimary else AppColors.TextSecondary,
-            modifier = Modifier.size(READ_ALOUD_ICON),
+            modifier = Modifier.size(ACTION_ICON),
         )
     }
 }
 
-private val READ_ALOUD_SIZE = 36.dp
-private val READ_ALOUD_ICON = 18.dp
-private val READ_ALOUD_INSET = (READ_ALOUD_SIZE - READ_ALOUD_ICON) / 2
+@Composable
+private fun ReportButton(onClick: () -> Unit) {
+    IconButton(onClick = onClick, modifier = Modifier.size(ACTION_SIZE)) {
+        Icon(
+            Icons.Outlined.Flag,
+            contentDescription = "Report this reply",
+            tint = AppColors.TextSecondary,
+            modifier = Modifier.size(ACTION_ICON),
+        )
+    }
+}
+
+private val ACTION_SIZE = 36.dp
+private val ACTION_ICON = 18.dp
+private val ACTION_INSET = (ACTION_SIZE - ACTION_ICON) / 2
 
 /** Shown between hitting send and the first token arriving — prefill can take a few seconds. */
 /**

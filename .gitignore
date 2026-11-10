@@ -29,3 +29,6 @@ promo/source/music.wav
 keystore.properties
 *.jks
 *.keystore
+
+# Play declaration videos: uploaded to YouTube, not kept in git.
+docs/play-store/videos/*.mp4

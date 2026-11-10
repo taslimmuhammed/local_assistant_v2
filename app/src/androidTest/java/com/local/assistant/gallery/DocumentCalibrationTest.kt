@@ -17,7 +17,7 @@ import java.io.File
  * all. Counts only. Needs the photos scored first (an indexing pass on the Photos screen).
  *
  *     adb shell am instrument -w -e eval doccal [-e index true] -e class com.local.assistant.gallery.DocumentCalibrationTest \
- *         com.local.assistant.test/androidx.test.runner.AndroidJUnitRunner
+ *         com.taslim.localassistant.dev.test/androidx.test.runner.AndroidJUnitRunner
  */
 @RunWith(AndroidJUnit4::class)
 class DocumentCalibrationTest {

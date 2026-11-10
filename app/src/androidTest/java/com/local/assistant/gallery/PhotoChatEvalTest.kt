@@ -23,7 +23,7 @@ import java.io.File
  * deleted afterwards.
  *
  *     adb shell am instrument -w -e eval photochat [-e rounds 3] [-e warm <photo search>] -e class com.local.assistant.gallery.PhotoChatEvalTest \
- *         com.local.assistant.test/androidx.test.runner.AndroidJUnitRunner
+ *         com.taslim.localassistant.dev.test/androidx.test.runner.AndroidJUnitRunner
  */
 @RunWith(AndroidJUnit4::class)
 class PhotoChatEvalTest {

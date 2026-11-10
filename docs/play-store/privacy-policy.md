@@ -1,10 +1,12 @@
 # Local Assistant: privacy policy
 
-Effective 10 November 2026. Developer: **[your name]**, contact: **[contact email]**.
+Effective 10 November 2026. Developer: **[your developer name]**, contact:
+**developertaslim@gmail.com**.
 
 Local Assistant is an AI assistant that runs on your phone. The AI model, your chats and what the
 assistant remembers stay on your phone. There is no account, and no ads, analytics or tracking.
-The developer does not receive, store or sell any of your data.
+The developer receives nothing from the app unless you report a reply (see below), and never
+sells data.
 
 This policy says what the app reads, what it keeps on the phone, and the few times something
 leaves the phone, always because you asked for it.
@@ -56,8 +58,16 @@ Only in these cases, and only for the thing you asked:
 | Your web search, and your Tavily key | Tavily (tavily.com) | Only if you add your own Tavily key and ask something that needs the web. Tavily's privacy policy applies. |
 | The name of a place you search for, and the rough area around you | OpenStreetMap's Nominatim (nominatim.openstreetmap.org) | When you make a place reminder for a shop or address. Not your exact position. |
 | The part of the map being shown | OpenFreeMap (openfreemap.org) | When a place reminder's map is on screen, to load the map. |
+| A reply you report: the reply, your message just before it, the reason and note you give, and the app's version | The developer, through Google Forms (Google is the form's host) | Only when you tap the flag under a reply and then Send report. Card numbers and similar details are hidden first. Nothing that identifies you or your phone is attached. |
 
 Nothing else is sent. The app has no server of its own.
+
+## Reports
+
+Reports are kept in the developer's Google account, read only by the developer, and used only to
+look into the reply and make the app's answers safer. They carry no name, account or device
+identifier, so a report can't be traced back to you. Google, which hosts the form, sees the IP
+address it came from, as with any web request.
 
 ## Your choices
 
@@ -71,7 +81,7 @@ Nothing else is sent. The app has no server of its own.
 ## Children
 
 Local Assistant is not directed at children under 13 and does not knowingly collect data from
-them. It collects no data from anyone.
+them. It collects nothing that identifies anyone.
 
 ## Changes
 
@@ -79,4 +89,4 @@ If this policy changes, the new version will be posted at this address with a ne
 
 ## Contact
 
-Questions about this policy: **[contact email]**.
+Questions about this policy: **developertaslim@gmail.com**.

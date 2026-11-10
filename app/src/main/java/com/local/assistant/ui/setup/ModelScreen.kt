@@ -200,6 +200,14 @@ internal fun TransferSection(transfer: Transfer, onCancel: () -> Unit) {
                 )
             }
         }
+        if (transfer.kind == TransferKind.DOWNLOAD) {
+            Text(
+                text = "You can leave the app: it keeps downloading, with its progress in a notification.",
+                style = MaterialTheme.typography.bodyMedium,
+                color = AppColors.TextSecondary,
+                modifier = Modifier.padding(top = 12.dp),
+            )
+        }
         OutlinedButton(
             onClick = onCancel,
             modifier = Modifier.padding(top = 20.dp),
@@ -311,6 +319,13 @@ private fun NotInstalledSection(
         ) {
             Text(if (resumableBytes > 0) "Resume download" else "Download model")
         }
+        Text(
+            text = "Photo search and the ${com.local.assistant.voice.VoicePack.KOKORO.title} voice download after it, " +
+                "${formatBytes(com.local.assistant.gallery.GalleryModel.FILE.sizeBytes + com.local.assistant.voice.VoicePack.KOKORO.archiveBytes)} more.",
+            style = MaterialTheme.typography.bodyMedium,
+            color = AppColors.TextSecondary,
+            modifier = Modifier.padding(top = 8.dp, bottom = 4.dp),
+        )
         OutlinedButton(
             onClick = onImport,
             modifier = Modifier.fillMaxWidth().padding(top = 10.dp),

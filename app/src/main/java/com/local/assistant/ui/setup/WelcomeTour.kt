@@ -965,7 +965,7 @@ private val TourPages = listOf(
         "The model runs on this phone, so your chats, memories, photos and voice stay on it.",
         listOf(
             TourPoint(Icons.Outlined.Fingerprint, "Card and ID numbers hidden until your fingerprint, face or PIN"),
-            TourPoint(Icons.Outlined.CloudOff, "The internet only for downloads, web search and finding places"),
+            TourPoint(Icons.Outlined.CloudOff, "The internet only for downloads, web search, places and replies you report"),
             TourPoint(Icons.Outlined.Block, "No account, no ads, no tracking"),
             TourPoint(Icons.Outlined.ScreenLockPortrait, "On the lock screen it takes commands, but says nothing about you"),
         ),

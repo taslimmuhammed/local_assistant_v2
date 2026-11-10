@@ -34,7 +34,7 @@ import java.io.File
  * compared EmbeddingGemma 300M, memory search's own model then, with the photo model's text side.
  *
  *     adb shell am instrument -w -e eval textembed -e class com.local.assistant.memory.TextEmbedderEvalTest \
- *         com.local.assistant.test/androidx.test.runner.AndroidJUnitRunner
+ *         com.taslim.localassistant.dev.test/androidx.test.runner.AndroidJUnitRunner
  *
  * Results also go to files/text-embed-eval.txt in external storage.
  */

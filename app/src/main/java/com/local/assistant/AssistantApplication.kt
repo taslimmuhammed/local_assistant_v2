@@ -86,6 +86,8 @@ import com.local.assistant.memory.work.EmbeddingQueue
 import com.local.assistant.memory.work.ModelScheduler
 import com.local.assistant.model.ModelCatalog
 import com.local.assistant.model.ModelManager
+import com.local.assistant.model.formatBytes
+import kotlinx.coroutines.flow.map
 import com.local.assistant.reminders.AlarmReminderScheduler
 import com.local.assistant.reminders.ClockAlarms
 import com.local.assistant.reminders.PlaceFences
@@ -143,6 +145,7 @@ class AppContainer(context: Context) {
             embeddingQueue.kick()
             // Started while visible, as Android requires, if the wake word or a place reminder needs it.
             KeepReadyService.update(appContext)
+            finishCutShortDownloads()
             // Fences dropped while location was off, or waiting for location all the time.
             appScope.launch { runCatching { PlaceReminderReceiver.watchAll(this@AppContainer) }.onFailure { Log.w("AppContainer", "Watching place reminders failed", it) } }
         },
@@ -335,6 +338,15 @@ class AppContainer(context: Context) {
 
     /** Secrets the user pastes in, encrypted with a Keystore key. */
     val secrets = SecretStore(context)
+
+    /** "Report this reply": to the developer's Google Form (see ReplyReporter). */
+    val replyReporter = com.local.assistant.chat.ReplyReporter()
+
+    /** "0.3.0 (5), gemma-4-E4B-it.litertlm": what a report says it came from. */
+    val appVersion: String = runCatching {
+        val info = context.packageManager.getPackageInfo(context.packageName, 0)
+        "${info.versionName} (${androidx.core.content.pm.PackageInfoCompat.getLongVersionCode(info)}), ${com.local.assistant.model.ModelCatalog.FILE_NAME}"
+    }.getOrDefault(com.local.assistant.model.ModelCatalog.FILE_NAME)
 
     /** Tavily, with the user's own key; off (and undeclared to the model) until there is one. */
     val webSearch = TavilySearch(key = { secrets.get(SecretStore.TAVILY_KEY) })
@@ -698,7 +710,38 @@ class AppContainer(context: Context) {
                     Log.i("AppContainer", "Chat model installed; fetching ${GalleryModel.DISPLAY_NAME}")
                     galleryModelManager.download()
                 }
+                if (arrived) fetchVoiceAfterPhotoModel()
             }
+        }
+    }
+
+    /**
+     * A download that came in with the app out of sight, but whose last step (the photo model's
+     * check, the voice's unpack, a minute without traffic) the phone froze the app in: Android
+     * lets nothing be started from the background to see it through (see BackgroundDownloads).
+     * Finished as the app comes to the front, with nothing fetched again.
+     */
+    private fun finishCutShortDownloads() {
+        for (manager in listOf(modelManager, galleryModelManager)) {
+            if (manager.fetchedNotFinished()) manager.download()
+        }
+        for (installer in voicePacks) {
+            if (installer.fetchedNotFinished()) installer.download()
+        }
+    }
+
+    /**
+     * Kokoro, the natural voice, comes with the first chat model too (the user, 10 Nov 2026),
+     * once the photo model is done, so the two don't split the connection. It becomes the voice
+     * answers are read in (see [voicePacks]); the phone's own voices stay in Settings › Voice.
+     */
+    private fun fetchVoiceAfterPhotoModel() {
+        val kokoro = voicePack(VoicePack.KOKORO)
+        if (kokoro.installed.value != null || kokoro.isBusy) return
+        appScope.launch {
+            galleryModelManager.awaitIdle()
+            Log.i("AppContainer", "Fetching the ${VoicePack.KOKORO.title} voice")
+            kokoro.download()
         }
     }
 
@@ -736,8 +779,40 @@ class AppContainer(context: Context) {
         },
     )
 
+    /** The download under way, if any, as its notification tells it: one at a time is shown. */
+    private fun downloads(): kotlinx.coroutines.flow.Flow<com.local.assistant.model.DownloadState?> {
+        fun of(name: String, transfer: com.local.assistant.model.Transfer?) = transfer?.let {
+            val verb = if (it.kind == com.local.assistant.model.TransferKind.IMPORT) "Copying" else "Downloading"
+            com.local.assistant.model.DownloadState(
+                title = "$verb $name",
+                fraction = it.fraction.takeIf { _ -> it.bytesTotal > 0 },
+                detail = if (it.checking) "Checking the download" else "${formatBytes(it.bytesDone)} of ${formatBytes(it.bytesTotal)}",
+                finishing = it.checking,
+            )
+        }
+        val models = kotlinx.coroutines.flow.combine(
+            modelManager.transfer,
+            galleryModelManager.transfer,
+            embedderManager.transfer,
+        ) { chat, photo, imported ->
+            of(ModelCatalog.DISPLAY_NAME, chat) ?: of("the photo model", photo) ?: of("the memory search model", imported)
+        }
+        val voices = kotlinx.coroutines.flow.combine(voicePacks.map { installer -> installer.progress.map { installer.pack to it } }) { all ->
+            all.firstNotNullOfOrNull { (pack, progress) ->
+                when (progress) {
+                    is VoicePackInstaller.Progress.Downloading -> of("the ${pack.title} voice", progress.transfer)
+                    is VoicePackInstaller.Progress.Unpacking ->
+                        com.local.assistant.model.DownloadState("Unpacking the ${pack.title} voice", progress.fraction, "Almost there", finishing = true)
+                    null -> null
+                }
+            }
+        }
+        return kotlinx.coroutines.flow.combine(models, voices) { model, voice -> model ?: voice }
+    }
+
     init {
         fetchPhotoModelAfterFirstModel()
+        com.local.assistant.model.BackgroundDownloads.watch(appContext, appScope, downloads())
         appScope.launch {
             dropOldEmbedder()
             // Memory search starts once the photo model is here (downloaded later, or already).

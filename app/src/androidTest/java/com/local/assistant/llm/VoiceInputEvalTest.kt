@@ -28,7 +28,7 @@ import java.util.Locale
  * as it sends them now (`ContextWindow.sentAttachment`).
  *
  *     adb shell am instrument -w -e eval voiceinput [-e part known|yours] [-e only <id>|<id>] \
- *         -e class com.local.assistant.llm.VoiceInputEvalTest com.local.assistant.test/androidx.test.runner.AndroidJUnitRunner
+ *         -e class com.local.assistant.llm.VoiceInputEvalTest com.taslim.localassistant.dev.test/androidx.test.runner.AndroidJUnitRunner
  *
  * Known: requests with a right answer, `voice-input/known/<id>.wav` under the app's external files
  * (`say -v Rishi`, 16 kHz mono, silence either side). Yours: `voice-input/yours.tsv`, one recording

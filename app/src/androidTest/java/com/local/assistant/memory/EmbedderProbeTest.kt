@@ -26,7 +26,7 @@ import kotlin.math.sqrt
  * the app (or `-e embedder /path/to/bundle.litertlm`):
  *
  *     adb shell am instrument -w -e embed true -e class com.local.assistant.memory.EmbedderProbeTest \
- *         com.local.assistant.test/androidx.test.runner.AndroidJUnitRunner
+ *         com.taslim.localassistant.dev.test/androidx.test.runner.AndroidJUnitRunner
  *
  * Results also go to files/embedder-probe.txt in the app's external files directory.
  */

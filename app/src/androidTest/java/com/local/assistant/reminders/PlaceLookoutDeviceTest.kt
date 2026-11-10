@@ -32,7 +32,7 @@ import org.junit.runner.RunWith
  *
  *     adb shell am instrument -w -e lookout set|clear \
  *         -e class com.local.assistant.reminders.PlaceLookoutDeviceTest \
- *         com.local.assistant.test/androidx.test.runner.AndroidJUnitRunner
+ *         com.taslim.localassistant.dev.test/androidx.test.runner.AndroidJUnitRunner
  */
 @RunWith(AndroidJUnit4::class)
 class PlaceLookoutDeviceTest {

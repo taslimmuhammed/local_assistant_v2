@@ -27,7 +27,7 @@ import java.io.File
  * either build. GPU, as the app loads it, with MTP on and off; the same prompt and seed each time.
  *
  *     adb shell am instrument -w -e speed true -e class com.local.assistant.llm.DecodeSpeedProbeTest \
- *         com.local.assistant.test/androidx.test.runner.AndroidJUnitRunner
+ *         com.taslim.localassistant.dev.test/androidx.test.runner.AndroidJUnitRunner
  *
  * Appends to files/decode-speed.txt in external storage.
  */

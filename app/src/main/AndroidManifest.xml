@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
 
     <!-- Only used to download the model file. Inference itself is fully offline. -->
     <uses-permission android:name="android.permission.INTERNET" />
@@ -71,6 +72,16 @@
     <!-- "Turn on Do Not Disturb": the user still has to allow it in Settings. -->
     <uses-permission android:name="android.permission.ACCESS_NOTIFICATION_POLICY" />
 
+    <!-- Model and voice downloads keep going with the app closed (model/BackgroundDownloads): as a
+         user-initiated data transfer job from Android 14, a plain foreground service before. -->
+    <uses-permission android:name="android.permission.RUN_USER_INITIATED_JOBS" />
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+
+    <!-- LiteRT brings in Play's AI and asset pack delivery, whose unpacking service runs as a data
+         sync foreground service. The app has no packs, so the service never runs; left in, Play
+         asks for a declaration and a video of it. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" tools:node="remove" />
+
     <queries>
         <intent>
             <action android:name="android.intent.action.SET_ALARM" />
@@ -141,7 +152,7 @@
             android:exported="true"
             android:excludeFromRecents="true"
             android:launchMode="singleTask"
-            android:taskAffinity="com.local.assistant.assist"
+            android:taskAffinity="${applicationId}.assist"
             android:theme="@style/Theme.LocalAssistant.Assist"
             android:windowSoftInputMode="adjustResize|stateHidden"
             android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboard|keyboardHidden|navigation|uiMode|density">
@@ -182,7 +193,7 @@
             android:exported="false"
             android:excludeFromRecents="true"
             android:launchMode="singleTask"
-            android:taskAffinity="com.local.assistant.away"
+            android:taskAffinity="${applicationId}.away"
             android:theme="@style/Theme.LocalAssistant.Brief"
             android:windowSoftInputMode="adjustResize|stateHidden"
             android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboard|keyboardHidden|navigation|uiMode|density" />
@@ -195,7 +206,7 @@
             android:exported="false"
             android:excludeFromRecents="true"
             android:launchMode="singleTask"
-            android:taskAffinity="com.local.assistant.alarm"
+            android:taskAffinity="${applicationId}.alarm"
             android:theme="@style/Theme.LocalAssistant.Assist"
             android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboard|keyboardHidden|navigation|uiMode|density" />
 
@@ -245,6 +256,20 @@
             android:exported="false"
             android:foregroundServiceType="location|microphone" />
 
+        <service
+            android:name=".model.DownloadJob"
+            android:exported="false"
+            android:permission="android.permission.BIND_JOB_SERVICE" />
+        <!-- From Android 14, the check or unpack after a download: no permission or declaration. -->
+        <service
+            android:name=".model.FinishService"
+            android:exported="false"
+            android:foregroundServiceType="shortService" />
+        <!-- Before Android 14 only, where a foreground service needs no type. -->
+        <service
+            android:name=".model.DownloadService"
+            android:exported="false" />
+
         <receiver android:name=".reminders.ReminderReceiver" android:exported="false" />
         <receiver android:name=".reminders.ReminderActionReceiver" android:exported="false" />
         <receiver android:name=".reminders.EventReminderReceiver" android:exported="false" />
@@ -272,5 +297,10 @@
                 android:name="android.support.FILE_PROVIDER_PATHS"
                 android:resource="@xml/shared_files" />
         </provider>
+
+        <!-- See FOREGROUND_SERVICE_DATA_SYNC above. -->
+        <service
+            android:name="com.google.android.play.core.assetpacks.ExtractionForegroundService"
+            tools:node="remove" />
     </application>
 </manifest>

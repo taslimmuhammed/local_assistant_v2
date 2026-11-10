@@ -37,7 +37,7 @@ import kotlin.math.sin
  * as `dumpsys meminfo` counts them) and its graphics memory, and what the step added.
  *
  *     adb shell am instrument -w -e eval ram -e class com.local.assistant.llm.MemoryBreakdownTest \
- *         com.local.assistant.test/androidx.test.runner.AndroidJUnitRunner
+ *         com.taslim.localassistant.dev.test/androidx.test.runner.AndroidJUnitRunner
  *
  * Results also go to files/ram-breakdown.txt in external storage.
  */

@@ -24,7 +24,7 @@ import java.io.File
  * answers yes or no, and only scores, ids and those answers are logged.
  *
  *     adb shell am instrument -w -e eval photorecall -e class com.local.assistant.gallery.PhotoRecallCalibrationTest \
- *         com.local.assistant.test/androidx.test.runner.AndroidJUnitRunner
+ *         com.taslim.localassistant.dev.test/androidx.test.runner.AndroidJUnitRunner
  *
  * Results go to logcat (tag PhotoRecallCalibration) and `Android/data/<app>/files/photo-recall-calibration.txt`.
  */
@@ -139,7 +139,7 @@ class PhotoRecallCalibrationTest {
      * gets it (nothing is sent for those: no alarm is set, no one is called).
      *
      *     adb shell am instrument -w -e eval photoanswers -e class com.local.assistant.gallery.PhotoRecallCalibrationTest \
-     *         com.local.assistant.test/androidx.test.runner.AndroidJUnitRunner
+     *         com.taslim.localassistant.dev.test/androidx.test.runner.AndroidJUnitRunner
      */
     @Test
     fun answersThroughTheApp() = runBlocking<Unit> {

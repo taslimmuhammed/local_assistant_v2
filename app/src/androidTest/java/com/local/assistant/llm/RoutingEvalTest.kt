@@ -41,7 +41,7 @@ import java.util.Locale
  *
  *     adb shell am instrument -w -e eval true \
  *         -e class com.local.assistant.llm.RoutingEvalTest \
- *         com.local.assistant.test/androidx.test.runner.AndroidJUnitRunner
+ *         com.taslim.localassistant.dev.test/androidx.test.runner.AndroidJUnitRunner
  *
  * Results go to logcat (tag RoutingEval) and `Android/data/<app>/files/routing-eval.txt`.
  */

@@ -6,8 +6,9 @@ yours to fill in or decide.
 
 ## Privacy policy
 
-The public URL of `privacy-policy.md`, once it is online (Google Sites, or a public GitHub repo
-with Pages). It has to be reachable without signing in, and not a PDF.
+https://github.com/taslimmuhammed/local_assistant_v2/blob/main/docs/play-store/privacy-policy.md
+(the repository is public; the link works once this file is pushed). It has to stay reachable
+without signing in.
 
 ## Ads
 
@@ -31,6 +32,13 @@ language, controlled substances, gambling and purchases. Users don't interact wi
 and the app shares no location with other users. If asked about AI-generated content, say yes:
 it writes text replies with an AI model that runs on the phone.
 
+## AI-generated content
+
+Play asks that users can report offensive AI output to the developer without leaving the app.
+Every finished reply has a flag button beside its speaker button: "Report this reply" opens a
+sheet with a reason and an optional note, and Send report posts it to the developer's Google
+Form. If a reviewer asks where: "Tap the flag icon under any reply in a chat."
+
 ## Target audience
 
 18 and over. A younger audience brings in the Families policy.
@@ -42,13 +50,15 @@ else and the developer never sees it. Data read and kept only on the phone is no
 
 - Does your app collect or share any of the required user data types? **Yes**
 - Is all of the user data collected by your app encrypted in transit? **Yes** (HTTPS only)
-- Do you provide a way for users to request that their data is deleted? **No**: nothing is
-  kept off the phone; deleting chats or uninstalling deletes everything.
+- Do you provide a way for users to request that their data is deleted? **No**: the only thing
+  kept off the phone is a report the user chose to send, which carries nothing that identifies
+  them; everything else goes with deleting chats or uninstalling.
 
 | Data type | Collected | Shared | Ephemeral | Required | Why |
 |---|---|---|---|---|---|
 | Location → Approximate location | Yes | No | Yes | Optional | App functionality: a place reminder sends the place's name and the rough area around you to OpenStreetMap's Nominatim, and the map loads its tiles from OpenFreeMap |
 | App activity → In-app search history | Yes | No | Yes | Optional | App functionality: web searches go to Tavily, with the user's own key |
+| Messages → Other in-app messages | Yes | No | No | Optional | Fraud prevention, security, and compliance: a reply the user reports, with their message before it, goes to the developer's Google Form |
 
 "Shared" is No for both: the user asks for each search, which Play treats as a user-initiated
 transfer rather than sharing.
@@ -83,8 +93,11 @@ READ_MEDIA_IMAGES:
 > needs persistent access to the whole library, kept indexed on the phone by an on-device model,
 > which the one-time photo picker can't provide. Photos never leave the phone.
 
-READ_MEDIA_VIDEO: [same wording if video search stays; otherwise remove the permission from the
-manifest and PhotoLibrary, and skip this field]
+READ_MEDIA_VIDEO:
+
+> Videos are searched like photos: the app looks at frames of each video on the phone so "the
+> video of the birthday cake" finds it in chat. That needs ongoing access to the whole library;
+> the one-time picker can't provide it. Videos never leave the phone.
 
 ## Foreground service permissions
 
@@ -92,9 +105,10 @@ manifest and PhotoLibrary, and skip this field]
 |---|---|---|
 | Location | Place reminders | While a place reminder is set and the app is not the phone's assistant, a foreground service with a visible notification asks Android for location fixes so the reminder rings on arrival with the screen off. It stops when the last place reminder is done. |
 | Microphone | Wake word | When the user turns on "Hey Luna" (off by default), a foreground service with a "Listening" notification and a Stop button listens for the phrase on the phone. Audio is never stored or sent. |
-| Data sync | [see below] | Comes from Google's LiteRT library (`ExtractionForegroundService`, for its NPU runtime), not from the app. Either declare it as "used by the LiteRT library to unpack downloaded components", or remove it from the manifest and check People in photo search still works. |
 
-Video: one screen recording per type, showing the notification while the feature runs.
+Video: one screen recording per type, showing the notification while the feature runs. The data
+sync type that LiteRT's Play delivery library brought in is removed from the manifest (the app
+has no asset packs, so it never ran), so only these two are declared.
 
 ## Background location
 

@@ -38,7 +38,7 @@ Optional: after you unlock, a short summary of the messages you missed, with rep
 
 PRIVATE BY DESIGN
 • The model runs on your phone, and what it learns about you stays there
-• The internet is used only to download the model and voice, for web searches you ask for, and to look up a place's name for a place reminder
+• The internet is used only to download the model and voice, for web searches you ask for, to look up a place's name for a place reminder, and to send a reply you choose to report
 • It asks before reading your contacts, photos, health data or location, and the wake word and message summaries are off until you turn them on
 
 WHAT IT NEEDS
@@ -49,14 +49,19 @@ WHAT IT NEEDS
 
 - App category: Productivity
 - Tags: Personal assistant, Productivity, AI
-- Email: [contact email]
+- Email: developertaslim@gmail.com (shown publicly on the listing)
 - Website: optional
-- Privacy policy: the public URL of privacy-policy.md
+- Privacy policy: https://github.com/taslimmuhammed/local_assistant_v2/blob/main/docs/play-store/privacy-policy.md (works once pushed)
 
 ## Graphics
 
-- App icon: 512 × 512 PNG, up to 1 MB
-- Feature graphic: 1024 × 500 PNG or JPEG
-- Phone screenshots: 2 to 8, 9:16, each side 320–3,840 px (promo/source/assets/screens and
-  docs/screens have blurred ones)
-- Video: a YouTube link, optional
+All in `graphics/`, made by `graphics/make.py` from docs/screens:
+
+- App icon: `icon-512.png`
+- Feature graphic: `feature-graphic.png` (1024 × 500)
+- Phone screenshots: `screenshot-1-home.png` … `screenshot-8-drawer.png` (1080 × 1920, eight is
+  Play's most), in that order. The phone's own screenshots are too tall for Play (more than
+  twice as tall as wide), so each sits on a card under a caption; three are welcome tour pages,
+  which have their own headings.
+- Video: optional. `promo/LocalAssistant_Promo_720p.mp4`, uploaded to YouTube (public or
+  unlisted, ads off), can go here.

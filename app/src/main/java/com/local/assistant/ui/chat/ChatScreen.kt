@@ -108,6 +108,7 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.repeatOnLifecycle
 import com.local.assistant.data.db.AttachmentKind
+import com.local.assistant.data.db.MessageEntity
 import com.local.assistant.data.db.Role
 import com.local.assistant.data.repo.ChatRepository
 import com.local.assistant.llm.LlmService
@@ -218,6 +219,19 @@ fun ChatScreen(
     val micPermission = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission(),
     ) { granted -> if (granted) viewModel.startRecording() }
+
+    // The reply whose flag was tapped, while its report sheet is open.
+    var reporting by remember { mutableStateOf<MessageEntity?>(null) }
+    reporting?.let { reply ->
+        ReportReplyDialog(
+            onDismiss = { reporting = null },
+            onSend = { reason, note -> viewModel.report(reply, reason, note) },
+            onSent = {
+                reporting = null
+                scope.launch { snackbarHostState.showSnackbar("Report sent. Thank you.") }
+            },
+        )
+    }
 
     // A reply read from its button stops when this screen gives way to Settings, Photos or Memory.
     DisposableEffect(viewModel) {
@@ -390,7 +404,12 @@ fun ChatScreen(
                             // not under the question.
                             val asking = messages.lastOrNull()?.takeIf { streamingText != null && it.role == Role.USER }
                             items(messages, key = { it.id }) { message ->
-                                MessageRow(message, readingAloud = message.id == readingAloud, onReadAloud = viewModel::readAloud)
+                                MessageRow(
+                                    message,
+                                    readingAloud = message.id == readingAloud,
+                                    onReadAloud = viewModel::readAloud,
+                                    onReport = { reporting = it },
+                                )
                                 if (message != asking) {
                                     MemoryChips(
                                         chips = chips[message.id].orEmpty(),

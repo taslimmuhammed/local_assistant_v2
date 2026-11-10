@@ -27,7 +27,7 @@ import java.io.File
  * memory, in hidden chats deleted afterwards. Scored by whether find_photos ran.
  *
  *     adb shell am instrument -w -e eval photorequests [-e rounds 3] -e class com.local.assistant.gallery.PhotoRequestsEvalTest \
- *         com.local.assistant.test/androidx.test.runner.AndroidJUnitRunner
+ *         com.taslim.localassistant.dev.test/androidx.test.runner.AndroidJUnitRunner
  *
  * Results go to logcat (tag PhotoRequestsEval) and `Android/data/<app>/files/photo-requests-eval.txt`.
  */
@@ -106,7 +106,7 @@ class PhotoRequestsEvalTest {
      * sent or called). Each message should still call its tool, and none fail.
      *
      *     adb shell am instrument -w -e eval replaymix -e class com.local.assistant.gallery.PhotoRequestsEvalTest \
-     *         com.local.assistant.test/androidx.test.runner.AndroidJUnitRunner
+     *         com.taslim.localassistant.dev.test/androidx.test.runner.AndroidJUnitRunner
      */
     @Test
     fun otherToolsReplayed() = runBlocking<Unit> {
@@ -156,7 +156,7 @@ class PhotoRequestsEvalTest {
      * begun after [since] (ms), never by title alone, since titles repeat.
      *
      *     adb shell am instrument -w -e eval deletechat -e title "show me my sunset photos" -e since 1793... \
-     *         -e class com.local.assistant.gallery.PhotoRequestsEvalTest com.local.assistant.test/androidx.test.runner.AndroidJUnitRunner
+     *         -e class com.local.assistant.gallery.PhotoRequestsEvalTest com.taslim.localassistant.dev.test/androidx.test.runner.AndroidJUnitRunner
      */
     @Test
     fun deleteCheckChat() = runBlocking<Unit> {

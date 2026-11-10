@@ -49,7 +49,7 @@ import java.util.Locale
  *
  *     adb shell am instrument -w -e eval multistep \
  *         -e class com.local.assistant.llm.MultiStepEvalTest \
- *         com.local.assistant.test/androidx.test.runner.AndroidJUnitRunner
+ *         com.taslim.localassistant.dev.test/androidx.test.runner.AndroidJUnitRunner
  *
  * Results go to logcat (tag MultiStepEval) and `Android/data/<app>/files/multistep-eval.txt`.
  */

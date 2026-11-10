@@ -37,7 +37,7 @@ import java.util.Locale
  *
  *     adb shell am instrument -w -e eval honesty [-e voice honesty-voice] [-e only <words>] \
  *         -e class com.local.assistant.llm.HonestyEvalTest \
- *         com.local.assistant.test/androidx.test.runner.AndroidJUnitRunner
+ *         com.taslim.localassistant.dev.test/androidx.test.runner.AndroidJUnitRunner
  *
  * "-e voice <dir>": the user's turns spoken, as in the panel and the user's own chat: the clip
  * `<dir>/<case index>-<turn>.wav` under the app's external files (turn 0 is the first message,

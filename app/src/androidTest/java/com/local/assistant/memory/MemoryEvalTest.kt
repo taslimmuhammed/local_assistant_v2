@@ -30,7 +30,7 @@ import java.time.ZoneId
  * quality and cost, and compaction end to end through the real conversation manager.
  *
  *     adb shell am instrument -w -e eval memory -e class com.local.assistant.memory.MemoryEvalTest \
- *         com.local.assistant.test/androidx.test.runner.AndroidJUnitRunner
+ *         com.taslim.localassistant.dev.test/androidx.test.runner.AndroidJUnitRunner
  *
  * Writes to the app's database only in [compactionFoldsALongChat], in a chat it deletes again.
  */
@@ -393,7 +393,7 @@ class MemoryEvalTest {
      * apart, and past 4,096 four of them; the text decoder's precision is what is under test.
      *
      *     adb shell am instrument -w -e eval memory -e class com.local.assistant.memory.MemoryEvalTest#digitPrecision \
-     *         com.local.assistant.test/androidx.test.runner.AndroidJUnitRunner
+     *         com.taslim.localassistant.dev.test/androidx.test.runner.AndroidJUnitRunner
      */
     @Test
     fun digitPrecision() = runBlocking {

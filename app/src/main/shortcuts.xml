@@ -1,5 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- For phones where the power button can't be given to the assistant: the same overlay, from a
+<!-- The template for res/xml/shortcuts.xml, which the build writes for each variant with its
+     applicationId filled in (see ShortcutsXml in build.gradle.kts).
+     For phones where the power button can't be given to the assistant: the same overlay, from a
      long press on the app icon (or pinned to the home screen). -->
 <shortcuts xmlns:android="http://schemas.android.com/apk/res/android">
     <shortcut
@@ -10,7 +12,7 @@
         android:shortcutLongLabel="@string/shortcut_talk_long">
         <intent
             android:action="android.intent.action.ASSIST"
-            android:targetPackage="com.local.assistant"
+            android:targetPackage="${applicationId}"
             android:targetClass="com.local.assistant.assist.AssistActivity" />
     </shortcut>
 </shortcuts>

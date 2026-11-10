@@ -40,7 +40,7 @@ import java.io.File
  *
  *     adb shell am instrument -w -e probe true \
  *         -e class com.local.assistant.llm.EngineProbeTest \
- *         com.local.assistant.test/androidx.test.runner.AndroidJUnitRunner
+ *         com.taslim.localassistant.dev.test/androidx.test.runner.AndroidJUnitRunner
  *
  * Results go to logcat (tag EngineProbe) and to `Android/data/<app>/files/engine-probe.txt`.
  */
