@@ -1,6 +1,12 @@
 package com.local.assistant.ui.chat
 
 import com.local.assistant.ui.gallery.PhotoResults
+import android.content.BroadcastReceiver
+import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
+import android.location.LocationManager
+import android.provider.Settings
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -8,14 +14,18 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Edit
+import androidx.compose.material.icons.outlined.LocationOff
+import androidx.compose.material.icons.outlined.LocationOn
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.DatePicker
 import androidx.compose.material3.DatePickerDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -23,6 +33,7 @@ import androidx.compose.material3.TimePicker
 import androidx.compose.material3.rememberDatePickerState
 import androidx.compose.material3.rememberTimePickerState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -30,9 +41,11 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.unit.dp
+import androidx.core.content.ContextCompat
 import com.local.assistant.memory.db.TaskEntity
 import com.local.assistant.memory.db.UserNoteEntity
 import com.local.assistant.memory.tools.MemoryChip
@@ -56,7 +69,7 @@ import java.util.Locale
  *
  * A place reminder still open is shown as it is now, on a small map; a tap opens it to move its
  * pin, resize its circle, rename or delete it, as on the Reminders screen (the user asked for the
- * map in the reply, 5 Nov 2026).
+ * map in the reply, 5 Nov 2026). Under it, a line to keep location on ([KeepLocationOn]).
  *
  * A note or list the reply made or changed is shown the same way, as it is now, with its items to
  * tick off: under the latest reply about it only.
@@ -122,6 +135,7 @@ fun MemoryChips(
                     action = "Edit",
                     actionIcon = Icons.Outlined.Edit,
                 )
+                KeepLocationOn(Modifier.widthIn(max = 260.dp))
             }
             val note = item.chip.noteId?.takeIf { onOpenNote != null && item.recordId in notePreviews }?.let(notes::get)
             if (note != null && onOpenNote != null) {
@@ -188,6 +202,56 @@ private fun MemoryChipRow(
         }
     }
 }
+
+/**
+ * With location off a place reminder can't ring: Play Services drops its geofences, and no fix
+ * comes. The user turns location off during the day (13:20 off, 16:46 on, 17:07 off on 9 Nov
+ * 2026), and asked for the reply to say so (10 Nov). Shown here, not told to the model, so the
+ * prompt is unchanged. It follows the switch as it changes: off, it says so and opens the setting.
+ */
+@Composable
+private fun KeepLocationOn(modifier: Modifier = Modifier) {
+    val context = LocalContext.current
+    var on by remember { mutableStateOf(locationOn(context)) }
+    DisposableEffect(context) {
+        val receiver = object : BroadcastReceiver() {
+            override fun onReceive(context: Context, intent: Intent) {
+                on = locationOn(context)
+            }
+        }
+        ContextCompat.registerReceiver(context, receiver, IntentFilter(LocationManager.MODE_CHANGED_ACTION), ContextCompat.RECEIVER_NOT_EXPORTED)
+        on = locationOn(context)
+        onDispose { context.unregisterReceiver(receiver) }
+    }
+    Row(
+        modifier.padding(horizontal = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        Icon(
+            if (on) Icons.Outlined.LocationOn else Icons.Outlined.LocationOff,
+            contentDescription = null,
+            tint = if (on) AppColors.TextSecondary else AppColors.Danger,
+            modifier = Modifier.size(14.dp),
+        )
+        Text(
+            if (on) "Keep location on to be reminded." else "Location is off. Turn it on to be reminded.",
+            style = MaterialTheme.typography.labelSmall,
+            color = if (on) AppColors.TextSecondary else AppColors.TextPrimary,
+            modifier = Modifier.weight(1f, fill = false),
+        )
+        if (!on) {
+            ChipAction("Turn on") {
+                runCatching {
+                    context.startActivity(Intent(Settings.ACTION_LOCATION_SOURCE_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+                }
+            }
+        }
+    }
+}
+
+private fun locationOn(context: Context): Boolean =
+    context.getSystemService(LocationManager::class.java)?.isLocationEnabled == true
 
 @Composable
 private fun ChipAction(label: String, onClick: () -> Unit) {
