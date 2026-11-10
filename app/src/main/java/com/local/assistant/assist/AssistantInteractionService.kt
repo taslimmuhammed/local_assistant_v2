@@ -31,12 +31,16 @@ class AssistantInteractionService : VoiceInteractionService() {
         running = this
         // Android binds this after the app's process was killed (swiped out of the recent apps,
         // say): start listening for the wake word again without waiting for the app to be opened.
+        // Bound, it keeps the app up itself, so a place reminder no longer needs the service.
         KeepReadyService.update(this)
     }
 
     override fun onShutdown() {
         if (running === this) running = null
         super.onShutdown()
+        // Another app picked as the assistant: a place reminder needs the service again. Android
+        // may refuse it from the background; then it starts the next time the app is opened.
+        KeepReadyService.update(this)
     }
 
     companion object {

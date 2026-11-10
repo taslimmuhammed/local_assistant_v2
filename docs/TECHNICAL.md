@@ -1121,10 +1121,16 @@ So the model answers in under a second; the waiting was loading it and reading t
   second or two (≈455 allocation stalls on the OnePlus). Only one conversation ever exists, so a chat left open in the
   app is rebuilt when the user returns to it.
 - **Keep the assistant ready** (Settings → Model, on by default): the model isn't released
-  when the app goes to the background, and `assist/KeepReadyService`, a foreground service with a
-  silent notification, keeps the process alive and unfrozen (OxygenOS freezes cached apps). It
-  holds about 1.8 GB (PSS measured 1.7–1.9 GB). Off, the model goes as before, and a cold press
-  takes ~11 s after the question.
+  when the app goes to the background (`AppContainer.keepReady`). It holds about 1.8 GB (PSS
+  measured 1.7–1.9 GB). Off, the model goes as before, and a cold press takes ~11 s after the
+  question. It applies only while the app runs as the phone's assistant
+  (`VoiceInteractionService.isActiveService`): the power button reaches the app only then, and
+  the system keeps `AssistantInteractionService` bound with `BIND_FOREGROUND_SERVICE` and its
+  capabilities (`CR FGS CAPS flags=0x4101001` in `dumpsys activity services`), which holds the
+  process up as a foreground service would. Until 10 Nov 2026 `assist/KeepReadyService`, a
+  foreground service, ran for it too, and its notification was always there; the user found that
+  annoying, so it now runs only for the wake word, or for a place reminder while the app isn't
+  the assistant.
 
 **The voice** is the phone's own text-to-speech engine (`voice/Speaker`), restricted to voices
 that are installed and run offline, in the phone's language or English (`voice/VoiceChoice`). By
@@ -1293,9 +1299,9 @@ heard it) to tune against real voices.
 - **Swiped out of the recent apps** (the user, 2026-10-30: it didn't wake "if I have closed the
   app and removed it from the recent apps"): OxygenOS kills the app's process on that swipe
   (`am_kill … o-kill … with swipe up`), and the service, then not sticky, stayed down until the
-  app or the overlay was opened. Now it is sticky while the wake word is on (not otherwise, so the
-  model kept ready isn't fought back after a memory kill; a restart loads only the wake word's
-  models), and the assistant service starts it whenever Android binds it (`onReady`). Android
+  app or the overlay was opened. Now it is sticky (it runs only for the wake word or a place
+  reminder; a restart loads only the wake word's models), and the assistant service starts it
+  whenever Android binds it (`onReady`). Android
   lets the assistant app take the microphone from the background ("The service starts by an app
   which provides the VoiceInteractionService", the FGS while-in-use exemptions). On the phone:
   after a reinstall the service started by itself with the microphone type and listened; after

@@ -10,6 +10,7 @@ import com.local.assistant.llm.PromptAttachment
 import com.local.assistant.llm.Sampling
 import com.local.assistant.memory.work.ModelAccess
 import com.local.assistant.privacy.SensitiveText
+import com.local.assistant.privacy.LogText
 import kotlinx.coroutines.CancellationException
 
 /**
@@ -51,7 +52,7 @@ class PhotoReader(private val backend: LlmBackend, private val model: ModelAcces
                     val document = ask(session, DOCUMENT, null)
                     reply(field, copied, document).also {
                         // Counts only: the number itself never goes to the log.
-                        Log.i(TAG, "$field: ${copied.count(Char::isDigit)} digits copied, ${if (field.valueIn(copied) != null) "passes" else "fails"} its check; photo named \"${documentName(document)}\"")
+                        Log.i(TAG, "$field: ${copied.count(Char::isDigit)} digits copied, ${if (field.valueIn(copied) != null) "passes" else "fails"} its check; photo named \"${LogText.of(documentName(document))}\"")
                     }
                 }
             }

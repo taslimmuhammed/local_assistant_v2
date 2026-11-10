@@ -28,6 +28,7 @@ import com.local.assistant.llm.LiteRtLmBackend
 import com.local.assistant.llm.LlmBackend
 import com.local.assistant.llm.LlmService
 import com.local.assistant.llm.ToolCallRepair
+import com.local.assistant.assist.AssistantRole
 import com.local.assistant.assist.KeepReadyService
 import com.local.assistant.chat.ChatSender
 import com.local.assistant.media.AttachmentStore
@@ -104,6 +105,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.flow.first
 import com.local.assistant.memory.work.PrecisionUpgrade
+import com.local.assistant.privacy.LogText
 import java.io.File
 import java.time.ZonedDateTime
 
@@ -123,6 +125,15 @@ class AppContainer(context: Context) {
 
     private val appContext: Context = context.applicationContext
 
+    /**
+     * The model stays loaded with the app away ("Keep the assistant ready" in Settings) only
+     * while the system runs the app as the phone's assistant: that is the only way the power
+     * button reaches it, and the system's hold on [com.local.assistant.assist.AssistantInteractionService]
+     * keeps the app up. Otherwise a model left loaded would only make the app the first one
+     * Android kills.
+     */
+    val keepReady: Boolean get() = settings.keepAssistantReady && AssistantRole.serviceActive(appContext)
+
     /** Coming to the foreground warms the engines, so they are usually ready by the first send. */
     val appForeground: AppForeground = AppForeground(
         onForeground = {
@@ -130,8 +141,8 @@ class AppContainer(context: Context) {
             speaker.setAway(false)
             if (settings.modelPath != null) llmService.warmUp()
             embeddingQueue.kick()
-            // Started while visible, as Android requires; from then on it keeps the app alive.
-            if (KeepReadyService.wanted(settings)) KeepReadyService.start(appContext)
+            // Started while visible, as Android requires, if the wake word or a place reminder needs it.
+            KeepReadyService.update(appContext)
             // Fences dropped while location was off, or waiting for location all the time.
             appScope.launch { runCatching { PlaceReminderReceiver.watchAll(this@AppContainer) }.onFailure { Log.w("AppContainer", "Watching place reminders failed", it) } }
         },
@@ -144,7 +155,7 @@ class AppContainer(context: Context) {
             // the natural voice once it falls quiet, memory search once its backlog is done.
             speaker.setAway(true)
             embeddingQueue.kick()
-            if (settings.keepAssistantReady) prepareWhileAway(screenOn = power.isInteractive)
+            if (keepReady) prepareWhileAway(screenOn = power.isInteractive)
         },
     )
 
@@ -152,7 +163,7 @@ class AppContainer(context: Context) {
 
     /** The screen went off or on: with the app away, it decides when the next new chat is made ready. */
     fun onScreen(on: Boolean) {
-        if (settings.keepAssistantReady && !appForeground.isForeground) prepareWhileAway(screenOn = on)
+        if (keepReady && !appForeground.isForeground) prepareWhileAway(screenOn = on)
     }
 
     /**
@@ -171,7 +182,7 @@ class AppContainer(context: Context) {
     private fun prepareForNextAsk(delayMs: Long, alsoWanted: () -> Boolean = { true }) {
         // Behind any other background work: the nightly job's batches each close the conversation.
         conversations.prepareFresh(delayMs, ModelScheduler.Priority.IDLE_WARM_UP) {
-            settings.keepAssistantReady && !appForeground.isForeground && alsoWanted()
+            keepReady && !appForeground.isForeground && alsoWanted()
         }
     }
 
@@ -359,7 +370,7 @@ class AppContainer(context: Context) {
         photos = PhotoRecall(galleryIndex, photoLibrary, ready = ::photoSearchReady, cacheDir = context.cacheDir),
         summarizer = summarizer,
         // A background summary or extraction closed it: make it ready again.
-        onModelFreed = { if (settings.keepAssistantReady && !appForeground.isForeground) prepareForNextAsk(AFTER_MODEL_WORK_MS) },
+        onModelFreed = { if (keepReady && !appForeground.isForeground) prepareForNextAsk(AFTER_MODEL_WORK_MS) },
         noteIndex = { userNotes.all().map { NoteTitle(it.id, it.title, it.kind == NoteKind.LIST) } },
     )
 
@@ -536,10 +547,10 @@ class AppContainer(context: Context) {
         isOverflow = llmBackend::isContextOverflow,
         isUnreadable = llmBackend::isUnreadableToolCall,
         repair = ToolCallRepair(ToolCatalog.declarations(web = true, photos = true, health = true))::repair,
-        onNumberFixed = { wrote, source -> Log.i("ReplyGrounding", "Reply wrote $wrote; the source has $source") },
+        onNumberFixed = { wrote, source -> Log.i("ReplyGrounding", "Reply wrote ${LogText.of(wrote)}; the source has ${LogText.of(source)}") },
         groundNumbers = { !llmService.exactDigits },
         seesImages = { (llmService.capabilities.value?.visionTokensPerImage ?: 0) > 0 },
-        onUnbackedClaim = { said -> Log.i("ActionClaims", "Held back, no tool ran: ${said.take(200)}") },
+        onUnbackedClaim = { said -> Log.i("ActionClaims", "Held back, no tool ran: ${LogText.of(said.take(200))}") },
         photosAvailable = ::photoSearchReady,
     )
 
@@ -588,7 +599,7 @@ class AppContainer(context: Context) {
             }
         },
         releaseModel = {
-            if (!appForeground.isForeground && !settings.keepAssistantReady) {
+            if (!appForeground.isForeground && !keepReady) {
                 llmService.unload()
                 embedder.unload()
             }
@@ -620,9 +631,9 @@ class AppContainer(context: Context) {
      * rather than keep the user on the setup screen; the chat then carries on loading.
      */
     suspend fun prepareFirstChat() {
-        // Kept ready from the first model on: the service only starts in the foreground, which
-        // the app was in, with no model yet, when this launch began.
-        if (KeepReadyService.wanted(settings)) KeepReadyService.start(appContext)
+        // The wake word listens from the first model on: the service only starts in the
+        // foreground, which the app was in, with no model yet, when this launch began.
+        KeepReadyService.update(appContext)
         withTimeoutOrNull(FIRST_CHAT_READY_MS) {
             // Loads the engine, or tries again if an earlier attempt failed; false if it can't.
             if (llmBackend.ensureReady()) conversations.prepareFresh().join()
@@ -785,6 +796,7 @@ class AssistantApplication : Application() {
 
     override fun onCreate() {
         super.onCreate()
+        LogText.showsUserText = (applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE) != 0
         container = AppContainer(this)
         ProcessLifecycleOwner.get().lifecycle.addObserver(container.appForeground)
         // The screen going off hides shown details too, even with the app (or the panel) in front.
@@ -798,6 +810,26 @@ class AssistantApplication : Application() {
                 }
             },
             android.content.IntentFilter(android.content.Intent.ACTION_SCREEN_OFF).apply { addAction(android.content.Intent.ACTION_SCREEN_ON) },
+            androidx.core.content.ContextCompat.RECEIVER_NOT_EXPORTED,
+        )
+        // Location back on: Play Services dropped every geofence when it went off, and they were
+        // set again only when the app next came to the front. The user turns location off and on
+        // during the day (13:20 off, 16:46 on, 17:07 off on 9 Nov 2026), so a reminder could go
+        // unwatched for hours. Android tells this only to a running app, which the assistant
+        // service, or KeepReadyService while a place reminder waits, keeps it.
+        androidx.core.content.ContextCompat.registerReceiver(
+            this,
+            object : android.content.BroadcastReceiver() {
+                override fun onReceive(context: android.content.Context, intent: android.content.Intent) {
+                    if (context.getSystemService(android.location.LocationManager::class.java)?.isLocationEnabled != true) return
+                    container.appScope.launch {
+                        runCatching { PlaceReminderReceiver.watchAll(container) }
+                            .onSuccess { Log.i("AssistantApplication", "Location back on: watching $it place reminders again") }
+                            .onFailure { Log.w("AssistantApplication", "Watching place reminders again failed", it) }
+                    }
+                }
+            },
+            android.content.IntentFilter(android.location.LocationManager.MODE_CHANGED_ACTION),
             androidx.core.content.ContextCompat.RECEIVER_NOT_EXPORTED,
         )
         ReminderNotifications.createChannel(this)
@@ -815,9 +847,9 @@ class AssistantApplication : Application() {
         val background = level >= ComponentCallbacks2.TRIM_MEMORY_BACKGROUND
         // Thumbnails are quick to read again; the model is not.
         if (background) container.photoThumbnails.clear()
-        // Kept ready, the model stays: that is the point of the setting (and its foreground
-        // service keeps the app out of the cached list this is mostly about).
-        val keep = container.settings.keepAssistantReady
+        // Kept ready, the model stays: that is the point of the setting (and the system's hold on
+        // the assistant service keeps the app out of the cached list this is mostly about).
+        val keep = container.keepReady
         if (background && !keep && !container.appForeground.isForeground && !container.llmService.isGenerating) {
             container.speaker.release()
             container.appScope.launch {

@@ -22,6 +22,7 @@ import com.google.android.gms.location.LocationServices
 import com.google.android.gms.common.api.ApiException
 import com.local.assistant.assist.KeepReadyService
 import com.local.assistant.memory.db.TaskPlace
+import com.local.assistant.privacy.LogText
 
 /**
  * Watches for the user arriving at a place reminder's spots, with the app closed: Android does
@@ -70,9 +71,9 @@ interface PlaceFences {
  * How many spots each reminder has watched, so stopping one knows which fences to take down,
  * and a reminder at a time (most of them) costs nothing to cancel.
  *
- * Whether any are watched also keeps the app awake ([KeepReadyService]): with the screen off,
- * OxygenOS freezes a background app, and an arrival Play Services sent waited until the screen
- * came on (the user, 9 Nov 2026), so the alarm rang on a phone in use, as a banner.
+ * Whether any are watched also keeps the app awake ([KeepReadyService], unless the system already
+ * does as the phone's assistant): with the screen off, an arrival Play Services sent waited until
+ * the screen came on (the user, 9 Nov 2026), so the alarm rang on a phone in use, as a banner.
  */
 private class Watched(private val context: Context) {
     private val prefs = context.getSharedPreferences("place_fences", Context.MODE_PRIVATE)
@@ -131,7 +132,7 @@ class PlayGeofences(private val context: Context, private val initialEnter: Bool
             .build()
         try {
             client.addGeofences(request, PlaceReminderReceiver.fenceIntent(context))
-                .addOnSuccessListener { Log.i(TAG, "Watching ${fences.size} spots near ${place.name} for reminder $taskId") }
+                .addOnSuccessListener { Log.i(TAG, "Watching ${fences.size} spots near ${LogText.of(place.name)} for reminder $taskId") }
                 .addOnFailureListener { e ->
                     val code = (e as? ApiException)?.statusCode
                     Log.w(TAG, "Couldn't watch reminder $taskId: ${code?.let(GeofenceStatusCodes::getStatusCodeString) ?: e.message}")
@@ -184,7 +185,7 @@ class ProximityFences(private val context: Context) : PlaceFences {
             place.spots.forEachIndexed { i, spot ->
                 manager.addProximityAlert(spot.lat, spot.lon, spot.radiusM.toFloat(), NEVER, intent(taskId, i))
             }
-            Log.i(TAG, "Watching ${place.spots.size} spots near ${place.name} for reminder $taskId (proximity alerts)")
+            Log.i(TAG, "Watching ${place.spots.size} spots near ${LogText.of(place.name)} for reminder $taskId (proximity alerts)")
         } catch (e: SecurityException) {
             Log.w(TAG, "Location permission withdrawn; reminder $taskId not watched", e)
         }

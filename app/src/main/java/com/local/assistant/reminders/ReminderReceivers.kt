@@ -15,6 +15,7 @@ import com.local.assistant.memory.db.TaskStatus
 import com.local.assistant.memory.tools.EventTimes
 import com.local.assistant.memory.tools.TaskOps
 import com.local.assistant.memory.tools.WhenDefaults
+import com.local.assistant.privacy.LogText
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -237,7 +238,7 @@ class PlaceReminderReceiver : BroadcastReceiver() {
                     Log.i(TAG, "Reminder $taskId rang ${(now - (task.place.rangAt ?: now)) / 60_000} min ago; quiet")
                     continue
                 }
-                Log.i(TAG, "Arrived near ${task.place.name} (spot $spot): ringing reminder $taskId")
+                Log.i(TAG, "Arrived near ${LogText.of(task.place.name)} (spot $spot): ringing reminder $taskId")
                 // Over once it rings, as a one-off at a time is: it isn't left on the lists to be
                 // removed by hand, and its other places stop watching. "Next time" brings it back.
                 val over = PlaceAlerts.rang(task, now)
@@ -259,7 +260,7 @@ class PlaceReminderReceiver : BroadcastReceiver() {
         container.memoryRepository.updateTask(reopened)
         container.reminderScheduler.schedulePlace(taskId, reopened.place!!)
         container.conversations.prefixMayHaveChanged()
-        Log.i(TAG, "Reminder $taskId open again, for the next time near ${reopened.place.name}")
+        Log.i(TAG, "Reminder $taskId open again, for the next time near ${LogText.of(reopened.place.name)}")
     }
 
     companion object {

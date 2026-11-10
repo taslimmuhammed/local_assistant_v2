@@ -29,6 +29,7 @@ import com.local.assistant.memory.tools.PhoneActions
 import com.local.assistant.memory.tools.RingerMode
 import com.local.assistant.memory.tools.SettingsPanel
 import com.local.assistant.memory.tools.VolumeChange
+import com.local.assistant.privacy.LogText
 import java.io.File
 import java.util.Locale
 import kotlin.math.roundToInt
@@ -291,7 +292,7 @@ class AndroidPhone(
         } catch (e: ActivityNotFoundException) {
             Handoff.NO_APP
         } catch (e: SecurityException) {
-            Log.w(TAG, "Refused: $intent", e)
+            Log.w(TAG, "Refused: ${intent.action} ${LogText.of(intent.data)}", LogText.trace(e))
             Handoff.FAILED
         }
     }

@@ -28,6 +28,7 @@ import com.local.assistant.memory.notes.NoteEdits
 import com.local.assistant.memory.notes.NoteMatch
 import com.local.assistant.memory.notes.NoteStore
 import com.local.assistant.voice.SpokenCommands
+import com.local.assistant.privacy.LogText
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import java.time.DayOfWeek
@@ -141,7 +142,7 @@ class ToolExecutor(
 
     suspend fun execute(model: ToolCall, context: ToolContext): Outcome {
         val call = if (context.heard) model else grounded(model, context.userText)
-        if (call != model) Log.i(TAG, "Numbers or names in ${model.name} taken from the user's words: ${model.arguments} -> ${call.arguments}")
+        if (call != model) Log.i(TAG, "Numbers or names in ${model.name} taken from the user's words: ${LogText.of(model.arguments)} -> ${LogText.of(call.arguments)}")
         val nowMs = nowMs()
         val key = dedupeKey(call)
         recentMutex.withLock {
@@ -297,7 +298,7 @@ class ToolExecutor(
             else -> null
         } ?: return null
         if (!context.heard && !PlaceWords.mentioned(said, context.userText)) {
-            Log.i(TAG, "Place '$said' isn't in the user's words; made without it")
+            Log.i(TAG, "Place '${LogText.of(said)}' isn't in the user's words; made without it")
             return null
         }
         val finder = places ?: throw ToolError("Place reminders aren't available in this app. Offer a reminder at a time instead.")
@@ -685,7 +686,7 @@ class ToolExecutor(
         if (saidIn(title, said) || earlier.isNotBlank() && saidIn(title, earlier)) return title
         if (REFER_BACK.containsMatchIn(said)) return title
         if (store.openTasks().none { it.title.equals(title, ignoreCase = true) }) return title
-        Log.i(TAG, "Title '$title' is an open reminder's, and not in the user's words; made without it")
+        Log.i(TAG, "Title '${LogText.of(title)}' is an open reminder's, and not in the user's words; made without it")
         return ""
     }
 

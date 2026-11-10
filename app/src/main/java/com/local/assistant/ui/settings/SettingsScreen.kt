@@ -568,22 +568,19 @@ private fun VoiceSettings(settings: SettingsStore, speaker: Speaker, voicePacks:
     }
 }
 
-/** The model kept loaded for the power button (and the service the wake word listens in). */
+/** The model kept loaded for the power button. */
 @Composable
 private fun KeepReady(settings: SettingsStore, llmService: LlmService) {
-    val context = LocalContext.current
     var keepReady by remember { mutableStateOf(settings.keepAssistantReady) }
     SwitchRow(
         "Keep the assistant ready",
         "Keeps the model loaded so the power button answers in about a second, instead of about 15 seconds after the phone has put the app away. " +
-            "Holds about $KEEP_READY_MEMORY of memory and shows a silent notification.",
+            "Holds about $KEEP_READY_MEMORY of memory, while Local Assistant is the phone's digital assistant.",
         checked = keepReady,
         onCheckedChange = {
             keepReady = it
             settings.keepAssistantReady = it
-            // Off, the model goes the next time Android asks for memory back, as before; the
-            // service stays if it is listening for the wake word.
-            KeepReadyService.update(context)
+            // Off, the model goes the next time Android asks for memory back, as before.
             if (it) llmService.warmUp()
         },
     )

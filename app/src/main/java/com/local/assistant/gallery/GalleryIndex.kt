@@ -3,6 +3,7 @@ package com.local.assistant.gallery
 import android.util.Log
 import com.local.assistant.memory.embed.Int8Vectors
 import com.local.assistant.memory.work.ModelScheduler
+import com.local.assistant.privacy.LogText
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -363,7 +364,7 @@ class GalleryIndex(
                 if (vectorsStale) loadVectors()
                 perItem(PhotoRanking.rank(vector, LongArray(ids.size) { it.toLong() }, vectors, norms))
             }
-        }.also { Log.i(TAG, "\"$query\": ${it.size} of ${ids.size} vectors in ${clock() - started} ms (query $embedMs ms)") }
+        }.also { Log.i(TAG, "\"${LogText.of(query)}\": ${it.size} of ${ids.size} vectors in ${clock() - started} ms (query $embedMs ms)") }
     }
 
     /** Hits on vector positions as hits on photos and videos: a video once, at its best moment. */

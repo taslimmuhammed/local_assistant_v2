@@ -165,7 +165,8 @@ class SettingsStore(context: Context) {
     /**
      * Keep the model loaded, and the app alive, while in the background, so the power button
      * answers in about a second rather than after a ~15 s cold start. Costs the memory the model
-     * holds, and a silent notification (the foreground service that keeps the app alive).
+     * holds. Only while the app is the phone's assistant, when the system keeps it alive
+     * (`AppContainer.keepReady`); it needs no notification of its own any more.
      */
     var keepAssistantReady: Boolean
         get() = prefs.getBoolean(KEY_KEEP_READY, true)

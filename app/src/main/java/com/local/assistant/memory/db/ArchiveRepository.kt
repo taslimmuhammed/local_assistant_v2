@@ -11,6 +11,7 @@ import com.local.assistant.memory.retrieval.ChunkPolicy
 import com.local.assistant.memory.retrieval.KeywordHit
 import com.local.assistant.memory.retrieval.VectorHit
 import com.local.assistant.memory.retrieval.VectorIndex
+import com.local.assistant.privacy.LogText
 
 /**
  * The archive: every exchange as a chunk, keyword-indexed by Room's FTS triggers and embedded
@@ -204,7 +205,7 @@ class ArchiveRepository(
         val found = try {
             chunks.matching("\"" + words.joinToString(" ") + "\"")
         } catch (e: Exception) {
-            Log.w(TAG, "Could not search for '$phrase'", e)
+            Log.w(TAG, "Could not search for '${LogText.of(phrase)}': ${e.javaClass.simpleName}", LogText.trace(e))
             emptyList()
         }
         if (alsoOneOf.isEmpty()) return found
@@ -254,7 +255,7 @@ class ArchiveRepository(
             }
         } catch (e: Exception) {
             // A query the FTS parser rejects must not cost the user their turn.
-            Log.w(TAG, "Keyword search failed for '$match'", e)
+            Log.w(TAG, "Keyword search failed for '${LogText.of(match)}': ${e.javaClass.simpleName}", LogText.trace(e))
             emptyList()
         }
 
