@@ -2,7 +2,7 @@
 
     python3 docs/play-store/graphics/make.py
 
-Built from the launcher icon's shape (res/drawable/ic_launcher_foreground.xml) and the phone
+Built from the launcher icon's shapes (res/drawable/ic_launcher_*.xml) and the phone
 screenshots in docs/screens. Play wants screenshots no more than twice as tall as wide, and the
 phone's own are 2.18 times, so each sits on a 9:16 card under a caption. The tour_* ones are
 welcome tour pages, cut below the status bar and above the buttons; they carry their own
@@ -10,6 +10,7 @@ heading, so they go on the card larger and without one.
 """
 import os
 
+import numpy as np
 from PIL import Image, ImageDraw, ImageFilter, ImageFont
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -39,21 +40,48 @@ def gradient(w, h):
     return col.resize((w, h))
 
 
-def bubble(size, unit_box=(18, 18, 90, 90)):
-    """The launcher icon's chat bubble on white, seen as the launcher shows it (its middle 72 of 108)."""
+def _stops(t, stops):
+    """Colours along a gradient: t in 0..1 (an array), stops as (offset, (r, g, b))."""
+    out = np.zeros(t.shape + (3,))
+    for (o0, c0), (o1, c1) in zip(stops, stops[1:]):
+        u = np.clip((t - o0) / (o1 - o0), 0, 1)[..., None]
+        inside = ((t >= o0) & (t <= o1))[..., None]
+        out = np.where(inside, np.array(c0) + (np.array(c1) - np.array(c0)) * u, out)
+    out = np.where((t < stops[0][0])[..., None], np.array(stops[0][1], float), out)
+    return np.where((t > stops[-1][0])[..., None], np.array(stops[-1][1], float), out)
+
+
+def _hex(c):
+    return tuple(int(c[i:i + 2], 16) for i in (1, 3, 5))
+
+
+def orb(size, unit_box=(18, 18, 90, 90)):
+    """The launcher icon as the launcher shows it (its middle 72 of 108): the orb in its ring on
+    the night background. Same shapes and colours as res/drawable/ic_launcher_*.xml."""
     big = size * SS
     x0, y0, x1, _ = unit_box
     k = big / (x1 - x0)
+    ys, xs = np.mgrid[0:big, 0:big]
+    ux, uy = (xs + 0.5) / k + x0, (ys + 0.5) / k + y0
+    d = np.hypot(ux - 54, uy - 54)
 
-    def p(x, y):
-        return ((x - x0) * k, (y - y0) * k)
+    rgb = _stops(np.clip(d / 60, 0, 1), [(0, _hex('#1E1B2E')), (1, _hex('#09090B'))])
+    ring = (np.abs(d - 27) <= 0.8)[..., None]
+    rgb = np.where(ring, rgb * 0.55 + np.array(_hex('#8B5CF6')) * 0.45, rgb)
+    t = np.clip(np.hypot(ux - 47, uy - 45) / 26, 0, 1)
+    sphere = _stops(t, [(0, _hex('#A5F3FC')), (0.35, _hex('#22D3EE')), (0.7, _hex('#8B5CF6')), (1, _hex('#EC4899'))])
+    rgb = np.where((d <= 20)[..., None], sphere, rgb)
+    im = Image.fromarray(rgb.astype(np.uint8), 'RGB').convert('RGBA')
 
-    im = Image.new('RGB', (big, big), (255, 255, 255))
-    d = ImageDraw.Draw(im)
-    # M34,32 h40 a10 v22 a10 H52 l-14,10 v-10 h-4 a10 V42 a10: a rounded box with a tail at bottom left.
-    d.rounded_rectangle([p(24, 32), p(84, 74)], radius=10 * k, fill=INK)
-    d.polygon([p(52, 73), p(38, 84), p(38, 73)], fill=INK)
-    return im.resize((size, size), Image.LANCZOS)
+    # The glint: M44,44 Q47,39 53,38 Q48,41 46,46 Q45,47 44,44 Z, sampled.
+    def quad(a, c, b, n=24):
+        return [((1 - t) ** 2 * a[0] + 2 * (1 - t) * t * c[0] + t * t * b[0],
+                 (1 - t) ** 2 * a[1] + 2 * (1 - t) * t * c[1] + t * t * b[1]) for t in np.linspace(0, 1, n)]
+    pts = quad((44, 44), (47, 39), (53, 38)) + quad((53, 38), (48, 41), (46, 46)) + quad((46, 46), (45, 47), (44, 44))
+    layer = Image.new('RGBA', im.size, (0, 0, 0, 0))
+    ImageDraw.Draw(layer).polygon([((x - x0) * k, (y - y0) * k) for x, y in pts], fill=(255, 255, 255, 217))
+    im.alpha_composite(layer)
+    return im.convert('RGB').resize((size, size), Image.LANCZOS)
 
 
 def rounded(im, radius):
@@ -72,7 +100,7 @@ def shadow(canvas, box, radius, blur=28, offset=14, alpha=60):
 
 
 def icon():
-    bubble(512).save(os.path.join(HERE, 'icon-512.png'))
+    orb(512).save(os.path.join(HERE, 'icon-512.png'))
 
 
 def feature_graphic():
@@ -81,7 +109,7 @@ def feature_graphic():
 
     tile = 112
     shadow(im, (72, 96, 72 + tile, 96 + tile), 26, blur=16, offset=8, alpha=45)
-    im.alpha_composite(rounded(bubble(tile), 26), (72, 96))
+    im.alpha_composite(rounded(orb(tile), 26), (72, 96))
 
     d = ImageDraw.Draw(im)
     d.text((70, 236), 'Local Assistant', font=font(62, 700), fill=INK)

@@ -24,6 +24,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.requiredSize
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -177,8 +178,9 @@ fun GlassRoundButton(
 }
 
 /**
- * The app's mark: the chat bubble on a lens of glass, a clear outer ring around a brighter disc,
- * lifted off the page by a soft shadow, with a glint of light slowly travelling round its rim.
+ * The app's mark: the orb (the launcher icon's foreground, in its colours) on a lens of glass,
+ * a clear outer ring around a brighter disc, lifted off the page by a soft shadow, with a glint
+ * of light slowly travelling round its rim.
  * The launch screen's drawable (splash_mark) is the same, still; here, while the model gets
  * ready and atop the chat list.
  */
@@ -213,8 +215,9 @@ fun GlassMark(modifier: Modifier = Modifier, size: Dp = 40.dp) {
         Icon(
             painterResource(R.drawable.ic_launcher_foreground),
             contentDescription = null,
-            tint = AppColors.TextPrimary,
-            modifier = Modifier.size(size * 1.0f),
+            tint = Color.Unspecified,
+            // The orb fills less of its 108-unit box than the bubble did, so it's drawn larger.
+            modifier = Modifier.requiredSize(size * 1.4f),
         )
     }
 }

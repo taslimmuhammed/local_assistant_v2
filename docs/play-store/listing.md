@@ -63,5 +63,8 @@ All in `graphics/`, made by `graphics/make.py` from docs/screens:
   Play's most), in that order. The phone's own screenshots are too tall for Play (more than
   twice as tall as wide), so each sits on a card under a caption; three are welcome tour pages,
   which have their own headings.
+- Tablet screenshots, taken as they are (not made by make.py): `tablet-7in/` (1080 × 1920) and
+  `tablet-10in/` (1440 × 2560), the eight welcome tour pages on 16:9 tablet emulators held
+  upright, with no model on them. Upload each folder to its own slot, 1 to 8.
 - Video: optional. `promo/LocalAssistant_Promo_720p.mp4`, uploaded to YouTube (public or
   unlisted, ads off), can go here.

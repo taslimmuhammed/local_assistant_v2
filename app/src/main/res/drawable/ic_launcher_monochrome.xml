@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The orb in one colour, for themed icons (Android 13+): the ring, and the sphere with its glint
+     cut out. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <path
+        android:pathData="M27,54A27,27 0 1 1 81,54A27,27 0 1 1 27,54Z"
+        android:strokeColor="#FF000000"
+        android:strokeWidth="2" />
+    <path
+        android:fillColor="#FF000000"
+        android:fillType="evenOdd"
+        android:pathData="M34,54A20,20 0 1 1 74,54A20,20 0 1 1 34,54ZM44,44Q47,39 53,38Q48,41 46,46Q45,47 44,44Z" />
+</vector>
