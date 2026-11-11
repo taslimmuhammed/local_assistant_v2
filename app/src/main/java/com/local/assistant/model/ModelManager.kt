@@ -80,6 +80,8 @@ class ModelManager(
     private val scope: CoroutineScope,
     /** A transfer finished; for an import, with the picked file's name. */
     private val onInstalled: (TransferKind, String?) -> Unit = { _, _ -> },
+    /** Where a download is remembered until it is here, to pick up again after the app was killed. */
+    private val wanted: WantedDownloads? = null,
 ) {
 
     private val modelsDir: File = File(context.filesDir, model.directory).apply { mkdirs() }
@@ -106,15 +108,23 @@ class ModelManager(
     /** Bytes already fetched by a previous, interrupted download. */
     fun partialBytes(): Long = partFile().length()
 
-    /** All of it fetched, but not yet checked and moved into place: the app stopped first. */
-    fun fetchedNotFinished(): Boolean = !isBusy && _installed.value == null && partialBytes() == model.sizeBytes
+    /**
+     * A download to pick up again: started and not finished, by the app being killed or the
+     * connection dropping, or all fetched but not yet checked and moved into place.
+     */
+    fun shouldResume(): Boolean = !isBusy && _installed.value == null && model.downloadUrl != null &&
+        (wanted?.wanted(model.fileName) == true || partialBytes() == model.sizeBytes)
 
     fun clearError() {
         _error.value = null
     }
 
-    fun download() = start(TransferKind.DOWNLOAD, sourceName = null) { onProgress ->
-        downloadInto(destinationFile(), onProgress)
+    fun download() {
+        if (isBusy) return
+        wanted?.want(model.fileName)
+        start(TransferKind.DOWNLOAD, sourceName = null) { onProgress ->
+            downloadInto(destinationFile(), onProgress)
+        }
     }
 
     fun importFrom(uri: Uri) = start(TransferKind.IMPORT, sourceName = displayName(uri)) { onProgress ->
@@ -122,6 +132,7 @@ class ModelManager(
     }
 
     fun cancel() {
+        wanted?.drop(model.fileName)
         job?.cancel()
     }
 
@@ -151,11 +162,13 @@ class ModelManager(
                 block { done, total -> throttle.report(done, total) }
                 val file = destinationFile()
                 storedPath.set(file.absolutePath)
+                wanted?.drop(model.fileName)
                 onInstalled(kind, sourceName)
                 _installed.value = InstalledModel(file, file.length())
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
+                if (kind == TransferKind.DOWNLOAD) wanted?.failed(model.fileName, e)
                 _error.value = e.message ?: "Transfer failed"
             } finally {
                 _transfer.value = null

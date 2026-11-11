@@ -33,6 +33,8 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.launch
 
 /** What is downloading now, for the notification. */
@@ -64,6 +66,11 @@ data class DownloadState(
  * Android 14 gives up to three minutes and Play asks no declaration for. Android allows starting
  * one only with the app in front; reached in the background, the step waits for the app to be
  * opened again, with everything fetched kept.
+ *
+ * And the app can be killed outright (swiped from the recent apps, or short of memory), or the
+ * connection drop. A download started is remembered ([WantedDownloads]) until it is here: the job
+ * asks to be run again while one is, and picks it up when Android does, as the service does when
+ * Android restarts it, and the app as it comes to the front.
  */
 object BackgroundDownloads {
 
@@ -75,11 +82,37 @@ object BackgroundDownloads {
     /** A download ended: the next one (the photo model after the chat model) gets this long to begin. */
     private const val SETTLE_MS = 3_000L
 
+    /** Waiting this long, after being run again, for a download picked up to report itself. */
+    private const val PICKUP_MS = 15_000L
+
     private val _state = MutableStateFlow<DownloadState?>(null)
     internal val state: StateFlow<DownloadState?> = _state.asStateFlow()
 
-    /** Watches [downloads] for as long as the app runs, starting the keeper as one begins. */
-    fun watch(context: Context, scope: CoroutineScope, downloads: Flow<DownloadState?>) {
+    /** The job or the service is running: a new download goes under it, not a second one. */
+    @Volatile
+    internal var keeping = false
+
+    /** Picks up the downloads started and not finished; true when there was one. */
+    internal var resume: () -> Boolean = { false }
+        private set
+
+    /** A download is started and not finished. */
+    internal var pending: () -> Boolean = { false }
+        private set
+
+    /**
+     * Watches [downloads] for as long as the app runs, starting the keeper as one begins;
+     * [resume] and [pending] are for the keeper run again after the app was killed.
+     */
+    fun watch(
+        context: Context,
+        scope: CoroutineScope,
+        downloads: Flow<DownloadState?>,
+        resume: () -> Boolean,
+        pending: () -> Boolean,
+    ) {
+        this.resume = resume
+        this.pending = pending
         val app = context.applicationContext
         scope.launch {
             var running = false
@@ -109,14 +142,18 @@ object BackgroundDownloads {
     }
 
     private fun start(context: Context, now: DownloadState) {
+        if (keeping) return
         createChannel(context)
         runCatching {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+                val scheduler = context.getSystemService(JobScheduler::class.java)
+                // Already waiting to be run again (for the connection): scheduling anew would replace it.
+                if (scheduler.getPendingJob(JOB_ID) != null) return
                 val job = JobInfo.Builder(JOB_ID, ComponentName(context, DownloadJob::class.java))
                     .setUserInitiated(true)
                     .setRequiredNetworkType(JobInfo.NETWORK_TYPE_ANY)
                     .build()
-                context.getSystemService(JobScheduler::class.java).schedule(job)
+                scheduler.schedule(job)
             } else {
                 ContextCompat.startForegroundService(context, Intent(context, DownloadService::class.java))
             }
@@ -168,9 +205,19 @@ object BackgroundDownloads {
         context.getSystemService(NotificationManager::class.java).createNotificationChannel(channel)
     }
 
-    /** Calls [onChange] with each change of the download until there is none, then [finished]. */
+    /**
+     * Calls [onChange] with each change of the download until there is none, then [finished].
+     * Run again with nothing under way, it first picks up what was left, and waits for it.
+     */
     internal fun follow(scope: CoroutineScope, onChange: (DownloadState) -> Unit, finished: () -> Unit): Job =
         scope.launch {
+            if (state.value == null) {
+                val picked = resume() && withTimeoutOrNull(PICKUP_MS) { state.first { it != null } } != null
+                if (!picked) {
+                    finished()
+                    return@launch
+                }
+            }
             state.collect { now ->
                 if (now == null) {
                     finished()
@@ -189,6 +236,7 @@ class DownloadJob : JobService() {
     private var scope: CoroutineScope? = null
 
     override fun onStartJob(params: JobParameters): Boolean {
+        BackgroundDownloads.keeping = true
         BackgroundDownloads.createChannel(this)
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main).also { scope = it }
         setNotification(
@@ -207,16 +255,24 @@ class DownloadJob : JobService() {
                     JOB_END_NOTIFICATION_POLICY_REMOVE,
                 )
             },
-            finished = { jobFinished(params, false) },
+            finished = {
+                BackgroundDownloads.keeping = false
+                // Ended by the connection: run again, with Android's backoff, once there is one.
+                jobFinished(params, BackgroundDownloads.pending())
+            },
         )
         return true
     }
 
-    /** Stopped by the system (the network gone, the user in Task Manager): the download carries on while it can. */
+    /**
+     * Stopped by the system: the network gone (run again once it's back, and the download, ended
+     * by its timeout or carrying on, picked up then), or the user stopping it in Task Manager.
+     */
     override fun onStopJob(params: JobParameters): Boolean {
+        BackgroundDownloads.keeping = false
         scope?.cancel()
         scope = null
-        return false
+        return params.stopReason != JobParameters.STOP_REASON_USER && BackgroundDownloads.pending()
     }
 }
 
@@ -229,9 +285,10 @@ class DownloadService : Service() {
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        BackgroundDownloads.keeping = true
         BackgroundDownloads.createChannel(this)
         startForeground(BackgroundDownloads.NOTIFICATION_ID, BackgroundDownloads.notification(this, BackgroundDownloads.state.value))
-        if (scope != null) return START_NOT_STICKY
+        if (scope != null) return START_STICKY
         // With the screen off the phone sleeps, and the download with it: a job holds this itself.
         wake = getSystemService(PowerManager::class.java)
             .newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "LocalAssistant:download")
@@ -245,10 +302,13 @@ class DownloadService : Service() {
             },
             finished = { stopSelf() },
         )
-        return START_NOT_STICKY
+        // Sticky: killed with a download under way, Android starts the service again, and it
+        // picks the download up (BackgroundDownloads.follow).
+        return START_STICKY
     }
 
     override fun onDestroy() {
+        BackgroundDownloads.keeping = false
         scope?.cancel()
         scope = null
         wake?.takeIf { it.isHeld }?.release()

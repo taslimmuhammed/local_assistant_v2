@@ -13,22 +13,15 @@ you've moved over (nothing carries across between them).
 
 1. **Push the code.** The privacy policy's link only works once it's on GitHub:
    https://github.com/taslimmuhammed/local_assistant_v2/blob/main/docs/play-store/privacy-policy.md
-2. **Make the form that "Report this reply" sends to.** Signed in as developertaslim@gmail.com,
-   so reports land with your other user mail:
-   1. Go to forms.google.com → Blank form. Title: "Local Assistant reply reports".
-   2. Add five questions, each of type **Paragraph**, none required: Reason, Question, Reply,
-      Note, Version.
-   3. Settings → Responses: **Collect email addresses: Do not collect**. Leave "Limit to 1
-      response" off. Nothing should ask people to sign in.
-   4. Publish the form (button at the top right), so anyone with the link can answer.
-   5. Responses tab → Link to Sheets, so reports collect in a spreadsheet. Then Responses tab →
-      ⋮ → **Get email notifications for new responses**, so each report also arrives in
-      developertaslim@gmail.com's inbox.
-   6. ⋮ menu → **Get pre-filled link**. In the five boxes type exactly `reason`, `question`,
-      `reply`, `note`, `version`, then Get link → Copy link.
-   7. Send that link to Claude, or paste it into `FORM_LINK` in
-      `app/src/main/java/com/local/assistant/chat/ReplyReporter.kt`. Until then the report sheet
-      says reporting isn't set up, and Play would reject the app for it.
+2. **The form "Report this reply" sends to: done.** It's your "Local Assistant" form
+   (developertaslim@gmail.com), and the app posts to it directly: the reason goes in "Whats
+   wrong with reply" ("Something else" as Other), and the question, reply, note and app version
+   in "Paste the contents of the reply here". If you delete or replace either question, or add
+   another required one, reports stop arriving until the app is updated
+   (`ReportForm.DEVELOPER` in `app/src/main/java/com/local/assistant/chat/ReplyReporter.kt`).
+   Keep it open to anyone with the link, without sign-in. To get each report by mail too:
+   Responses tab → ⋮ → **Get email notifications for new responses**; Link to Sheets for a
+   spreadsheet.
 3. **Make the upload key**, in the project folder. Choose the passwords yourself:
 
    ```

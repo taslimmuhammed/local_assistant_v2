@@ -145,7 +145,7 @@ class AppContainer(context: Context) {
             embeddingQueue.kick()
             // Started while visible, as Android requires, if the wake word or a place reminder needs it.
             KeepReadyService.update(appContext)
-            finishCutShortDownloads()
+            resumeDownloads()
             // Fences dropped while location was off, or waiting for location all the time.
             appScope.launch { runCatching { PlaceReminderReceiver.watchAll(this@AppContainer) }.onFailure { Log.w("AppContainer", "Watching place reminders failed", it) } }
         },
@@ -209,10 +209,13 @@ class AppContainer(context: Context) {
         memoryPaused = { settings.memoryPaused },
     )
 
-    val modelManager = ModelManager(context, ModelCatalog.FILE, settings::modelPath, appScope)
+    /** Downloads started and not yet here, picked up again after the app was killed. */
+    private val wantedDownloads = com.local.assistant.model.WantedDownloads(context)
+
+    val modelManager = ModelManager(context, ModelCatalog.FILE, settings::modelPath, appScope, wanted = wantedDownloads)
 
     /** Photo search's model, EmbeddingGemma 2; its text side is memory search's too. */
-    val galleryModelManager = ModelManager(context, GalleryModel.FILE, settings::galleryModelPath, appScope)
+    val galleryModelManager = ModelManager(context, GalleryModel.FILE, settings::galleryModelPath, appScope, wanted = wantedDownloads)
 
     /** One engine for photo search and memory search (see [GalleryEmbedder]). */
     val photoModel = GalleryEmbedder(modelFile = { galleryModelManager.installed.value?.file }, cacheDir = context.cacheDir)
@@ -665,7 +668,7 @@ class AppContainer(context: Context) {
 
     /** The natural voices' downloads (Settings › Voice). Once one arrives, the assistant speaks with it. */
     val voicePacks: List<VoicePackInstaller> = VoicePack.ALL.map { pack ->
-        VoicePackInstaller(context, pack, appScope, onInstalled = { settings.naturalVoice = NaturalVoices.firstOf(pack).id })
+        VoicePackInstaller(context, pack, appScope, onInstalled = { settings.naturalVoice = NaturalVoices.firstOf(pack).id }, wanted = wantedDownloads)
     }
 
     fun voicePack(pack: VoicePack): VoicePackInstaller = voicePacks.first { it.pack == pack }
@@ -715,19 +718,35 @@ class AppContainer(context: Context) {
         }
     }
 
+    private var resuming: kotlinx.coroutines.Job? = null
+
     /**
-     * A download that came in with the app out of sight, but whose last step (the photo model's
-     * check, the voice's unpack, a minute without traffic) the phone froze the app in: Android
-     * lets nothing be started from the background to see it through (see BackgroundDownloads).
-     * Finished as the app comes to the front, with nothing fetched again.
+     * Picks up the downloads that were started and not finished: the phone killed the app (it
+     * does, swiped from the recent apps), the connection dropped, or the last step (the photo
+     * model's check, the voice's unpack, minutes without traffic) was frozen. One at a time, in
+     * the order the first setup fetches them. As the app comes to the front, and as Android runs
+     * the download job again (see BackgroundDownloads). True when there's one to pick up.
      */
-    private fun finishCutShortDownloads() {
-        for (manager in listOf(modelManager, galleryModelManager)) {
-            if (manager.fetchedNotFinished()) manager.download()
+    /** A download started and not finished, which [resumeDownloads] would pick up. */
+    fun downloadsPending(): Boolean =
+        listOf(modelManager, galleryModelManager).any { it.shouldResume() } || voicePacks.any { it.shouldResume() }
+
+    fun resumeDownloads(): Boolean {
+        val voices = voicePacks.filter { it.shouldResume() || it.isBusy }
+        val models = listOf(modelManager, galleryModelManager).filter { it.shouldResume() || it.isBusy }
+        if (voices.isEmpty() && models.isEmpty()) return false
+        if (resuming?.isActive == true) return true
+        resuming = appScope.launch {
+            for (manager in models) {
+                if (manager.shouldResume()) manager.download()
+                manager.awaitIdle()
+            }
+            for (installer in voices) {
+                if (installer.shouldResume()) installer.download()
+                installer.awaitIdle()
+            }
         }
-        for (installer in voicePacks) {
-            if (installer.fetchedNotFinished()) installer.download()
-        }
+        return true
     }
 
     /**
@@ -738,10 +757,13 @@ class AppContainer(context: Context) {
     private fun fetchVoiceAfterPhotoModel() {
         val kokoro = voicePack(VoicePack.KOKORO)
         if (kokoro.installed.value != null || kokoro.isBusy) return
+        // Wanted from now, so a killed app still fetches it, after the photo model.
+        kokoro.want()
         appScope.launch {
             galleryModelManager.awaitIdle()
+            resuming?.join()
             Log.i("AppContainer", "Fetching the ${VoicePack.KOKORO.title} voice")
-            kokoro.download()
+            resumeDownloads()
         }
     }
 
@@ -812,7 +834,7 @@ class AppContainer(context: Context) {
 
     init {
         fetchPhotoModelAfterFirstModel()
-        com.local.assistant.model.BackgroundDownloads.watch(appContext, appScope, downloads())
+        com.local.assistant.model.BackgroundDownloads.watch(appContext, appScope, downloads(), resume = ::resumeDownloads, pending = ::downloadsPending)
         appScope.launch {
             dropOldEmbedder()
             // Memory search starts once the photo model is here (downloaded later, or already).

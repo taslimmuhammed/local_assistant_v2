@@ -20,7 +20,8 @@ interface WebSearch {
     suspend fun search(query: String, news: Boolean): WebResults
 }
 
-class WebSearchError(message: String) : Exception(message)
+/** [keyRefused]: the provider said no to the key itself, which the settings screen words for the user. */
+class WebSearchError(message: String, val keyRefused: Boolean = false) : Exception(message)
 
 /**
  * web_search: the query goes to the provider — the only thing that leaves the phone — and the

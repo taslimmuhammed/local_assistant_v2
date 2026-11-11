@@ -3,6 +3,7 @@ package com.local.assistant.voice
 import android.content.Context
 import com.local.assistant.model.ProgressThrottle
 import com.local.assistant.model.Transfer
+import com.local.assistant.model.WantedDownloads
 import com.local.assistant.model.TransferKind
 import com.local.assistant.model.fetchResumable
 import com.local.assistant.model.formatBytes
@@ -33,7 +34,11 @@ class VoicePackInstaller(
     private val scope: CoroutineScope,
     /** The pack was just installed. */
     private val onInstalled: () -> Unit = {},
+    /** Where a download is remembered until it is here, to pick up again after the app was killed. */
+    private val wanted: WantedDownloads? = null,
 ) {
+
+    private val key = "voice:${pack.name}"
 
     /** What [download] is doing. */
     sealed interface Progress {
@@ -70,11 +75,26 @@ class VoicePackInstaller(
     /** Bytes already fetched by an interrupted download. */
     fun partialBytes(): Long = archive.length()
 
-    /** All of it fetched, but not yet unpacked: the app stopped first. */
-    fun fetchedNotFinished(): Boolean = !isBusy && _installed.value == null && archive.length() == pack.archiveBytes
+    /**
+     * A download to pick up again: started and not finished, by the app being killed or the
+     * connection dropping, or all fetched but not yet unpacked.
+     */
+    fun shouldResume(): Boolean = !isBusy && _installed.value == null &&
+        (wanted?.wanted(key) == true || archive.length() == pack.archiveBytes)
+
+    /** Marks the voice as wanted without starting it: it follows the models (see AppContainer). */
+    fun want() {
+        if (_installed.value == null) wanted?.want(key)
+    }
+
+    /** Returns once a download under way has ended, however it ended. */
+    suspend fun awaitIdle() {
+        job?.join()
+    }
 
     fun download() {
         if (isBusy || _installed.value != null) return
+        wanted?.want(key)
         _error.value = null
         job = scope.launch(Dispatchers.IO) {
             val self = coroutineContext[Job]
@@ -82,11 +102,13 @@ class VoicePackInstaller(
                 fetch(self)
                 unpack(self)
                 archive.delete()
+                wanted?.drop(key)
                 _installed.value = installedDir
                 onInstalled()
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
+                wanted?.failed(key, e)
                 _error.value = e.message ?: "The voice did not download"
             } finally {
                 unpackingDir.deleteRecursively()
@@ -97,11 +119,13 @@ class VoicePackInstaller(
 
     /** Stops a download, keeping what has arrived for next time. */
     fun cancel() {
+        wanted?.drop(key)
         job?.cancel()
     }
 
     /** Removes the voice and any partial download. */
     suspend fun delete() = withContext(Dispatchers.IO) {
+        wanted?.drop(key)
         job?.cancel()
         job?.join()
         _installed.value = null

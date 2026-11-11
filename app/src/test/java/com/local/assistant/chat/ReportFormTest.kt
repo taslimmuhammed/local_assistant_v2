@@ -1,53 +1,55 @@
 package com.local.assistant.chat
 
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertNull
 import org.junit.Test
 
 class ReportFormTest {
 
-    /** As Google Forms gives it: Get pre-filled link, each answer filled with its field's name. */
-    private val link = "https://docs.google.com/forms/d/e/1FAIpQLSdExample_Id/viewform?usp=pp_url" +
-        "&entry.1001=reason&entry.1002=question&entry.1003=reply&entry.1004=note&entry.1005=version"
+    private val form = ReportForm.DEVELOPER
+
+    private fun sent(report: ReplyReport): Map<String, String> {
+        val body = form.body(report)
+        return (0 until body.size).associate { body.name(it) to body.value(it) }
+    }
 
     private val report = ReplyReport(ReportReason.DANGEROUS, " It told me to mix bleach ", "how do I clean the drain?", "Mix bleach and ammonia.", "0.3.0 (5)")
 
     @Test
-    fun `a pre-filled link gives the address answers are posted to`() {
-        val form = ReportForm.parse(link)!!
-
-        assertEquals("https://docs.google.com/forms/d/e/1FAIpQLSdExample_Id/formResponse", form.action.toString())
-    }
-
-    @Test
-    fun `each part of the report goes in the field named for it`() {
-        val body = ReportForm.parse(link)!!.body(report)
-
-        val sent = (0 until body.size).associate { body.name(it) to body.value(it) }
+    fun `reports are posted to the form's answer address`() {
         assertEquals(
-            mapOf(
-                "entry.1001" to "Dangerous or harmful advice",
-                "entry.1002" to "how do I clean the drain?",
-                "entry.1003" to "Mix bleach and ammonia.",
-                "entry.1004" to "It told me to mix bleach",
-                "entry.1005" to "0.3.0 (5)",
-            ),
-            sent,
+            "https://docs.google.com/forms/d/e/1FAIpQLSe4h3_bdggIdsxMakSRhTw8tjzXEI-sx19gDIPfpGmko0VBjg/formResponse",
+            form.action.toString(),
         )
     }
 
     @Test
-    fun `the field names can be typed any case, around spaces`() {
-        val form = ReportForm.parse(link.replace("=reply", "=%20Reply%20").replace("=note", "=NOTE"))
-
-        assertEquals("Mix bleach and ammonia.", form!!.body(report).let { body -> (0 until body.size).first { body.name(it) == "entry.1003" }.let(body::value) })
+    fun `the reason is the form's own choice, and the rest is written out in the paragraph`() {
+        assertEquals(
+            mapOf(
+                "entry.1028189503" to "Dangerous or harmful advice",
+                "entry.855371423" to "Question: how do I clean the drain?\n\nReply: Mix bleach and ammonia.\n\nNote: It told me to mix bleach\n\nApp: 0.3.0 (5)",
+            ),
+            sent(report),
+        )
     }
 
     @Test
-    fun `a link missing a field, or not a form's, is not used`() {
-        assertNull(ReportForm.parse(""))
-        assertNull(ReportForm.parse(link.replace("&entry.1004=note", "")))
-        assertNull(ReportForm.parse(link.replace("docs.google.com", "example.com")))
-        assertNull(ReportForm.parse(link.replace("/viewform", "/edit")))
+    fun `the form spells offensive in lower case, and that is what is sent`() {
+        assertEquals("offensive or hateful", sent(report.copy(reason = ReportReason.OFFENSIVE))["entry.1028189503"])
+    }
+
+    @Test
+    fun `something else goes in as the form's Other, with the words`() {
+        val answers = sent(report.copy(reason = ReportReason.OTHER))
+
+        assertEquals("__other_option__", answers["entry.1028189503"])
+        assertEquals("Something else", answers["entry.1028189503.other_option_response"])
+    }
+
+    @Test
+    fun `no note leaves the note out, and no question says so, since the paragraph is required`() {
+        val details = sent(report.copy(note = "  ", question = ""))["entry.855371423"]
+
+        assertEquals("Question: (none)\n\nReply: Mix bleach and ammonia.\n\nApp: 0.3.0 (5)", details)
     }
 }

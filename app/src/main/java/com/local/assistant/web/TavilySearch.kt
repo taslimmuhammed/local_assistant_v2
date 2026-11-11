@@ -46,7 +46,10 @@ class TavilySearch(
         }
         when (code) {
             200 -> parse(text)
-            401 -> throw WebSearchError("The Tavily key was refused. The user can check it under Web search in the menu.")
+            401 -> throw WebSearchError(
+                "The Tavily key was refused. The user can check it under Web search in the menu.",
+                keyRefused = true,
+            )
             429 -> throw WebSearchError("Too many web searches just now. Try again in a minute.")
             432, 433 -> throw WebSearchError("The Tavily account has used up its searches for now.")
             else -> throw WebSearchError("The web search failed ($code). Try again later.")

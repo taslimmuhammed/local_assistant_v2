@@ -5,7 +5,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import okhttp3.FormBody
 import okhttp3.HttpUrl
-import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
+import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import java.io.IOException
@@ -42,81 +42,87 @@ data class ReplyReport(
  * phone's IP address, as with any request.
  */
 class ReplyReporter(
-    private val form: ReportForm? = ReportForm.parse(FORM_LINK),
+    private val form: ReportForm = ReportForm.DEVELOPER,
     private val http: OkHttpClient = OkHttpClient.Builder()
         .connectTimeout(10, TimeUnit.SECONDS)
         .readTimeout(20, TimeUnit.SECONDS)
         .build(),
 ) {
     /** Sends one report. Throws [ReportError], with words for the user, when it didn't arrive. */
-    suspend fun send(report: ReplyReport) {
-        val form = form ?: throw ReportError("Reporting isn't set up in this build of the app.")
-        withContext(Dispatchers.IO) {
-            val request = Request.Builder().url(form.action).post(form.body(report)).build()
-            val (code, host) = try {
-                http.newCall(request).execute().use { it.code to it.request.url.host }
-            } catch (e: IOException) {
-                Log.w(TAG, "Report not sent: ${e.javaClass.simpleName}")
-                throw ReportError("The report couldn't be sent; the phone may be offline.")
-            }
-            // A form that asks for a Google sign-in redirects to one, which also answers 200.
-            if (code != 200 || host != form.action.host) {
-                Log.w(TAG, "Report not accepted: $code from $host")
-                throw ReportError("The report couldn't be sent ($code). Try again later.")
-            }
+    suspend fun send(report: ReplyReport) = withContext(Dispatchers.IO) {
+        val request = Request.Builder().url(form.action).post(form.body(report)).build()
+        val (code, host) = try {
+            http.newCall(request).execute().use { it.code to it.request.url.host }
+        } catch (e: IOException) {
+            Log.w(TAG, "Report not sent: ${e.javaClass.simpleName}")
+            throw ReportError("The report couldn't be sent; the phone may be offline.")
+        }
+        // A form that asks for a Google sign-in redirects to one, which also answers 200.
+        if (code != 200 || host != form.action.host) {
+            Log.w(TAG, "Report not accepted: $code from $host")
+            throw ReportError("The report couldn't be sent ($code). Try again later.")
         }
     }
 
     companion object {
         private const val TAG = "ReplyReporter"
-
-        /**
-         * The form's pre-filled link (Google Forms → ⋮ → Get pre-filled link), with each answer
-         * filled in with the name of what goes there: reason, question, reply, note, version.
-         * The link holds no secret; anyone with it can only add answers to the form.
-         */
-        const val FORM_LINK = ""
     }
 }
 
 class ReportError(message: String) : Exception(message)
 
-/** Where a report is posted, and which of the form's fields takes which part of it. */
-class ReportForm(val action: HttpUrl, private val fields: Map<String, String>) {
-
-    fun body(report: ReplyReport): FormBody = FormBody.Builder()
-        .add(fields.getValue(REASON), report.reason.label)
-        .add(fields.getValue(QUESTION), report.question.take(MAX_CHARS))
-        .add(fields.getValue(REPLY), report.reply.take(MAX_CHARS))
-        .add(fields.getValue(NOTE), report.note.trim().take(MAX_CHARS))
-        .add(fields.getValue(VERSION), report.version)
-        .build()
+/**
+ * Where a report is posted: a form with a multiple-choice question for the reason (with an
+ * "Other" choice) and a paragraph question that takes the rest, written out.
+ */
+class ReportForm(
+    val action: HttpUrl,
+    private val reasonField: String,
+    private val detailsField: String,
+    /** The form's own wording of each reason; a reason without one goes in as "Other". */
+    private val choices: Map<ReportReason, String>,
+) {
+    fun body(report: ReplyReport): FormBody {
+        val body = FormBody.Builder()
+        val choice = choices[report.reason]
+        if (choice != null) {
+            body.add(reasonField, choice)
+        } else {
+            body.add(reasonField, OTHER).add("$reasonField.other_option_response", report.reason.label)
+        }
+        return body.add(detailsField, details(report)).build()
+    }
 
     companion object {
-        private const val REASON = "reason"
-        private const val QUESTION = "question"
-        private const val REPLY = "reply"
-        private const val NOTE = "note"
-        private const val VERSION = "version"
-        private val NAMES = setOf(REASON, QUESTION, REPLY, NOTE, VERSION)
+        /** How Google Forms names the "Other" choice of a multiple-choice question. */
+        private const val OTHER = "__other_option__"
 
-        /** A long answer fits in a Sheet's cell (50,000 characters) with room to spare. */
+        /** Each long part, so the whole answer stays inside a Sheet's cell (50,000 characters). */
         private const val MAX_CHARS = 20_000
 
         /**
-         * From a pre-filled link, `…/forms/d/e/<id>/viewform?usp=pp_url&entry.123=reason&…`.
-         * Null unless it is a Google Form's link with all five fields named.
+         * The developer's form, "Local Assistant" (developertaslim@gmail.com, 10 Nov 2026):
+         * "Whats wrong with reply", a choice, and "Paste the contents of the reply here". Both are
+         * required. The ids come from the form's page; they change if a question is replaced.
          */
-        fun parse(link: String): ReportForm? {
-            val url = link.trim().toHttpUrlOrNull() ?: return null
-            val segments = url.pathSegments
-            if (url.host != "docs.google.com" || segments.firstOrNull() != "forms" || segments.lastOrNull() != "viewform") return null
-            val fields = url.queryParameterNames
-                .filter { it.startsWith("entry.") }
-                .associateBy { url.queryParameter(it).orEmpty().trim().lowercase() }
-            if (!fields.keys.containsAll(NAMES)) return null
-            val action = url.newBuilder().query(null).setPathSegment(segments.lastIndex, "formResponse").build()
-            return ReportForm(action, fields)
-        }
+        val DEVELOPER = ReportForm(
+            action = "https://docs.google.com/forms/d/e/1FAIpQLSe4h3_bdggIdsxMakSRhTw8tjzXEI-sx19gDIPfpGmko0VBjg/formResponse".toHttpUrl(),
+            reasonField = "entry.1028189503",
+            detailsField = "entry.855371423",
+            choices = mapOf(
+                ReportReason.OFFENSIVE to "offensive or hateful",
+                ReportReason.SEXUAL to "Sexual or explicit",
+                ReportReason.DANGEROUS to "Dangerous or harmful advice",
+                ReportReason.WRONG to "Wrong or made up",
+            ),
+        )
+
+        /** The paragraph answer: what was asked, the reply, the user's note and the app, each labelled. */
+        fun details(report: ReplyReport): String = listOfNotNull(
+            "Question: ${report.question.ifBlank { "(none)" }.take(MAX_CHARS)}",
+            "Reply: ${report.reply.take(MAX_CHARS)}",
+            report.note.trim().takeIf { it.isNotEmpty() }?.let { "Note: ${it.take(MAX_CHARS)}" },
+            "App: ${report.version}",
+        ).joinToString("\n\n")
     }
 }
