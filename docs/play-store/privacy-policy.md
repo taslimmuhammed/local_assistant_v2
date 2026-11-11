@@ -1,6 +1,6 @@
 # Local Assistant: privacy policy
 
-Effective 10 November 2026. Developer: **[your developer name]**, contact:
+Effective 10 November 2026. Developer: **Taslim Muhammed Moosa**, contact:
 **developertaslim@gmail.com**.
 
 Local Assistant is an AI assistant that runs on your phone. The AI model, your chats and what the
