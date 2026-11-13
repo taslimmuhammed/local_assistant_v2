@@ -10,6 +10,8 @@ import com.google.ai.edge.litertlm.OpenApiTool
 import com.google.ai.edge.litertlm.RepetitionPenaltyConfig
 import com.google.ai.edge.litertlm.ResponseFormat
 import com.google.ai.edge.litertlm.SamplerConfig
+import com.google.ai.edge.litertlm.SpeculativeDecodingConfig
+import com.google.ai.edge.litertlm.SpeculativeDecodingMode
 import com.google.ai.edge.litertlm.ThinkingConfig
 import com.google.ai.edge.litertlm.ToolCall as RuntimeToolCall
 import com.google.ai.edge.litertlm.tool
@@ -55,6 +57,12 @@ class LiteRtLmBackend(
                 prefillPrefaceOnInit = spec.prefillOnOpen,
                 maxOutputToken = spec.maxOutputTokens,
                 thinkingConfig = thinkingOff(),
+                // With multi-token prediction on, a tool's result took 15 s to read: 50 tokens at
+                // 3–4 a second, on runtime 0.18.1 and 0.19.1 alike, ON or ADAPTIVE; off, the reply
+                // after it started in 0.5 s (ToolResponseProbeTest, 13 Nov 2026). It also writes at
+                // ~15 tokens a second instead of ~22, still far faster than anyone reads. So a
+                // conversation that can get a tool's result has it off; the rest keep the engine's.
+                speculativeDecodingConfig = if (spec.toolDeclarations.isNotEmpty()) SpeculativeDecodingConfig(SpeculativeDecodingMode.OFF) else null,
             ),
         )
         return LiteRtChatSession(conversation, llm, settings)

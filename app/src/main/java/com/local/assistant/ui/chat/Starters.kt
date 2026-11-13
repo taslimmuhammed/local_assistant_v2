@@ -203,6 +203,12 @@ fun StarterPanel(
     enabled: Boolean,
     onPick: (String) -> Unit,
     modifier: Modifier = Modifier,
+    /**
+     * What the model is doing, while it isn't ready ("Getting ready…"): said in the hint's place,
+     * so nothing moves when it comes and goes. A pill above the panel shifted the tiles, and a
+     * tap aimed at one landed on another.
+     */
+    status: String? = null,
 ) {
     val now = remember(chatKey) { LocalDateTime.now() }
     var shuffles by rememberSaveable(chatKey) { mutableIntStateOf(0) }
@@ -231,7 +237,7 @@ fun StarterPanel(
         Spacer(Modifier.height(6.dp))
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text(
-                "Tap one to start, or ask anything",
+                status ?: "Tap one to start, or ask anything",
                 style = MaterialTheme.typography.bodyLarge,
                 color = AppColors.TextSecondary,
                 modifier = Modifier.weight(1f),

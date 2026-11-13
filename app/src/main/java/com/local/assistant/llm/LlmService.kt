@@ -50,7 +50,11 @@ class LlmService(
 
         data object Idle : State
 
-        data object Loading : State
+        /**
+         * Loading since [startedAt] (elapsedRealtime); the last load took [expectedMs], if one
+         * has been timed, which is how long the user is told it will take.
+         */
+        data class Loading(val startedAt: Long, val expectedMs: Long?) : State
 
         data class Ready(val backend: String, val contextTokens: Int) : State
 
@@ -167,8 +171,8 @@ class LlmService(
             return@withLock null
         }
 
-        _state.value = State.Loading
         val loadStarted = SystemClock.elapsedRealtime()
+        _state.value = State.Loading(loadStarted, settings.lastEngineLoadMs.takeIf { it > 0 })
         // Before the engine opens the file: fp32 for the text decoder, or digits garble past token 2,048.
         val precision = withContext(Dispatchers.IO) {
             runCatching {
@@ -224,7 +228,14 @@ class LlmService(
                     visionTokensPerImage = visionTokensPerImage,
                 )
                 _state.value = State.Ready(attempt.label, tokens)
-                Log.i(TAG, "Loaded ${attempt.label} at $tokens tokens in ${SystemClock.elapsedRealtime() - loadStarted} ms")
+                val loadMs = SystemClock.elapsedRealtime() - loadStarted
+                settings.lastEngineLoadMs = loadMs
+                Log.i(TAG, "Loaded ${attempt.label} at $tokens tokens in $loadMs ms")
+                com.local.assistant.memory.prompt.TurnTimings.event(
+                    "engine_load",
+                    loadMs,
+                    "${attempt.label}${if (com.local.assistant.memory.prompt.TurnTimings.current != null) " during a turn" else ""}",
+                )
                 return@withLock loaded
             }
         }
@@ -399,6 +410,7 @@ class LlmService(
     suspend fun unload() = loadMutex.withLock {
         val open = synchronized(openConversations) { openConversations.toList().also { openConversations.clear() } }
         open.forEach { runCatching { it.close() } }
+        if (engine != null) com.local.assistant.memory.prompt.TurnTimings.event("engine_unload")
         runCatching { engine?.close() }
         engine = null
         _activeContextTokens.value = 0
@@ -415,6 +427,7 @@ class LlmService(
             tokensPerSecond = info.lastDecodeTokensPerSecond,
             timeToFirstTokenMs = (info.timeToFirstTokenInSecond * 1000).toLong(),
             prefillTokens = info.lastPrefillTokenCount,
+            prefillTokensPerSecond = info.lastPrefillTokensPerSecond,
         ).takeIf { it.decodeTokens > 0 && it.tokensPerSecond > 0 }
     }.getOrNull()
 

@@ -204,7 +204,7 @@ class AwayBrief(
             }
         }
         return try {
-            if (user) scheduler.runUser(work) else scheduler.runBackground(ModelScheduler.Priority.BRIEF, work) ?: false
+            if (user) scheduler.runUser(work) else scheduler.runBackground(ModelScheduler.Priority.BRIEF, block = work) ?: false
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {

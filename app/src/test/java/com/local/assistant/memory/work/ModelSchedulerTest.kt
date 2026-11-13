@@ -55,6 +55,38 @@ class ModelSchedulerTest {
     }
 
     @Test
+    fun `work for what the user is typing starts and carries on while they type`() = runBlocking {
+        scheduler.onUserActivity()
+        val gate = CompletableDeferred<Unit>()
+        val started = CompletableDeferred<Unit>()
+        val warmUp = async {
+            scheduler.runBackground(ModelScheduler.Priority.WARM_UP, yieldsToTyping = false) {
+                started.complete(Unit)
+                gate.await()
+                "ready"
+            }
+        }
+        withTimeout(2_000) { started.await() }
+        scheduler.onUserActivity()
+        gate.complete(Unit)
+        assertEquals("ready", withTimeout(2_000) { warmUp.await() })
+    }
+
+    @Test
+    fun `the user's generation still pre-empts work for what they type`() = runBlocking {
+        val started = CompletableDeferred<Unit>()
+        val warmUp = async {
+            scheduler.runBackground(ModelScheduler.Priority.WARM_UP, yieldsToTyping = false) {
+                started.complete(Unit)
+                awaitCancellation()
+            }
+        }
+        started.await()
+        assertEquals("reply", withTimeout(2_000) { scheduler.runUser { "reply" } })
+        assertNull(warmUp.await())
+    }
+
+    @Test
     fun `waiting jobs run by priority, not arrival order`() = runBlocking {
         val order = Collections.synchronizedList(mutableListOf<String>())
         val gate = CompletableDeferred<Unit>()

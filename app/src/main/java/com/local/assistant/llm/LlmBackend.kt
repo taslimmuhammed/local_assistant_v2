@@ -130,6 +130,8 @@ data class GenStats(
     val tokensPerSecond: Double,
     val timeToFirstTokenMs: Long,
     val prefillTokens: Int,
+    /** How fast the runtime read [prefillTokens], by its own measure. */
+    val prefillTokensPerSecond: Double = 0.0,
 )
 
 sealed interface GenEvent {

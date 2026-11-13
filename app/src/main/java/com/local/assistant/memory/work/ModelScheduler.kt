@@ -35,8 +35,6 @@ class ModelScheduler(private val clock: () -> Long = System::currentTimeMillis) 
         NIGHTLY,
         /** Photos for photo search: a long job that only ever uses time nobody else wants. */
         GALLERY_INDEX,
-        /** Getting ready for a question that may come later: only once nothing else wants the model. */
-        IDLE_WARM_UP,
     }
 
     private class Waiter(val priority: Priority, val seq: Long) {
@@ -48,6 +46,9 @@ class ModelScheduler(private val clock: () -> Long = System::currentTimeMillis) 
     private var seq = 0L
     private val queue = PriorityQueue<Waiter>(compareBy<Waiter>({ it.priority.ordinal }, { it.seq }))
     private var runningBackground: Deferred<*>? = null
+
+    /** Whether [runningBackground] gives way to typing ([runBackground]'s yieldsToTyping). */
+    private var runningYields = true
 
     @Volatile
     private var lastUserActivityAt = 0L
@@ -65,16 +66,24 @@ class ModelScheduler(private val clock: () -> Long = System::currentTimeMillis) 
     /**
      * Runs background model work when the model is free and the user is idle. Returns null if
      * the job was pre-empted or skipped because the user is active; the caller retries later.
+     *
+     * [yieldsToTyping] false: work done for what the user is typing — the conversation their
+     * message will go into — which typing must not put off or stop. Only the user's own turn
+     * pre-empts it. On the phone, typing on a blank chat cancelled the new chat's preparation
+     * every time, and the first message waited ~7 s for it instead (13 Nov 2026).
      */
-    suspend fun <T> runBackground(priority: Priority, block: suspend () -> T): T? {
+    suspend fun <T> runBackground(priority: Priority, yieldsToTyping: Boolean = true, block: suspend () -> T): T? {
         require(priority != Priority.USER_GENERATION)
-        if (userRecentlyActive()) return null
+        if (yieldsToTyping && userRecentlyActive()) return null
         acquire(priority)
         try {
-            if (userRecentlyActive()) return null
+            if (yieldsToTyping && userRecentlyActive()) return null
             return coroutineScope {
                 val work = async { block() }
-                synchronized(lock) { runningBackground = work }
+                synchronized(lock) {
+                    runningBackground = work
+                    runningYields = yieldsToTyping
+                }
                 try {
                     work.await()
                 } catch (e: CancellationException) {
@@ -91,7 +100,7 @@ class ModelScheduler(private val clock: () -> Long = System::currentTimeMillis) 
     /** The user is typing: stop background work now and hold off starting more for a moment. */
     fun onUserActivity() {
         lastUserActivityAt = clock()
-        synchronized(lock) { runningBackground }?.cancel()
+        synchronized(lock) { runningBackground?.takeIf { runningYields } }?.cancel()
     }
 
     private fun userRecentlyActive(): Boolean = clock() - lastUserActivityAt < QUIET_MS

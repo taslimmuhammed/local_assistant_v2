@@ -130,6 +130,11 @@ class SettingsStore(context: Context) {
         get() = prefs.getBoolean(KEY_OFFERED_EXACT_ALARMS, false)
         set(value) = prefs.edit { putBoolean(KEY_OFFERED_EXACT_ALARMS, value) }
 
+    /** The note that the phone keeps closing the app ([com.local.assistant.assist.ProcessExits]) was shown and answered: it isn't shown again. */
+    var toldAboutPhoneKills: Boolean
+        get() = prefs.getBoolean(KEY_TOLD_PHONE_KILLS, false)
+        set(value) = prefs.edit { putBoolean(KEY_TOLD_PHONE_KILLS, value) }
+
     /**
      * The window an engine load is in progress at, cleared when it returns. A native
      * out-of-memory kills the process with no exception, so a value still here at the next launch
@@ -139,6 +144,11 @@ class SettingsStore(context: Context) {
     var initInFlightTokens: Int
         get() = prefs.getInt(KEY_INIT_IN_FLIGHT, 0)
         set(value) = prefs.edit(commit = true) { putInt(KEY_INIT_IN_FLIGHT, value) }
+
+    /** How long the model's last load took, for telling the user how long the next one will. */
+    var lastEngineLoadMs: Long
+        get() = prefs.getLong(KEY_LAST_ENGINE_LOAD_MS, 0L)
+        set(value) = prefs.edit { putLong(KEY_LAST_ENGINE_LOAD_MS, value) }
 
     /** Ceiling on a single reply, so one runaway answer cannot consume the whole context. */
     var maxOutputTokens: Int
@@ -161,16 +171,6 @@ class SettingsStore(context: Context) {
     var systemPrompt: String
         get() = prefs.getString(KEY_SYSTEM_PROMPT, DEFAULT_SYSTEM_PROMPT) ?: DEFAULT_SYSTEM_PROMPT
         set(value) = prefs.edit { putString(KEY_SYSTEM_PROMPT, value) }
-
-    /**
-     * Keep the model loaded, and the app alive, while in the background, so the power button
-     * answers in about a second rather than after a ~15 s cold start. Costs the memory the model
-     * holds. Only while the app is the phone's assistant, when the system keeps it alive
-     * (`AppContainer.keepReady`); it needs no notification of its own any more.
-     */
-    var keepAssistantReady: Boolean
-        get() = prefs.getBoolean(KEY_KEEP_READY, true)
-        set(value) = prefs.edit { putBoolean(KEY_KEEP_READY, value) }
 
     /**
      * The assistant works on the lock screen without unlocking, but sees none of the user's memory
@@ -299,11 +299,12 @@ class SettingsStore(context: Context) {
         private const val KEY_TOKEN_RATE = "latin_chars_per_token"
         private const val KEY_ASKED_NOTIFICATIONS = "asked_for_notifications"
         private const val KEY_OFFERED_EXACT_ALARMS = "offered_exact_alarms"
+        private const val KEY_TOLD_PHONE_KILLS = "told_phone_kills"
+        private const val KEY_LAST_ENGINE_LOAD_MS = "last_engine_load_ms"
         private const val KEY_TOKEN_RATE_MODEL = "latin_chars_per_token_model"
         private const val KEY_REPETITION_PENALTY = "repetition_penalty"
         private const val KEY_REPETITION_WINDOW = "repetition_window"
         private const val KEY_SPEAK_REPLIES = "speak_replies"
-        private const val KEY_KEEP_READY = "keep_assistant_ready"
         private const val KEY_ON_LOCK_SCREEN = "assistant_on_lock_screen"
         private const val KEY_WAKE_WORD = "wake_word"
         private const val KEY_ASSISTANT_VOICE = "assistant_voice"

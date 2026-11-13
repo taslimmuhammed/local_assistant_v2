@@ -9,6 +9,7 @@ import com.local.assistant.llm.ContextWindow
 import com.local.assistant.llm.PromptAttachment
 import com.local.assistant.memory.prompt.TurnEvent
 import com.local.assistant.memory.prompt.TurnRunner
+import com.local.assistant.memory.prompt.TurnTimings
 import com.local.assistant.memory.tools.MemoryChip
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
@@ -45,8 +46,25 @@ class ChatSender(
      * The reply being streamed. [chatId] is null only for the moment a new chat is being made;
      * [owner] is the screen that sent the message.
      */
-    /** [step]: what is being done before (or between) the words, for the screen to say ([ToolSteps]). */
-    data class Live(val chatId: Long?, val text: String, val owner: Any, val step: String? = null)
+    /**
+     * [step]: what is being done before (or between) the words, for the screen to say
+     * ([ToolSteps]). [standing]: how much of [text] is known to stand; the rest is shown but may
+     * yet be taken back ([TurnEvent.Retract]), so it is not spoken until it stands.
+     * [asked]: the words just sent, for the screen to show before the stored copy comes back from
+     * the database; [askedId] is that copy's id once it is stored.
+     */
+    data class Live(
+        val chatId: Long?,
+        val text: String,
+        val owner: Any,
+        val step: String? = null,
+        val standing: Int = text.length,
+        val asked: String? = null,
+        val askedId: Long? = null,
+    ) {
+        /** What may be read aloud. */
+        val sayable: String get() = text.take(standing)
+    }
 
     /** What the screen that sent a message hears back. Called on the main thread. */
     interface Listener {
@@ -122,7 +140,9 @@ class ChatSender(
         screen: String? = null,
     ): Boolean {
         stopRequested = false
-        _live.value = Live(chatId, "", owner)
+        // Plain words only: a photo or a recording is shown once stored, as it was sent.
+        _live.value = Live(chatId, "", owner, asked = prompt.takeIf { it.isNotEmpty() && attachment == null && storedUserMessageId == null })
+        val timing = TurnTimings.begin(if (hidden) "panel" else "chat")
 
         // Main, as when each screen ran its own turns: the listeners update screen state.
         job = scope.launch(Dispatchers.Main.immediate) {
@@ -132,6 +152,28 @@ class ChatSender(
             var failure: String? = null
             var completed = false
             var needsUnlock = false
+            // How much of the reply stands, and what is being done: published together (publish).
+            var standing = 0
+            var step: String? = null
+            var publishedAt = 0L
+            var publishing: Job? = null
+            // The words go to the screen at most every [PUBLISH_MS]: each update recomposes the
+            // reply, and bursts of tokens (multi-token prediction) came several in a frame.
+            fun publish(now: Boolean) {
+                val wait = PUBLISH_MS - (android.os.SystemClock.uptimeMillis() - publishedAt)
+                if (now || wait <= 0) {
+                    publishing?.cancel()
+                    publishing = null
+                    publishedAt = android.os.SystemClock.uptimeMillis()
+                    _live.update { it?.copy(text = reply.toString(), standing = standing, step = step) }
+                } else if (publishing == null) {
+                    publishing = launch {
+                        kotlinx.coroutines.delay(wait)
+                        publishing = null
+                        publish(now = true)
+                    }
+                }
+            }
             try {
                 if (chat == null) {
                     chat = repository.createChat(hidden = hidden)
@@ -151,6 +193,7 @@ class ChatSender(
                     attachmentDurationMs = attachment?.durationMs,
                 ).also { stored ->
                     userMessageId = stored
+                    _live.update { it?.copy(askedId = stored) }
                     listener.onUserMessageStored(stored)
                     repository.titleFromFirstMessage(
                         chatId = chat,
@@ -181,15 +224,35 @@ class ChatSender(
                 turns.run(chat, asked, text, promptAttachment, locked, screen, heard).collect { event ->
                     when (event) {
                         is TurnEvent.Text -> {
+                            val first = reply.isEmpty()
+                            if (first) TurnTimings.firstWord()
                             reply.append(event.delta)
+                            if (!event.provisional) standing = reply.length
                             // Words again: whatever was being done is done.
-                            _live.update { it?.copy(text = reply.toString(), step = null) }
+                            step = null
+                            publish(now = first)
                         }
-                        is TurnEvent.Step -> _live.update { it?.copy(step = event.label) }
+                        TurnEvent.Confirm -> {
+                            standing = reply.length
+                            publish(now = true)
+                        }
+                        TurnEvent.Retract -> {
+                            // Said something untrue (that it did what no tool did): gone from the
+                            // screen before it is read aloud, while the model is asked again.
+                            reply.setLength(standing)
+                            if (reply.isEmpty()) step = com.local.assistant.memory.tools.ToolSteps.THINKING
+                            publish(now = true)
+                        }
+                        is TurnEvent.Step -> {
+                            step = event.label
+                            publish(now = true)
+                        }
                         is TurnEvent.Memory -> listener.onMemory(event.chip)
                         is TurnEvent.Done -> {
                             completed = true
-                            _live.update { it?.copy(step = null) }
+                            standing = reply.length
+                            step = null
+                            publish(now = true)
                         }
                         TurnEvent.NeedsUnlock -> needsUnlock = true
                     }
@@ -202,6 +265,7 @@ class ChatSender(
                 Log.w(TAG, "Turn failed in chat $chat", e)
             } finally {
                 // Runs even when stop() cancelled us, so a partial reply is never lost.
+                publishing?.cancel()
                 withContext(NonCancellable) {
                     val asked = userMessageId
                     // Null only if stopped before the message was stored: then there is no turn.
@@ -218,12 +282,24 @@ class ChatSender(
                                 text = reply.toString(),
                                 incomplete = incomplete,
                                 tokensPerSecond = stats?.tokensPerSecond,
-                                timeToFirstTokenMs = stats?.timeToFirstTokenMs,
+                                // From the send to the first word on screen, as the user waited for
+                                // it. The runtime's own figure stays that of the conversation's first
+                                // reply: two turns in a row carried the same value.
+                                timeToFirstTokenMs = timing.firstWordAt,
                             )
                         }
                         turns.finish(chat, asked, assistantMessageId, completed = completed && !incomplete)
                     }
                     if (failure == null && reply.isEmpty() && !stopRequested) Log.w(TAG, "Turn in chat $chat ended with no reply (completed: $completed)")
+                    TurnTimings.end(
+                        timing,
+                        when {
+                            needsUnlock -> "unlock"
+                            stopRequested -> "stopped"
+                            failure != null -> "failed"
+                            else -> "done"
+                        },
+                    )
                     _live.value = null
                     if (needsUnlock && chat != null && asked != null) listener.onNeedsUnlock(chat, asked)
                     listener.onFinished(reply.toString(), failure)
@@ -244,5 +320,8 @@ class ChatSender(
 
     private companion object {
         const val TAG = "ChatSender"
+
+        /** The least time between two updates of the words on screen. */
+        const val PUBLISH_MS = 50L
     }
 }

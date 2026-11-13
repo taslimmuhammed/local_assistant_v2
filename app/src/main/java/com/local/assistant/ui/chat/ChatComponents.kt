@@ -30,6 +30,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -161,7 +162,7 @@ fun AssistantMessage(
         val footnote = listOfNotNull(
             "Stopped".takeIf { incomplete },
             tokensPerSecond?.let { "%.1f tok/s".format(it) },
-            timeToFirstTokenMs?.takeIf { it > 0 }?.let { "%.1fs to first token".format(it / 1000.0) },
+            timeToFirstTokenMs?.takeIf { it > 0 }?.let { "%.1fs to first word".format(it / 1000.0) },
         )
         val sayable = remember(text) { SpeechText.clean(text).any(Char::isLetterOrDigit) }
         val readButton = onReadAloud?.takeIf { !streaming && sayable }
@@ -218,13 +219,18 @@ private val ACTION_SIZE = 36.dp
 private val ACTION_ICON = 18.dp
 private val ACTION_INSET = (ACTION_SIZE - ACTION_ICON) / 2
 
-/** Shown between hitting send and the first token arriving — prefill can take a few seconds. */
 /**
- * The blinking dot while the reply hasn't started. With a [label] — "Loading model…" when the
- * model is still starting — it says why the wait is longer than usual.
+ * The blinking dot while the reply hasn't started, with what is being done beside it: "Reading
+ * the instructions…", a tool. [loading]: the model is still loading, so it says that and, from how
+ * long the last load took, about how long is left. A wait past [SHOW_SECONDS_AFTER_MS] counts
+ * its seconds, so a long one is seen to be going somewhere rather than stuck.
  */
 @Composable
-fun ThinkingIndicator(modifier: Modifier = Modifier, label: String? = null) {
+fun ThinkingIndicator(
+    modifier: Modifier = Modifier,
+    label: String? = null,
+    loading: com.local.assistant.llm.LlmService.State.Loading? = null,
+) {
     val transition = rememberInfiniteTransition(label = "thinking")
     val alpha by transition.animateFloat(
         initialValue = 0.25f,
@@ -232,6 +238,15 @@ fun ThinkingIndicator(modifier: Modifier = Modifier, label: String? = null) {
         animationSpec = infiniteRepeatable(tween(700), RepeatMode.Reverse),
         label = "alpha",
     )
+    val shownAt = remember { android.os.SystemClock.elapsedRealtime() }
+    var now by remember { androidx.compose.runtime.mutableLongStateOf(shownAt) }
+    androidx.compose.runtime.LaunchedEffect(Unit) {
+        while (true) {
+            kotlinx.coroutines.delay(500)
+            now = android.os.SystemClock.elapsedRealtime()
+        }
+    }
+    val text = waitingText(label, loading, shownAt, now)
     Row(
         modifier = modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -243,7 +258,7 @@ fun ThinkingIndicator(modifier: Modifier = Modifier, label: String? = null) {
                 .clip(CircleShape)
                 .background(AppColors.TextPrimary),
         )
-        label?.let {
+        text.let {
             Text(
                 text = it,
                 style = MaterialTheme.typography.bodyMedium,
@@ -252,4 +267,22 @@ fun ThinkingIndicator(modifier: Modifier = Modifier, label: String? = null) {
             )
         }
     }
+}
+
+/** Waits up to this long go without a seconds count. */
+private const val SHOW_SECONDS_AFTER_MS = 3_000L
+
+/** What [ThinkingIndicator] says at [now]: never just a dot. */
+internal fun waitingText(label: String?, loading: com.local.assistant.llm.LlmService.State.Loading?, shownAt: Long, now: Long): String {
+    if (loading != null) {
+        val left = loading.expectedMs?.let { (loading.startedAt + it - now + 999) / 1000 }
+        return when {
+            left == null -> com.local.assistant.memory.tools.ToolSteps.LOADING_MODEL
+            left >= 1 -> "Loading the model · about $left s left"
+            else -> "Loading the model · nearly there"
+        }
+    }
+    val base = label ?: com.local.assistant.memory.tools.ToolSteps.THINKING
+    val waited = now - shownAt
+    return if (waited < SHOW_SECONDS_AFTER_MS) base else "${base.removeSuffix("…")} · ${waited / 1000} s"
 }

@@ -184,6 +184,20 @@ class GroundedReply(
         return release(rest)
     }
 
+    /** Where [rewind] goes back to: what has been shown so far stands. */
+    private var kept = 0
+
+    /** Everything shown so far stands ([rewind] won't take it back). */
+    fun keep() {
+        kept = shown.length
+    }
+
+    /** What was shown since the last [keep] is withdrawn, and what was held back with it. */
+    fun rewind() {
+        held = ""
+        shown.setLength(minOf(kept, shown.length))
+    }
+
     private fun release(chunk: String): String {
         if (chunk.isEmpty()) return chunk
         val out = StringBuilder()

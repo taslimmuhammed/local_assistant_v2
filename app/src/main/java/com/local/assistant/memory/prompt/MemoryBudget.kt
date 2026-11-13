@@ -60,9 +60,18 @@ data class MemoryBudget(
     // Totals.
     val promptTarget: Int,
     val promptCeiling: Int,
-    /** Compaction runs after a reply once the prompt passes this… */
+    /**
+     * Compaction runs after a reply once the chat's own turns pass this many tokens: what the
+     * conversation holds beyond its preface (instructions, tools, profile, agenda, summary, as
+     * the runtime counted them when it opened)…
+     *
+     * Counted from the preface, not from zero: the preface alone is ~3,450 tokens on the phone,
+     * and a trigger of 4,000 on the whole conversation compacted after about 550 tokens of chat,
+     * so 30 s after almost every tool-using reply the chat was summarised and read again in full
+     * (13 Nov 2026).
+     */
     val compactionTrigger: Int,
-    /** …and aims to bring it back down to this. */
+    /** …and keeps about this many tokens of the newest turns verbatim, folding the rest. */
     val compactionTarget: Int,
 
     // Generation.
@@ -109,8 +118,9 @@ data class MemoryBudget(
             notesIndexCap = 100,
             promptTarget = 10_000,
             promptCeiling = 12_000,
-            compactionTrigger = 9_000,
-            compactionTarget = 5_500,
+            // 12,000 ceiling less a ~3,450 preface and one envelope.
+            compactionTrigger = 7_500,
+            compactionTarget = 2_000,
             generationReserve = 2_048,
             toolRoundsReserve = 450,
             maxToolRounds = 3,
@@ -147,8 +157,10 @@ data class MemoryBudget(
             notesIndexCap = 60,
             promptTarget = 4_400,
             promptCeiling = 5_200,
-            compactionTrigger = 4_000,
-            compactionTarget = 2_400,
+            // The 5,200 ceiling less a ~3,450 preface (runtime count, 13 Nov 2026) and one envelope
+            // with its notes (~450): compaction after 4–5 tool turns rather than every one.
+            compactionTrigger = 1_300,
+            compactionTarget = 500,
             generationReserve = 2_048,
         )
 

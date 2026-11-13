@@ -45,15 +45,17 @@ import com.local.assistant.ui.theme.AppColors
 fun MarkdownText(text: String, modifier: Modifier = Modifier) {
     val blocks = remember(text) { parseMarkdown(text) }
 
+    // While a reply streams, only its last block changes: each block is keyed by its place and
+    // its inline marks remembered, so the finished ones are neither parsed nor drawn again.
     Column(modifier) {
-        blocks.forEachIndexed { index, block ->
+        blocks.forEachIndexed { index, block -> androidx.compose.runtime.key(index) {
             if (index > 0) {
                 Spacer(Modifier.height(gapBefore(block, blocks[index - 1])))
             }
             when (block) {
                 is MarkdownBlock.Heading -> HeadingBlock(block)
                 is MarkdownBlock.Paragraph -> Text(
-                    text = parseInline(block.text),
+                    text = remember(block.text) { parseInline(block.text) },
                     style = MaterialTheme.typography.bodyLarge,
                     color = AppColors.TextPrimary,
                 )
@@ -76,7 +78,7 @@ fun MarkdownText(text: String, modifier: Modifier = Modifier) {
                     modifier = Modifier.padding(vertical = 4.dp),
                 )
             }
-        }
+        } }
     }
 }
 
@@ -98,7 +100,7 @@ private fun HeadingBlock(heading: MarkdownBlock.Heading) {
         else -> 16.sp
     }
     Text(
-        text = parseInline(heading.text),
+        text = remember(heading.text) { parseInline(heading.text) },
         style = TextStyle(
             fontSize = size,
             lineHeight = size * 1.35,
@@ -119,7 +121,7 @@ private fun ListRow(marker: String, depth: Int, text: String, markerWidth: andro
             modifier = Modifier.width(markerWidth),
         )
         Text(
-            text = parseInline(text),
+            text = remember(text) { parseInline(text) },
             style = MaterialTheme.typography.bodyLarge,
             color = AppColors.TextPrimary,
         )
@@ -137,7 +139,7 @@ private fun QuoteBlock(text: String) {
                 .background(AppColors.Border),
         )
         Text(
-            text = parseInline(text),
+            text = remember(text) { parseInline(text) },
             style = MaterialTheme.typography.bodyLarge,
             color = AppColors.TextSecondary,
             modifier = Modifier.padding(start = 12.dp),

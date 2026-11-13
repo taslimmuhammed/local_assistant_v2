@@ -18,7 +18,14 @@ import kotlinx.coroutines.flow.flow
 
 /** What the chat UI hears about a turn. */
 sealed interface TurnEvent {
-    data class Text(val delta: String) : TurnEvent
+    /** [provisional]: may yet be taken back ([Retract]); not to be spoken before [Confirm]. */
+    data class Text(val delta: String, val provisional: Boolean = false) : TurnEvent
+
+    /** All the text so far stands. */
+    data object Confirm : TurnEvent
+
+    /** The text since the last [Confirm] is withdrawn. */
+    data object Retract : TurnEvent
 
     /** Something was saved, scheduled or forgotten; its chip is also stored with the chat. */
     data class Memory(val recordId: Long, val chip: MemoryChip) : TurnEvent
@@ -81,13 +88,17 @@ class TurnRunner(
         // are the recogniser's, which wrote "two thousand four hundred and fifty" as "200450".
         if (attachment == null && !showScreen && !heard) {
             NumberGrounding.directAnswer(userText)?.let { answer ->
-                conversations.forget(chatId)
+                TurnTimings.current?.conversation = "direct_answer"
+                conversations.forget(chatId, "direct_answer")
                 emit(TurnEvent.Text(answer))
                 emit(TurnEvent.Done(null))
                 return@flow
             }
         }
+        val asked = android.os.SystemClock.elapsedRealtime()
         scheduler.runUser {
+            // Waiting here means the model was busy: a background job that can't be stopped mid-prefill.
+            TurnTimings.current?.waitedMs = android.os.SystemClock.elapsedRealtime() - asked
             var retried = false
             var reseeded = false
             var rebuiltForPhotos = false
@@ -102,6 +113,8 @@ class TurnRunner(
                 var photosShown = false
                 var acted = false
                 val reply = StringBuilder()
+                // How much of [reply] stands: the rest may be taken back (LoopEvent.Retract).
+                var standing = 0
                 // A saved image the message is about is looked at again, as if sent with it, and so
                 // are photos from the gallery a question may be about.
                 // A voice message's recording, when it goes with its words (ContextWindow.heard).
@@ -113,7 +126,16 @@ class TurnRunner(
                     when (event) {
                         is LoopEvent.Text -> {
                             reply.append(event.delta)
-                            emit(TurnEvent.Text(event.delta))
+                            if (!event.provisional) standing = reply.length
+                            emit(TurnEvent.Text(event.delta, event.provisional))
+                        }
+                        LoopEvent.Confirm -> {
+                            standing = reply.length
+                            emit(TurnEvent.Confirm)
+                        }
+                        LoopEvent.Retract -> {
+                            reply.setLength(standing)
+                            emit(TurnEvent.Retract)
                         }
                         is LoopEvent.Memory -> {
                             if (event.chip.kind == MemoryChip.Kind.PHOTOS) photosShown = true
@@ -123,7 +145,7 @@ class TurnRunner(
                         is LoopEvent.Done -> {
                             if (event.staleConversation) {
                                 // Finished without the runtime: rebuild from what is stored.
-                                conversations.forget(chatId)
+                                conversations.forget(chatId, "stale_turn")
                             } else if (event.changedPrefix) {
                                 // The model saw the change in its own history, so it needs no rebuild.
                                 conversations.acknowledgePrefixChange(chatId)
@@ -166,7 +188,7 @@ class TurnRunner(
                     }
                     rebuild -> {
                         // The next prepareTurn rebuilds it from what is stored, tool calls included.
-                        conversations.forget(chatId)
+                        conversations.forget(chatId, "photo_retry")
                         rebuiltForPhotos = true
                     }
                     else -> break

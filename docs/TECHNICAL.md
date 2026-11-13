@@ -396,7 +396,7 @@ now ("Power button · wake word off · on the lock screen"), and a page per sect
 - **Calling the assistant**: *Power button*, *Wake word* (with *Try it*), *Use on the lock screen*.
 - **Voice**: *Answer out loud*, *Voice*, *Pace*.
 - **Model**: *Model and memory search* (the model file and the embedder), *Context window* (4K,
-  8K, 12K or 16K), *Keep the assistant ready*.
+  8K, 12K or 16K).
 - **Memory and history**: the controls below.
 - **About**: the models' licences.
 - **Test build**, in debuggable builds only: the wake word's sample recorder.
@@ -1111,26 +1111,69 @@ from sending to the first word):
 So the model answers in under a second; the waiting was loading it and reading the prompt
 (instructions, tool declarations, profile, agenda) for every new chat. Two things remove it:
 
-- `ConversationManager.prepareFresh` opens and prefills a conversation for a chat not begun yet,
-  and a new chat's first message takes it over if its prompt still matches. The overlay asks for
-  it as it opens, so the prefill runs while the user talks; with the assistant kept ready, it is
-  also done once the app is away and the screen has been off for a minute (five minutes away if
-  the screen stays on), and 30 s after background model work (summaries, extraction) closed it.
-  Until 7 Nov 2026 it was a minute after the app left, screen on or not: its prefill re-reads
-  ~860 MB of the model and the phone frees ~1.5 GB for it, which stuttered the screen for a
-  second or two (≈455 allocation stalls on the OnePlus). Only one conversation ever exists, so a chat left open in the
-  app is rebuilt when the user returns to it.
-- **Keep the assistant ready** (Settings → Model, on by default): the model isn't released
-  when the app goes to the background (`AppContainer.keepReady`). It holds about 1.8 GB (PSS
-  measured 1.7–1.9 GB). Off, the model goes as before, and a cold press takes ~11 s after the
-  question. It applies only while the app runs as the phone's assistant
-  (`VoiceInteractionService.isActiveService`): the power button reaches the app only then, and
-  the system keeps `AssistantInteractionService` bound with `BIND_FOREGROUND_SERVICE` and its
-  capabilities (`CR FGS CAPS flags=0x4101001` in `dumpsys activity services`), which holds the
-  process up as a foreground service would. Until 10 Nov 2026 `assist/KeepReadyService`, a
-  foreground service, ran for it too, and its notification was always there; the user found that
-  annoying, so it now runs only for the wake word, or for a place reminder while the app isn't
-  the assistant.
+- A conversation is made ready when the user shows they are about to ask, not in the background.
+  `ConversationManager.showing` prepares the new chat's conversation as soon as the blank chat is
+  on screen with the model loaded (four questions in five start a new chat), and an existing
+  chat's once the user starts typing in it (`typing`). The overlay asks for one as it opens
+  (`prepareFresh`), so the prefill runs while the user talks. A new chat's first message takes it
+  over if its prompt still matches. After a job that closed it (a summary, an extraction, a sum
+  answered directly), the chat on screen is rebuilt 1.5 s later, in the foreground too. Work for
+  what the user is typing doesn't give way to their keystrokes (`ModelScheduler.runBackground`,
+  `yieldsToTyping = false`); other background work does. Only one conversation ever exists, so a
+  chat left open in the app is rebuilt when the user returns to it.
+- Until 13 Nov 2026 the next new chat was also prepared a minute after the screen went off, with
+  the app away. That was ~16 s of GPU work each time, and OxygenOS closed 4 of the 5 processes
+  that did it before they answered anything (16 closes in 23 hours on the OnePlus, with 6.5 GB
+  free and the app bound as the assistant). It was removed, with the *Keep the assistant ready*
+  switch. What stays: the model isn't released when the app goes to the background while it runs
+  as the phone's assistant (`AppContainer.keepsModel`, `VoiceInteractionService.isActiveService`).
+  It holds about 1.8 GB (PSS 1.7–1.9 GB) and costs no work. The system keeps
+  `AssistantInteractionService` bound with `BIND_FOREGROUND_SERVICE` (`CR FGS CAPS flags=0x4101001`
+  in `dumpsys activity services`), which holds the process up as a foreground service would,
+  except where the phone maker's own killer closes it anyway. `assist/ProcessExits` counts those
+  closes as each process starts (`getHistoricalProcessExitReasons`: low memory, "other kills by
+  system", excessive use; not a swipe off recents or an update). With three or more in a day, the
+  chat says so once, with a button to the app's info page, where battery use can be allowed.
+- **Compaction counts the conversation, not the instructions.** The trigger and target
+  (`MemoryBudget.compactionTrigger`, `compactionTarget`) are measured from the end of the preface
+  (`Live.prefaceTokens`, the runtime's count right after opening less the history's estimate).
+  Before, the runtime's whole count was compared with 4,000, so a ~3,500-token preface left room
+  for ~550 tokens of chat, and almost every tool turn was followed by a compaction and a full
+  re-read.
+- **Where each turn's time goes** is written to `files/turn-timings.csv` (one row per turn: waits,
+  engine load, opening and why, compaction, recall, first token, first word, each round's prefill
+  and decode, each tool's time) and `files/model-events.csv` (engine loads, conversations opened,
+  adopted and closed, with reasons). Neither holds any words of a turn.
+
+Typed chat turns before and after these changes, LiteRT-LM 0.18.1 to 0.19.1 with prediction off
+for chats (`AssistLatencyEvalTest`, 13 Nov 2026, time to the first word):
+
+| Situation | Before | After |
+|---|---|---|
+| New chat with a tool call (`get_upcoming`), model loaded | 21.5 s | 7.8 s (0.4 s after the result) |
+| Follow-up in the same chat | 1.3 s | 0.5 s |
+| Blank chat on screen for 6 s, then a question | not measured | 1.2 s |
+| Conversation prepared beforehand | 2.1 s | 1.3 s |
+| New chat typed straight away, model loaded | 7.8 s | 6.8 s |
+| Model not loaded, new chat | 25.6 s | 21.4 s |
+
+**Multi-token prediction and tool results.** With multi-token prediction on, the runtime reads a
+tool's result at 3–4 tokens a second: the 50-token result of `get_upcoming` took 12–15 s before
+the reply's first word, on LiteRT-LM 0.18.1 and 0.19.1 alike, with the mode ON or ADAPTIVE. The
+same result sent as a user message took 0.5 s, and with prediction off for the conversation
+0.46 s (`ToolResponseProbeTest`, 13 Nov 2026). Prediction speeds up writing, 22 tokens a second
+against 15, so conversations that can get tool results (the chat's) open with it off
+(`SpeculativeDecodingConfig(OFF)` in `LiteRtLmBackend.openChat`) and the others keep the
+engine's. On 0.18.1 the repetition penalty also cut writing to 7 tokens a second with prediction
+on and 8.5 with it off; on 0.19.1 it costs almost nothing (21 and 14).
+
+**An empty reply after tool results.** Through the app's backend on 0.19.1, with a 4,166-token
+prompt, the model once wrote nothing after a lookup's result, both times it was tried. When a
+turn's tools ran, the reply has no words, and nothing was done that speaks for itself (an alarm
+set, a message got ready), `ToolLoop` asks once more with a bracketed note (`EMPTY_REPLY`: answer
+from the results above). If that is empty too, the reply is a plain "couldn't finish that" line
+(`NO_REPLY`) rather than an empty bubble. Either way the conversation is rebuilt next turn, since
+it holds turns that aren't stored.
 
 **The voice** is the phone's own text-to-speech engine (`voice/Speaker`), restricted to voices
 that are installed and run offline, in the phone's language or English (`voice/VoiceChoice`). By
@@ -1431,16 +1474,21 @@ is why the app always sets it.
 
 The model starts loading the moment the app does (`AssistantApplication`, and again from
 `ChatViewModel` for a model installed just now), and the chat opens straight away. It takes a few
-seconds when the model file is in the page cache (about 3 s on the test phone). While it loads, the
-banner at the top says "Getting ready…". A message sent before it is ready simply waits for it, and
-the typing dot says "Loading model…" beside it, so the wait doesn't look like a hang.
+seconds when the model file is in the page cache (about 3 s on the test phone). While it loads, a
+blank chat says "Getting ready…" in its hint line, so the starter tiles stay where they are; a chat
+with messages says it in the banner at the top. A message sent before it is ready shows at once
+(`ChatSender.Live.asked`: the stored copy came back from the database over a second later while the
+model loaded) and waits for the model. The line under it says "Loading the model · about 6 s left",
+counted from the last load's time (`SettingsStore.lastEngineLoadMs`), and the banner steps aside.
 
 **What it's doing** is shown beside the dot while a reply is worked on, and under the reply when a
 tool runs partway through it (`memory/tools/ToolSteps`, `TurnEvent.Step`, `ChatSender.Live.step`,
-in the chat and the power-button panel): "Getting ready…" (a new chat's conversation being made)
-or "Reading the conversation…" (one rebuilt from its history), "Checking your memories…" (recall),
-"Thinking…", then the tool: "Searching your photos…", "Searching the web…",
-"Setting a reminder…" and so on. The model doesn't think aloud here (thinking is off, and the model
+in the chat and the power-button panel): "Reading the instructions…" (a new chat's conversation
+being made) or "Reading the conversation…" (one rebuilt from its history), "Checking your
+memories…" (recall), "Thinking…", then the tool: "Searching your photos…", "Searching the web…",
+"Setting a reminder…" and so on. The moment the tools are done it says so while the model reads
+their results: "Reminder set · writing the reply…" (`ToolSteps.done`). After 3 s of waiting the
+seconds show too: "Reading the instructions · 8 s". The model doesn't think aloud here (thinking is off, and the model
 reports none), so these are the steps the app can see. What a tool did stays as its chip. On the
 phone, a follow-up "show me my beach photos" showed "Checking your memories…" at 0.7 s, "Thinking…"
 at 2.0 s, "Searching your photos…" at 2.5 s and the reply with its photo card at 3.1 s. If the model

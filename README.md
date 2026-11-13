@@ -78,9 +78,10 @@ and pick **Talk**.
 
 In the same place:
 
-- **Keep the assistant ready** (on by default) keeps the model loaded, so the power button gets an
-  answer in about a second. It holds about 1.8 GB of memory, while Local Assistant is the phone's
-  digital assistant (Android then keeps it running, so there's no notification for it).
+- While Local Assistant is the phone's digital assistant, the model stays loaded between questions
+  (about 1.8 GB of memory), so the power button gets an answer in about a second. Some phones
+  close it in the background anyway; if yours does it often, the chat says so once, with a link
+  to the app's battery settings.
 - **Use on the lock screen** (off by default) lets it answer without unlocking, with the power
   button or "Hey Luna", but only partly. On the lock screen it sees none of your memory, photos
   or chats. It can set reminders, events, alarms and timers, change phone settings, work out sums

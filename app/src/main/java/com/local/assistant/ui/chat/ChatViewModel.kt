@@ -73,6 +73,9 @@ class ChatViewModel(
     private val reporter: ReplyReporter? = null,
     /** The app's version and model, which a report carries. */
     private val appVersion: String = "",
+    /** How often the phone closed the app lately, when worth a note ([com.local.assistant.AppContainer.phoneKills]). */
+    val phoneKills: StateFlow<Int?> = MutableStateFlow(null),
+    private val onPhoneKillsAnswered: () -> Unit = {},
 ) : ViewModel() {
 
     /** A tool waiting on the user's answer to a permission dialog, e.g. contacts for "call amma". */
@@ -131,6 +134,14 @@ class ChatViewModel(
         live?.takeIf { isHere(it, chatId) }?.text
     }.stateIn(viewModelScope, SharingStarted.Eagerly, null)
 
+    /**
+     * What the user just sent, shown at once until the stored copy comes back from the database:
+     * that took over a second while the model loaded (seen on the phone, 13 Nov 2026).
+     */
+    val pendingQuestion: StateFlow<String?> = combine(sender.live, _activeChatId, messages) { live, chatId, shown ->
+        live?.takeIf { isHere(it, chatId) }?.asked?.takeIf { live.askedId == null || shown.none { it.id == live.askedId } }
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
+
     /** What the reply on screen is waiting on, while it is: "Searching your photos…" ([ChatSender.Live.step]). */
     val streamingStep: StateFlow<String?> = combine(sender.live, _activeChatId) { live, chatId ->
         live?.takeIf { isHere(it, chatId) }?.step
@@ -179,10 +190,17 @@ class ChatViewModel(
         // waits for it. Also covers a model installed just now, which the app's start didn't see.
         llm.warmUp()
 
+        // What is on screen decides which conversation is made ready: a new chat's at once, once
+        // the model is loaded (ConversationManager.showing).
+        viewModelScope.launch {
+            combine(_activeChatId, llm.state.map { it is LlmService.State.Ready }.distinctUntilChanged(), ::Pair)
+                .collect { (chatId, ready) -> conversations.showing(chatId, ready) }
+        }
+
         // A reply to a voice message is spoken sentence by sentence as it arrives, as in the overlay.
         viewModelScope.launch {
             sender.live.collect { live ->
-                if (live?.owner === this@ChatViewModel) chunker?.push(live.text)?.forEach(::say)
+                if (live?.owner === this@ChatViewModel) chunker?.push(live.sayable)?.forEach(::say)
             }
         }
 
@@ -312,8 +330,17 @@ class ChatViewModel(
         conversations.onChatSelected(chatId)
     }
 
-    /** Every keystroke: background model work yields to the person typing. */
-    fun onTyping() = turns.onUserActivity()
+    /**
+     * Every keystroke: background model work yields to the person typing, and the conversation
+     * their message will go into is made ready if it isn't.
+     */
+    fun onTyping() {
+        turns.onUserActivity()
+        conversations.typing()
+    }
+
+    /** The chat screen came into view again (back from the panel, Settings or another app). */
+    fun onScreenShown() = conversations.showing(_activeChatId.value, llm.state.value is LlmService.State.Ready)
 
     fun deleteChat(chatId: Long) {
         viewModelScope.launch {
@@ -466,6 +493,9 @@ class ChatViewModel(
         if (generatingHere()) sender.stop()
     }
 
+    /** The note about the phone closing the app was answered (opened or put away): not shown again. */
+    fun phoneKillsAnswered() = onPhoneKillsAnswered()
+
     override fun onCleared() {
         // As when this screen ran its own turns: gone for good, it takes its reply with it.
         if (sender.live.value?.owner === this) sender.stop()
@@ -497,6 +527,8 @@ class ChatViewModel(
                     transcriber = container.transcriber,
                     reporter = container.replyReporter,
                     appVersion = container.appVersion,
+                    phoneKills = container.phoneKills,
+                    onPhoneKillsAnswered = container::toldAboutPhoneKills,
                 )
             }
         }

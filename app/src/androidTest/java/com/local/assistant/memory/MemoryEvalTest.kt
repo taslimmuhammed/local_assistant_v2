@@ -10,6 +10,7 @@ import com.local.assistant.memory.extract.ExtractedItem
 import com.local.assistant.memory.extract.ExtractionInput
 import com.local.assistant.memory.extract.ExtractionParser
 import com.local.assistant.memory.extract.ExtractionPrompt
+import com.local.assistant.memory.prompt.ShownReply
 import com.local.assistant.memory.prompt.TurnEvent
 import com.local.assistant.memory.summary.Summarizer
 import kotlinx.coroutines.delay
@@ -157,9 +158,9 @@ class MemoryEvalTest {
             }
             val question = "Which quote did we lean towards for the kitchen tiles?"
             val userId = chats.addMessage(chatId, Role.USER, question)
-            val reply = StringBuilder()
+            val reply = ShownReply()
             var started = System.currentTimeMillis()
-            container.turnRunner.run(chatId, userId, question).collect { if (it is TurnEvent.Text) reply.append(it.delta) }
+            container.turnRunner.run(chatId, userId, question).collect { reply.add(it) }
             val replyId = chats.addMessage(chatId, Role.ASSISTANT, reply.toString())
             container.turnRunner.finish(chatId, userId, replyId, completed = true)
             report("turn with dropped history: ${System.currentTimeMillis() - started} ms, dropped ${container.conversations.droppedFromContext.value} messages")
@@ -199,15 +200,11 @@ class MemoryEvalTest {
             chatId, Role.USER, text,
             attachmentPath = image, attachmentKind = image?.let { com.local.assistant.data.db.AttachmentKind.IMAGE },
         )
-        val reply = StringBuilder()
+        val reply = ShownReply()
         val chips = mutableListOf<com.local.assistant.memory.tools.MemoryChip>()
         val attachment = image?.let { com.local.assistant.llm.PromptAttachment(it, com.local.assistant.data.db.AttachmentKind.IMAGE) }
         container.turnRunner.run(chatId, userId, text, attachment).collect { event ->
-            when (event) {
-                is TurnEvent.Text -> reply.append(event.delta)
-                is TurnEvent.Memory -> chips += event.chip
-                else -> Unit
-            }
+            if (event is TurnEvent.Memory) chips += event.chip else reply.add(event)
         }
         val replyId = chats.addMessage(chatId, Role.ASSISTANT, reply.toString())
         container.turnRunner.finish(chatId, userId, replyId, completed = true)
@@ -471,15 +468,11 @@ class MemoryEvalTest {
                 try {
                     for (text in listOf("hi, what can you help me with?", "my car's number is KL 07 CX 4361, and the insurance renews on 09/08/2027. what's the renewal date?")) {
                         val userId = container.chatRepository.addMessage(chatId, Role.USER, text)
-                        val reply = StringBuilder()
+                        val reply = ShownReply()
                         var stats: com.local.assistant.llm.GenStats? = null
                         val started = System.currentTimeMillis()
                         container.turnRunner.run(chatId, userId, text).collect { e ->
-                            when (e) {
-                                is TurnEvent.Text -> reply.append(e.delta)
-                                is TurnEvent.Done -> stats = e.stats
-                                else -> Unit
-                            }
+                            if (e is TurnEvent.Done) stats = e.stats else reply.add(e)
                         }
                         val replyId = container.chatRepository.addMessage(chatId, Role.ASSISTANT, reply.toString())
                         container.turnRunner.finish(chatId, userId, replyId, completed = true)
@@ -548,8 +541,8 @@ class MemoryEvalTest {
         try {
             for (text in listOf("what was my roll no for the exam", "what's my date of birth on my 10th mark sheet")) {
                 val userId = container.chatRepository.addMessage(chatId, Role.USER, text)
-                val reply = StringBuilder()
-                container.turnRunner.run(chatId, userId, text).collect { e -> if (e is TurnEvent.Text) reply.append(e.delta) }
+                val reply = ShownReply()
+                container.turnRunner.run(chatId, userId, text).collect { e -> reply.add(e) }
                 val replyId = container.chatRepository.addMessage(chatId, Role.ASSISTANT, reply.toString())
                 container.turnRunner.finish(chatId, userId, replyId, completed = true)
                 report("app chat | ${score(reply.toString())} | ${container.conversations.contextUsage.value?.used} tokens | ${reply.toString().replace('\n', ' ').take(160)}")

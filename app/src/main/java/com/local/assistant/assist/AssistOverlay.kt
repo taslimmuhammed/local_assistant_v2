@@ -377,7 +377,7 @@ fun AssistOverlay(
                             streaming = streaming,
                             step = step,
                             waiting = waiting,
-                            modelLoading = engine !is LlmService.State.Ready,
+                            modelLoading = engine as? LlmService.State.Loading,
                             viewModel = viewModel,
                             modifier = Modifier.weight(1f, fill = false),
                         )
@@ -646,7 +646,7 @@ private fun Transcript(
     /** What the reply is waiting on: recall, a tool. */
     step: String?,
     waiting: Boolean,
-    modelLoading: Boolean,
+    modelLoading: LlmService.State.Loading?,
     viewModel: AssistViewModel,
     modifier: Modifier = Modifier,
 ) {
@@ -678,7 +678,7 @@ private fun Transcript(
         pending?.let { Question(it.text, it.audioPath != null, it.durationMs) }
         when {
             waiting || streaming?.isEmpty() == true ->
-                ThinkingIndicator(label = if (modelLoading) "Loading model…" else step ?: "Thinking…")
+                ThinkingIndicator(label = step, loading = modelLoading)
             streaming != null -> {
                 Answer(streaming, streaming = true)
                 step?.let { ThinkingIndicator(label = it) }

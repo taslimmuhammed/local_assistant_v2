@@ -195,7 +195,6 @@ fun SettingsScreen(
                             onOpenModel,
                         )
                         ContextWindow(llmService, settings)
-                        KeepReady(settings, llmService)
                     }
                     SettingsSection.MEMORY -> MemorySettings(memory)
                     SettingsSection.ABOUT -> LicenceEntries()
@@ -255,7 +254,6 @@ private fun MainPage(
         listOfNotNull(
             ModelCatalog.DISPLAY_NAME,
             "${settings.contextTokens / 1024}K window",
-            "kept ready".takeIf { settings.keepAssistantReady },
         ).joinToString(" \u00b7 "),
     ) { onSection(SettingsSection.MODEL) }
     SectionRow(Icons.Outlined.Public, "Web search", if (webSearchOn) "On \u00b7 Tavily" else "Off \u00b7 add a Tavily key to turn it on", onOpenWebSearch)
@@ -566,24 +564,6 @@ private fun VoiceSettings(settings: SettingsStore, speaker: Speaker, voicePacks:
             },
         )
     }
-}
-
-/** The model kept loaded for the power button. */
-@Composable
-private fun KeepReady(settings: SettingsStore, llmService: LlmService) {
-    var keepReady by remember { mutableStateOf(settings.keepAssistantReady) }
-    SwitchRow(
-        "Keep the assistant ready",
-        "Keeps the model loaded so the power button answers in about a second, instead of about 15 seconds after the phone has put the app away. " +
-            "Holds about $KEEP_READY_MEMORY of memory, while Local Assistant is the phone's digital assistant.",
-        checked = keepReady,
-        onCheckedChange = {
-            keepReady = it
-            settings.keepAssistantReady = it
-            // Off, the model goes the next time Android asks for memory back, as before.
-            if (it) llmService.warmUp()
-        },
-    )
 }
 
 /**
@@ -937,9 +917,6 @@ private val WAKE_WORD_CHOICES = listOf(
 private val PACK_NOTES = mapOf(
     VoicePack.KOKORO.name to "Sounds like a person, and read every word right in tests. Uses about 600 MB of memory while it talks.",
 )
-
-/** What keeping the model loaded costs: the app's PSS on the test phone (fp32 decoder, 8K), AssistLatencyEvalTest. */
-private const val KEEP_READY_MEMORY = "1.8 GB"
 
 /** The system's text-to-speech page, where engines and voice data are installed. */
 /** The models' and libraries' licences: the About page. */

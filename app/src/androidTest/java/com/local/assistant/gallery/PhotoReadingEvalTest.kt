@@ -21,6 +21,7 @@ import com.local.assistant.memory.db.SessionTracker
 import com.local.assistant.memory.db.TaskPlace
 import com.local.assistant.memory.prompt.ConversationManager
 import com.local.assistant.memory.prompt.MemoryBudget
+import com.local.assistant.memory.prompt.ShownReply
 import com.local.assistant.memory.prompt.TurnEvent
 import com.local.assistant.memory.prompt.TurnRunner
 import com.local.assistant.memory.tools.ChatToolLog
@@ -184,11 +185,11 @@ class PhotoReadingEvalTest {
                         asked++
                         val chatId = chats.createChat()
                         val messageId = chats.addMessage(chatId = chatId, role = Role.USER, text = case.question)
-                        val reply = StringBuilder()
+                        val reply = ShownReply()
                         val started = System.currentTimeMillis()
                         val failure = runCatching {
                             withTimeout(TURN_TIMEOUT_MS) {
-                                turns.run(chatId, messageId, case.question).collect { if (it is TurnEvent.Text) reply.append(it.delta) }
+                                turns.run(chatId, messageId, case.question).collect { reply.add(it) }
                             }
                         }.exceptionOrNull()
                         val seconds = (System.currentTimeMillis() - started) / 1000.0
@@ -208,8 +209,8 @@ class PhotoReadingEvalTest {
                             val next = chats.addMessage(chatId = chatId, role = Role.USER, text = followUp)
                             val asked = System.currentTimeMillis()
                             var first: Long? = null
-                            val said = StringBuilder()
-                            turns.run(chatId, next, followUp).collect { if (it is TurnEvent.Text) { if (first == null) first = System.currentTimeMillis(); said.append(it.delta) } }
+                            val said = ShownReply()
+                            turns.run(chatId, next, followUp).collect { if (said.add(it) && first == null) first = System.currentTimeMillis() }
                             conversations.forget(chatId)
                             report("  follow-up \"$followUp\": first words after ${"%.1f".format(((first ?: asked) - asked) / 1000.0)} s, done after ${"%.1f".format((System.currentTimeMillis() - asked) / 1000.0)} s | ${mask(said.toString()).replace('\n', ' ').take(200)}")
                         }

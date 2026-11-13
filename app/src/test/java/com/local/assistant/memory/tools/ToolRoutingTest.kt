@@ -838,16 +838,85 @@ class ToolRoutingTest {
         return session to runBlocking { loop.run(session, "envelope", emptyList(), context).toList() }
     }
 
-    private fun shown(events: List<LoopEvent>) = events.filterIsInstance<LoopEvent.Text>().joinToString("") { it.delta }
+    /** What the chat ends up showing: provisional text stands once confirmed and goes when retracted, as in [com.local.assistant.chat.ChatSender]. */
+    private fun shown(events: List<LoopEvent>): String {
+        val text = StringBuilder()
+        var standing = 0
+        for (event in events) when (event) {
+            is LoopEvent.Text -> {
+                text.append(event.delta)
+                if (!event.provisional) standing = text.length
+            }
+            LoopEvent.Confirm -> standing = text.length
+            LoopEvent.Retract -> text.setLength(standing)
+            else -> Unit
+        }
+        return text.toString()
+    }
+
+    /** Text that stood (and so could be read aloud) before the first retraction: none, for a false claim. */
+    private fun stoodBeforeRetract(events: List<LoopEvent>): Boolean =
+        events.takeWhile { it != LoopEvent.Retract }.any { it == LoopEvent.Confirm || (it is LoopEvent.Text && !it.provisional) }
+
+    // ---- Nothing written after a lookup's result ----
+
+    @Test
+    fun `nothing written after a lookup's result, so the model is asked once more and that answer is the reply`() {
+        val (session, events) = replies(
+            ScriptedSession.calls(call("get_upcoming", "days" to 7)),
+            ScriptedSession.says("\n"),
+            ScriptedSession.says("Nothing is due this week."),
+        )
+        assertEquals(listOf("envelope", ToolLoop.EMPTY_REPLY), session.sentEnvelopes)
+        assertEquals("Nothing is due this week.", shown(events).trim())
+        // The live conversation holds the empty turn and the check, which aren't stored.
+        assertTrue((events.last() as LoopEvent.Done).staleConversation)
+    }
+
+    @Test
+    fun `still nothing when asked again, so a plain line goes out instead of an empty reply`() {
+        val (session, events) = replies(
+            ScriptedSession.calls(call("search_memory", "query" to "CA")),
+            listOf(GenEvent.Done(null)),
+            listOf(GenEvent.Done(null)),
+        )
+        assertEquals(listOf("envelope", ToolLoop.EMPTY_REPLY), session.sentEnvelopes)
+        assertEquals(ToolLoop.NO_REPLY, shown(events))
+    }
+
+    @Test
+    fun `a lookup's answer written at once is not asked for again`() {
+        val (session, events) = replies(
+            ScriptedSession.calls(call("get_upcoming", "days" to 7)),
+            ScriptedSession.says("Nothing is due this week."),
+        )
+        assertEquals(listOf("envelope"), session.sentEnvelopes)
+        assertEquals("Nothing is due this week.", shown(events))
+        assertEquals(false, (events.last() as LoopEvent.Done).staleConversation)
+    }
+
+    @Test
+    fun `nothing written after an alarm was set is not asked for again, and what was done is said`() {
+        val (session, events) = replies(
+            ScriptedSession.calls(call("set_alarm", "when" to "6:30 am")),
+            listOf(GenEvent.Done(null)),
+        )
+        assertEquals(listOf("envelope"), session.sentEnvelopes)
+        assertTrue(shown(events).isNotBlank())
+        assertTrue(ToolLoop.NO_REPLY !in shown(events))
+    }
 
     /** As it went in the user's chat on 10 Oct 2026: "yes send it", and no call. */
     @Test
-    fun `a reply that says it sent something when no tool ran is never shown, and the model is asked again`() {
+    fun `a reply that says it sent something when no tool ran is taken back unspoken, and the model is asked again`() {
         val (session, events) = replies(
             ScriptedSession.says("I've sent the email to Hitesh at google.com with \"Hi\" in it."),
             ScriptedSession.says("I can't send emails myself. I can open your email app with it written; what's his full address?"),
         )
         assertEquals("I can't send emails myself. I can open your email app with it written; what's his full address?", shown(events))
+        // It streamed provisionally and was retracted before anything of it stood, so it was never read aloud.
+        assertTrue(LoopEvent.Retract in events)
+        assertFalse(stoodBeforeRetract(events))
         assertEquals(listOf("envelope", ToolLoop.UNBACKED_CLAIM), session.sentEnvelopes)
         // The live conversation holds the reply nobody saw.
         assertTrue((events.last() as LoopEvent.Done).staleConversation)
@@ -887,7 +956,9 @@ class ToolRoutingTest {
         val events = runBlocking {
             photoLoop.run(session, "envelope", emptyList(), context.copy(userText = "Could you show all the photos of wedding"), canRebuild = true).toList()
         }
-        assertEquals(listOf<LoopEvent>(LoopEvent.Rebuild), events)
+        assertEquals(LoopEvent.Rebuild, events.last())
+        assertEquals("", shown(events))
+        assertFalse(stoodBeforeRetract(events))
         assertEquals(listOf("envelope"), session.sentEnvelopes)
     }
 
@@ -898,11 +969,16 @@ class ToolRoutingTest {
             ScriptedSession.calls(ToolCall("find_photos", mapOf("query" to "beach"))),
             ScriptedSession.says("Here they are."),
         )
-        assertEquals(listOf(LoopEvent.Step("Searching your photos…")), events.filterIsInstance<LoopEvent.Step>())
+        // Announced as it runs, then the wait for the model's reply is named (no photo index here,
+        // so the search failed and nothing is claimed to be done).
+        assertEquals(listOf(LoopEvent.Step("Searching your photos…"), LoopEvent.Step("Writing the reply…")), events.filterIsInstance<LoopEvent.Step>())
         assertTrue(events.indexOfFirst { it is LoopEvent.Step } < events.indexOfFirst { it is LoopEvent.Text })
         assertEquals("Searching your memories…", ToolSteps.of(ToolCall("search_memory", emptyMap()), "what did I say about Goa"))
         assertEquals("Searching your photos and reading one…", ToolSteps.of(ToolCall("find_photos", mapOf("query" to "PAN card")), "fetch my pan number"))
         assertEquals("Working on it…", ToolSteps.of(ToolCall("something_new", emptyMap()), ""))
+        assertEquals("Reminder set · writing the reply…", ToolSteps.done(listOf(ToolCall("add_task", emptyMap())), listOf(true)))
+        assertEquals("Writing the reply…", ToolSteps.done(listOf(ToolCall("add_task", emptyMap())), listOf(false)))
+        assertEquals("All done · writing the reply…", ToolSteps.done(listOf(ToolCall("set_alarm", emptyMap()), ToolCall("add_task", emptyMap())), listOf(true, true)))
     }
 
     @Test
@@ -964,7 +1040,7 @@ class ToolRoutingTest {
 
     /** As in the power-button panel on 27 Oct 2026: a draft nobody wrote, then "Sent." */
     @Test
-    fun `a draft that isn't shown, and a bare Sent, are held back too`() {
+    fun `a draft that isn't shown, and a bare Sent, are taken back too`() {
         val (session, events) = replies(
             ScriptedSession.says("I've drafted the email for you. Would you like me to send it now?"),
             ScriptedSession.calls(call("send_message", "to" to "priya@example.com", "text" to "Good morning", "app" to "email")),
@@ -981,7 +1057,7 @@ class ToolRoutingTest {
     }
 
     @Test
-    fun `asked once, a model that still says it did it is not shown, and what is true is`() {
+    fun `asked once, a model that still says it did it is taken back, and what is true is shown`() {
         val (session, events) = replies(ScriptedSession.says("I've set an alarm for 7."), ScriptedSession.says("I've sent the email."))
         assertEquals(ToolLoop.NOT_DONE, shown(events))
         assertEquals(2, session.sentEnvelopes.size)
@@ -989,12 +1065,17 @@ class ToolRoutingTest {
     }
 
     @Test
-    fun `an ordinary reply is shown whole and once, from its first sentence on, and the conversation kept`() {
+    fun `an ordinary reply streams from its first word, stands once its first sentence claims nothing, and the conversation kept`() {
         val pieces = listOf("Here is ", "a short haiku about the rain", ". ", "Drops on the tin roof,\n", "the street ", "goes quiet.")
         val (session, events) = replies(pieces.map { GenEvent.TextDelta(it) } + GenEvent.Done(null))
         assertEquals(pieces.joinToString(""), shown(events))
-        // Held only until the first sentence was known to claim nothing.
-        assertEquals("Here is a short haiku about the rain. ", events.filterIsInstance<LoopEvent.Text>().first().delta)
+        // Shown from the first piece, provisionally, and confirmed once the first sentence was known to claim nothing.
+        assertEquals(LoopEvent.Text("Here is ", provisional = true), events.first { it is LoopEvent.Text })
+        val beforeConfirm = events.takeWhile { it != LoopEvent.Confirm }.filterIsInstance<LoopEvent.Text>()
+        assertEquals("Here is a short haiku about the rain. ", beforeConfirm.joinToString("") { it.delta })
+        assertTrue(beforeConfirm.all { it.provisional })
+        assertEquals(1, events.count { it == LoopEvent.Confirm })
+        assertFalse(LoopEvent.Retract in events)
         assertEquals(listOf("envelope"), session.sentEnvelopes)
         assertFalse((events.last() as LoopEvent.Done).staleConversation)
         // A short one that never finishes its first sentence is shown at the end.
@@ -1115,8 +1196,10 @@ class ToolRoutingTest {
 
     @Test
     fun `nothing said after a call that failed is not made into done`() {
-        val (_, events) = replies(ScriptedSession.calls(call("take_screenshot")), ScriptedSession.says(""))
-        assertEquals("", shown(events))
+        val (session, events) = replies(ScriptedSession.calls(call("take_screenshot")), ScriptedSession.says(""))
+        // Asked once more to answer from the failed result; still nothing, so a plain line, never "Done."
+        assertEquals(listOf("envelope", ToolLoop.EMPTY_REPLY), session.sentEnvelopes)
+        assertEquals(ToolLoop.NO_REPLY, shown(events))
     }
 
     // ---- Screenshots ----

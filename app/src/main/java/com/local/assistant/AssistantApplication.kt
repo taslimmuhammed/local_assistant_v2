@@ -6,7 +6,6 @@ import android.content.ComponentCallbacks2
 import android.content.Context
 import android.content.pm.ApplicationInfo
 import android.net.Uri
-import android.os.PowerManager
 import android.util.Log
 import androidx.lifecycle.ProcessLifecycleOwner
 import com.local.assistant.gallery.GalleryDatabase
@@ -125,16 +124,26 @@ class AppContainer(context: Context) {
 
     val settings = SettingsStore(context)
 
+    init {
+        // Where each turn's time went, and the model work around it (files/turn-timings.csv).
+        com.local.assistant.memory.prompt.TurnTimings.directory = context.filesDir
+    }
+
     private val appContext: Context = context.applicationContext
 
     /**
-     * The model stays loaded with the app away ("Keep the assistant ready" in Settings) only
-     * while the system runs the app as the phone's assistant: that is the only way the power
-     * button reaches it, and the system's hold on [com.local.assistant.assist.AssistantInteractionService]
-     * keeps the app up. Otherwise a model left loaded would only make the app the first one
-     * Android kills.
+     * The model stays loaded with the app away only while the system runs the app as the phone's
+     * assistant: that is the only way the power button reaches it, and the system's hold on
+     * [com.local.assistant.assist.AssistantInteractionService] keeps the app up. It costs no work,
+     * and saves the ~10 s load whenever the user is back before the phone closes the app.
+     * Otherwise a model left loaded would only make the app the first one Android kills.
+     *
+     * Nothing is loaded or prepared in the background for it, though: that was ~16 s of GPU work
+     * after each screen-off, and OxygenOS closed 4 of the 5 processes that did it before they
+     * answered anything (13 Nov 2026). A conversation is made ready when the user shows they're
+     * about to ask: the app opened on a blank chat, typing, the panel opening.
      */
-    val keepReady: Boolean get() = settings.keepAssistantReady && AssistantRole.serviceActive(appContext)
+    val keepsModel: Boolean get() = AssistantRole.serviceActive(appContext)
 
     /** Coming to the foreground warms the engines, so they are usually ready by the first send. */
     val appForeground: AppForeground = AppForeground(
@@ -142,6 +151,8 @@ class AppContainer(context: Context) {
             backgroundJobs.onForeground()
             speaker.setAway(false)
             if (settings.modelPath != null) llmService.warmUp()
+            // A new chat on screen: its conversation made ready again if it went meanwhile.
+            conversations.cameIntoSight()
             embeddingQueue.kick()
             // Started while visible, as Android requires, if the wake word or a place reminder needs it.
             KeepReadyService.update(appContext)
@@ -158,36 +169,8 @@ class AppContainer(context: Context) {
             // the natural voice once it falls quiet, memory search once its backlog is done.
             speaker.setAway(true)
             embeddingQueue.kick()
-            if (keepReady) prepareWhileAway(screenOn = power.isInteractive)
         },
     )
-
-    private val power = context.getSystemService(PowerManager::class.java)
-
-    /** The screen went off or on: with the app away, it decides when the next new chat is made ready. */
-    fun onScreen(on: Boolean) {
-        if (keepReady && !appForeground.isForeground) prepareWhileAway(screenOn = on)
-    }
-
-    /**
-     * Away for a while: have the next new chat's conversation ready, so the power button is
-     * answered at once. Its prefill re-reads ~860 MB of the model and the phone frees ~1.5 GB for
-     * it, which stutters the screen for a second or two (≈455 allocation stalls on the OnePlus,
-     * 7 Nov 2026), so it waits for the screen to go off: a minute of it, so a quick look away
-     * finds its chat still open. With the screen left on it goes after five minutes; until then
-     * the panel makes the conversation itself as it opens, while the user talks.
-     */
-    private fun prepareWhileAway(screenOn: Boolean) {
-        if (screenOn) prepareForNextAsk(AWAY_SCREEN_ON_MS) else prepareForNextAsk(AWAY_SCREEN_OFF_MS) { !power.isInteractive }
-    }
-
-    /** With the assistant kept ready and the app out of sight: a conversation for the next new chat. */
-    private fun prepareForNextAsk(delayMs: Long, alsoWanted: () -> Boolean = { true }) {
-        // Behind any other background work: the nightly job's batches each close the conversation.
-        conversations.prepareFresh(delayMs, ModelScheduler.Priority.IDLE_WARM_UP) {
-            keepReady && !appForeground.isForeground && alsoWanted()
-        }
-    }
 
     val backgroundJobs = BackgroundJobs(context)
 
@@ -384,9 +367,8 @@ class AppContainer(context: Context) {
         retriever = retriever,
         photos = PhotoRecall(galleryIndex, photoLibrary, ready = ::photoSearchReady, cacheDir = context.cacheDir),
         summarizer = summarizer,
-        // A background summary or extraction closed it: make it ready again.
-        onModelFreed = { if (keepReady && !appForeground.isForeground) prepareForNextAsk(AFTER_MODEL_WORK_MS) },
         noteIndex = { userNotes.all().map { NoteTitle(it.id, it.title, it.kind == NoteKind.LIST) } },
+        inSight = { appForeground.isForeground },
     )
 
     val embeddingQueue: EmbeddingQueue = EmbeddingQueue(
@@ -614,7 +596,7 @@ class AppContainer(context: Context) {
             }
         },
         releaseModel = {
-            if (!appForeground.isForeground && !keepReady) {
+            if (!appForeground.isForeground && !keepsModel) {
                 llmService.unload()
                 embedder.unload()
             }
@@ -832,7 +814,26 @@ class AppContainer(context: Context) {
         return kotlinx.coroutines.flow.combine(models, voices) { model, voice -> model ?: voice }
     }
 
+    /**
+     * How many times the phone closed the app in the last day, when that is often enough to tell
+     * the user (once: [SettingsStore.toldAboutPhoneKills]) and the app is the phone's assistant,
+     * which the closes hurt most. Null otherwise. Counted as each process starts, which is just
+     * after such a close.
+     */
+    val phoneKills = kotlinx.coroutines.flow.MutableStateFlow<Int?>(null)
+
+    /** The user answered the note about [phoneKills]: it doesn't come back. */
+    fun toldAboutPhoneKills() {
+        settings.toldAboutPhoneKills = true
+        phoneKills.value = null
+    }
+
     init {
+        appScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+            val kills = com.local.assistant.assist.ProcessExits.systemKillsSince(appContext, System.currentTimeMillis() - 24 * 60 * 60_000L)
+            com.local.assistant.memory.prompt.TurnTimings.event("process_start", detail = "$kills system kills in 24 h")
+            if (kills >= com.local.assistant.assist.ProcessExits.WORTH_A_NOTICE && !settings.toldAboutPhoneKills && keepsModel) phoneKills.value = kills
+        }
         fetchPhotoModelAfterFirstModel()
         com.local.assistant.model.BackgroundDownloads.watch(appContext, appScope, downloads(), resume = ::resumeDownloads, pending = ::downloadsPending)
         appScope.launch {
@@ -859,18 +860,6 @@ class AppContainer(context: Context) {
 
         /** The longest the setup screen waits for the first chat to be ready. */
         const val FIRST_CHAT_READY_MS = 90_000L
-
-        /** How long the screen is off, with the app away, before the next new chat's conversation is prepared. */
-        const val AWAY_SCREEN_OFF_MS = 60_000L
-
-        /** How long the app is away with the screen on before that happens anyway. */
-        const val AWAY_SCREEN_ON_MS = 5 * 60_000L
-
-        /**
-         * After background model work closed the conversation, before preparing it again: long
-         * enough for a chain of such jobs (the nightly extraction's batches) to finish first.
-         */
-        const val AFTER_MODEL_WORK_MS = 30_000L
 
         /** At or below this, the photo model's memory goes back as soon as the Photos screen closes. */
         const val SMALL_DEVICE_BYTES = 8L * 1024 * 1024 * 1024
@@ -901,9 +890,7 @@ class AssistantApplication : Application() {
             this,
             object : android.content.BroadcastReceiver() {
                 override fun onReceive(context: android.content.Context, intent: android.content.Intent) {
-                    val on = intent.action == android.content.Intent.ACTION_SCREEN_ON
-                    if (!on) container.sensitiveLock.lock()
-                    container.onScreen(on)
+                    if (intent.action == android.content.Intent.ACTION_SCREEN_OFF) container.sensitiveLock.lock()
                 }
             },
             android.content.IntentFilter(android.content.Intent.ACTION_SCREEN_OFF).apply { addAction(android.content.Intent.ACTION_SCREEN_ON) },
@@ -935,18 +922,18 @@ class AssistantApplication : Application() {
     /**
      * The engine holds gigabytes. While the app is in use it stays loaded; once the app is in
      * the background and the system asks for memory back, it goes — the next visit to the
-     * foreground loads it again, and anything sent meanwhile waits for it. Unless the assistant
-     * is kept ready (Settings): then it stays, since reloading costs ~9 s and re-reading the
-     * prompt ~6 s more before the power button's first answer.
+     * foreground loads it again, and anything sent meanwhile waits for it. Unless the app is the
+     * phone's assistant ([AppContainer.keepsModel]): then it stays, since reloading costs ~9 s
+     * and re-reading the prompt ~6 s more before the power button's first answer.
      */
     override fun onTrimMemory(level: Int) {
         super.onTrimMemory(level)
         val background = level >= ComponentCallbacks2.TRIM_MEMORY_BACKGROUND
         // Thumbnails are quick to read again; the model is not.
         if (background) container.photoThumbnails.clear()
-        // Kept ready, the model stays: that is the point of the setting (and the system's hold on
-        // the assistant service keeps the app out of the cached list this is mostly about).
-        val keep = container.keepReady
+        // As the assistant, the model stays (and the system's hold on the assistant service
+        // keeps the app out of the cached list this is mostly about).
+        val keep = container.keepsModel
         if (background && !keep && !container.appForeground.isForeground && !container.llmService.isGenerating) {
             container.speaker.release()
             container.appScope.launch {

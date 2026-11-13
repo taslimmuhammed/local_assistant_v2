@@ -425,7 +425,13 @@ class PromptBudgetTest {
             val slack = profile.contextTokens - profile.promptCeiling - profile.generationReserve - profile.toolRoundsReserve
             assertTrue("${profile.name}: slack $slack", slack >= profile.contextTokens * 0.05)
             assertTrue("${profile.name}: target under ceiling", profile.promptTarget <= profile.promptCeiling)
-            assertTrue("${profile.name}: compaction below target", profile.compactionTrigger < profile.promptTarget)
+            assertTrue("${profile.name}: compaction keeps less than it waits for", profile.compactionTarget < profile.compactionTrigger)
+        }
+        // Compaction counts the chat's own turns, after the preface: with the preface measured on
+        // the phone and one envelope, a chat that reaches the trigger still fits under the ceiling.
+        for (profile in listOf(MemoryBudget.SIXTEEN_K, MemoryBudget.EIGHT_K)) {
+            val atTrigger = MEASURED_PREFACE + profile.compactionTrigger + profile.envelopeCap
+            assertTrue("${profile.name}: $atTrigger at the trigger", atTrigger <= profile.promptCeiling)
         }
     }
 
@@ -452,5 +458,10 @@ class PromptBudgetTest {
         assertEquals(big.summaryCap / 2, small.summaryCap)
         assertEquals(big.agendaCap / 2, small.agendaCap)
         assertEquals(big.coreCap, small.coreCap)
+    }
+
+    private companion object {
+        /** Instructions, 20 tool declarations, profile and agenda, as the runtime counted them on the phone (13 Nov 2026). */
+        const val MEASURED_PREFACE = 3_562
     }
 }

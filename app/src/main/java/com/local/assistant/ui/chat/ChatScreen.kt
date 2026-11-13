@@ -125,6 +125,7 @@ import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import com.local.assistant.ui.theme.Glass
 import com.local.assistant.ui.theme.GlassIconButton
+import com.local.assistant.ui.theme.GlassCard
 import com.local.assistant.ui.theme.GlassNotice
 import com.local.assistant.ui.theme.GlassSnackbarHost
 import com.local.assistant.ui.theme.fadingEdges
@@ -165,6 +166,7 @@ fun ChatScreen(
     val messages by viewModel.messages.collectAsStateWithLifecycle()
     val streamingText by viewModel.streamingText.collectAsStateWithLifecycle()
     val streamingStep by viewModel.streamingStep.collectAsStateWithLifecycle()
+    val pendingQuestion by viewModel.pendingQuestion.collectAsStateWithLifecycle()
     val isGenerating by viewModel.isGenerating.collectAsStateWithLifecycle()
     val engineState by viewModel.engineState.collectAsStateWithLifecycle()
     val error by viewModel.error.collectAsStateWithLifecycle()
@@ -181,6 +183,10 @@ fun ChatScreen(
     val offerExactAlarms by viewModel.offerExactAlarms.collectAsStateWithLifecycle()
     val busyElsewhere by viewModel.busyElsewhere.collectAsStateWithLifecycle()
     val lifecycle = LocalLifecycleOwner.current.lifecycle
+    // Back in view (from the panel, Settings, another app): what it shows is made ready again.
+    LaunchedEffect(lifecycle) {
+        lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) { viewModel.onScreenShown() }
+    }
     val placeReminders = reminders?.let { memory ->
         val tasks by memory.tasks.collectAsStateWithLifecycle()
         remember(tasks) { tasks.filter { it.place != null }.associateBy { it.id } }
@@ -238,10 +244,47 @@ fun ChatScreen(
         onDispose { viewModel.stopReadingAloud() }
     }
 
-    // Keep the newest content in view while tokens stream in.
-    LaunchedEffect(messages.size, streamingText) {
-        val lastIndex = messages.size + if (streamingText != null) 1 else 0
+    // Keep the newest content in view while tokens stream in, unless the user has scrolled away
+    // from the end to read something: then the reply stops pulling the list down, until they
+    // scroll back to the end. A new message (theirs, or a reply stored) always shows.
+    var followReply by remember { mutableStateOf(true) }
+    LaunchedEffect(listState) {
+        var dragged = false
+        launch {
+            listState.interactionSource.interactions.collect {
+                if (it is androidx.compose.foundation.interaction.DragInteraction.Start) {
+                    dragged = true
+                    followReply = false
+                }
+            }
+        }
+        androidx.compose.runtime.snapshotFlow { listState.isScrollInProgress }.collect { scrolling ->
+            if (!scrolling && dragged) {
+                dragged = false
+                followReply = !listState.canScrollForward
+            }
+        }
+    }
+    LaunchedEffect(messages.size, pendingQuestion != null) {
+        followReply = true
+        val lastIndex = messages.size + (if (pendingQuestion != null) 1 else 0) + if (streamingText != null) 1 else 0
         if (lastIndex > 0) listState.animateScrollToItem(lastIndex)
+    }
+    // A light tick when a message goes and when its reply starts: felt, so the wait between is
+    // known to be the assistant working, without watching the screen.
+    val haptics = androidx.compose.ui.platform.LocalHapticFeedback.current
+    val sendWithTick: (String) -> Unit = { text ->
+        haptics.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.TextHandleMove)
+        viewModel.send(text)
+    }
+    val replyStarted = !streamingText.isNullOrEmpty()
+    LaunchedEffect(replyStarted) {
+        if (replyStarted) haptics.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.TextHandleMove)
+    }
+    LaunchedEffect(streamingText) {
+        if (!followReply || streamingText == null) return@LaunchedEffect
+        val lastIndex = messages.size + (if (pendingQuestion != null) 1 else 0) + 1
+        listState.animateScrollToItem(lastIndex)
     }
 
     LaunchedEffect(error) {
@@ -364,12 +407,30 @@ fun ChatScreen(
                     .padding(padding)
                     .imePadding(),
             ) {
-                EngineBanner(engineState, onRetry = viewModel::retryLoad)
+                // On a blank chat the starter panel says it in its hint line instead, so the tiles stay put.
+                val blankChat = messages.isEmpty() && streamingText == null
+                // A message waiting on the model says so in its own line ("Loading the model ·
+                // about 6 s left"); the pill above it said "Getting ready…" too.
+                val waitSaysIt = streamingText != null && (engineState is LlmService.State.Loading || engineState == LlmService.State.Idle)
+                if ((!blankChat && !waitSaysIt) || engineState is LlmService.State.Failed || engineState == LlmService.State.NoModel) {
+                    EngineBanner(engineState, onRetry = viewModel::retryLoad)
+                }
                 val tidying by viewModel.tidying.collectAsStateWithLifecycle()
                 val memoryPaused by viewModel.memoryPaused.collectAsStateWithLifecycle()
                 if (tidying) QuietBanner("Tidying up…")
                 if (memoryPaused) QuietBanner("Memory is paused: nothing new is remembered")
                 if (busyElsewhere) QuietBanner("Finishing an answer from the assistant…")
+                val phoneKills by viewModel.phoneKills.collectAsStateWithLifecycle()
+                phoneKills?.let { kills ->
+                    PhoneKillsNotice(
+                        kills,
+                        onOpen = {
+                            viewModel.phoneKillsAnswered()
+                            context.startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.fromParts("package", context.packageName, null)))
+                        },
+                        onDismiss = viewModel::phoneKillsAnswered,
+                    )
+                }
 
                 // While the model loads, a message can still be sent: it waits for the engine.
                 // Not while the overlay's reply is running, though: one turn at a time.
@@ -388,7 +449,11 @@ fun ChatScreen(
                             photos = canFindPhotos,
                             health = canReadHealth,
                             enabled = canSend && !isGenerating,
-                            onPick = viewModel::send,
+                            onPick = sendWithTick,
+                            status = when (engineState) {
+                                is LlmService.State.Loading, LlmService.State.Idle -> "Getting ready…"
+                                else -> null
+                            },
                             modifier = Modifier.fillMaxSize(),
                         )
                     } else {
@@ -426,13 +491,19 @@ fun ChatScreen(
                                     )
                                 }
                             }
+                            // What was just sent, before the stored copy is back from the database.
+                            pendingQuestion?.let { asked ->
+                                item(key = PENDING_QUESTION_KEY) {
+                                    UserMessage(MessageEntity(chatId = activeChatId ?: 0L, role = Role.USER, text = asked, createdAt = 0L))
+                                }
+                            }
                             streamingText?.let { partial ->
                                 item(key = STREAMING_ITEM_KEY) {
                                     if (partial.isEmpty()) {
                                         // A message sent while the model is still starting waits
                                         // for it: say so, so the wait doesn't look like a hang. Then
                                         // what is being done: "Checking your memories…", a tool.
-                                        ThinkingIndicator(label = if (engineState !is LlmService.State.Ready) "Loading model…" else streamingStep)
+                                        ThinkingIndicator(label = streamingStep, loading = engineState as? LlmService.State.Loading)
                                     } else {
                                         AssistantMessage(partial, streaming = true)
                                         // A tool partway through the reply.
@@ -470,7 +541,7 @@ fun ChatScreen(
                     supportsAudio = supportsAudio,
                     pendingAttachment = pendingAttachment,
                     recording = recording,
-                    onSend = viewModel::send,
+                    onSend = sendWithTick,
                     onTyping = viewModel::onTyping,
                     onStop = viewModel::stop,
                     onPickImage = {
@@ -531,6 +602,26 @@ private fun ChatTopBar(
             actionIconContentColor = AppColors.TextPrimary,
         ),
     )
+}
+
+/**
+ * The phone keeps closing the app ([com.local.assistant.assist.ProcessExits]), so answers often
+ * start from cold. Said once, with the way to the page where the user can let it run.
+ */
+@Composable
+private fun PhoneKillsNotice(kills: Int, onOpen: () -> Unit, onDismiss: () -> Unit) {
+    GlassCard(Modifier.padding(horizontal = 16.dp, vertical = 4.dp), padding = 14.dp) {
+        Text(
+            "Your phone closed Local Assistant $kills times since yesterday, so answers often wait about 15 seconds while the model loads again. " +
+                "Letting it run in the background (App info, then Battery) may stop this.",
+            style = MaterialTheme.typography.bodyMedium,
+            color = AppColors.TextPrimary,
+        )
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+            TextButton(onClick = onDismiss) { Text("Not now") }
+            TextButton(onClick = onOpen) { Text("Open App info") }
+        }
+    }
 }
 
 @Composable
@@ -941,6 +1032,7 @@ private fun PendingAttachmentChip(
 }
 
 private const val STREAMING_ITEM_KEY = "streaming"
+private const val PENDING_QUESTION_KEY = "pending-question"
 private const val TRIMMED_NOTICE_KEY = "trimmed-notice"
 
 /** How much of the screen the chat history drawer takes. */

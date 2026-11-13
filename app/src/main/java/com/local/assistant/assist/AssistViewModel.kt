@@ -194,14 +194,18 @@ class AssistViewModel(
         // whole system prompt first (3.4 s on the phone, 6 s just after the model loads). Do it
         // now, while the user is still talking; the first message then takes it over. Not on the
         // lock screen, whose conversation is built without the user's memory.
-        if (!onLockScreen()) conversations.prepareFresh()
+        if (!onLockScreen()) {
+            conversations.prepareFresh()
+            // What is in front now, so a chat the app showed isn't made ready behind the panel.
+            conversations.showing(null, engineReady = false)
+        }
         // The natural voice takes about a second to load: likewise while the user talks.
         if (!_muted.value) speaker.prepare()
 
         // Speak each sentence as soon as it is complete.
         viewModelScope.launch {
             sender.live.collect { live ->
-                if (live?.owner === this@AssistViewModel) chunker?.push(live.text)?.forEach(::say)
+                if (live?.owner === this@AssistViewModel) chunker?.push(live.sayable)?.forEach(::say)
             }
         }
 
@@ -406,6 +410,8 @@ class AssistViewModel(
     private val listener = object : ChatSender.Listener {
         override fun onChatCreated(chatId: Long) {
             if (!closed) _chatId.value = chatId
+            // Its follow-ups go on in this chat's conversation (not on the lock screen, whose is built without memory).
+            if (!closed && !onLockScreen()) conversations.showing(chatId, engineReady = true)
         }
 
         override fun onUserMessageStored(messageId: Long) {
