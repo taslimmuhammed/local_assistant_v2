@@ -127,10 +127,10 @@ class DocumentChatEvalTest {
         File(context.getExternalFilesDir(null), "document-chat-eval.txt").appendText("$line\n")
     }
 
-    private companion object {
-        const val TAG = "DocumentChatEval"
+    companion object {
+        private const val TAG = "DocumentChatEval"
 
-        val BILL = listOf(
+        private val BILL = listOf(
             "Sample Power Company",
             "Electricity bill - October 2026",
             "Consumer number: 4471 2290 18",

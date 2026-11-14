@@ -266,6 +266,29 @@ class RoutingEvalTest {
         val with = count(true)
         report("prefix.tokens.instructions", without)
         report("prefix.tokens.toolDeclarations", with - without)
+        // "-e costs true": what each tool adds, its declaration and its rule, each left out in turn.
+        if (InstrumentationRegistry.getArguments().getString("costs") == "true") {
+            val all = declared()
+            for (json in all) {
+                val name = com.google.gson.JsonParser.parseString(json).asJsonObject.get("name").asString
+                val rest = engine.createConversation(
+                    ConversationConfig(
+                        systemInstruction = Contents.of(system),
+                        tools = (all - json).map(::toolOf),
+                        automaticToolCalling = false,
+                        prefillPrefaceOnInit = true,
+                    ),
+                ).use { it.getTokenCount() }
+                report("prefix.tokens.tool.$name", with - rest)
+            }
+            if (everyTool) {
+                val bare = Instructions.render(PERSONA, withTools = true, webSearch = true, photoSearch = true, healthData = true)
+                fun rules(system: String) = engine.createConversation(
+                    ConversationConfig(systemInstruction = Contents.of(system), automaticToolCalling = false, prefillPrefaceOnInit = true),
+                ).use { it.getTokenCount() }
+                report("prefix.tokens.rules.filesAndInbox", rules(system) - rules(bare))
+            }
+        }
     }
 
     private fun evaluate(engine: Engine, temperature: Double) {
@@ -374,12 +397,12 @@ class RoutingEvalTest {
     private fun voiceDir(): File? = InstrumentationRegistry.getArguments().getString("voice")
         ?.let { File(context.getExternalFilesDir(null), it) }
 
-    private fun declarations() = declared().map { json ->
-        tool(object : OpenApiTool {
-            override fun getToolDescriptionJsonString() = json
-            override fun execute(paramsJsonString: String): String = error("manual")
-        })
-    }
+    private fun declarations() = declared().map(::toolOf)
+
+    private fun toolOf(json: String) = tool(object : OpenApiTool {
+        override fun getToolDescriptionJsonString() = json
+        override fun execute(paramsJsonString: String): String = error("manual")
+    })
 
     private fun report(key: String, value: Any) {
         Log.i(TAG, "$key = $value")

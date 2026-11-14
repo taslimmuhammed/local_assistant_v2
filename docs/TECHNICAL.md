@@ -442,6 +442,8 @@ messaging app opens ready, and the user presses the button.
 | `calculate` | Exact arithmetic and unit conversions | **expression** | the app |
 | `web_lookup` | News, weather, prices, scores — anything current (only with a Tavily key) | **query**, topic | Tavily |
 | `find_photos` | The user's own photos and documents: of something or someone, from a place or a time; shown under the reply, never sent to the model | query, person, place, when (one at least) | the photo index |
+| `read_file` | Files and folders by name or kind, shown under the reply; with a question, the best match read and answered on its own (only with All files access) | name, type, when, question | MediaStore + `files/` |
+| `check_inbox` | Messages that came to the phone, as six short lines of who, app, when and what (only while messages are kept) | from, query, app, when | `inbox.db` |
 
 ### Tools and reminders
 
@@ -691,6 +693,11 @@ cascading on delete; a message carries an `incomplete` flag so a stopped reply i
 as what it is. Memory lives alongside: `sessions` (one foreground period within a chat), `facts`
 with an FTS4 keyword index, `forgotten` tombstones, `tasks`, `events`, and `chunks` (with their
 own FTS4 index) for the archive. Nothing in it is included in backup or device-to-device transfer.
+
+Two more files hold what isn't the user's own words, so a migration there can't put chats or
+memory at risk and each can be wiped whole: `away.db` (the brief's notifications, two days) and
+`inbox.db` (`inbox/InboxDatabase`: messages kept for `check_inbox`, with an FTS4 index on title,
+sender and text; kept as long as chats, `historyRetentionDays`). `gallery.db` is the photo index.
 
 ## Images and voice
 
@@ -1002,6 +1009,53 @@ it. The WAV is still what the chat plays back.
   with photos fully shared Android grants both with no dialog (videos share the photos'
   permission group). Android grants "selected photos only" alongside full access too, so it counts
   for videos only when photos themselves are partly shared. Photos are read, never changed, moved or sent anywhere.
+
+## Files and documents
+
+Files are found by **name only**; nothing is indexed (the user, 2026-11-13: "just index the file
+names, no need to index the doc"). `files/FileFinder` asks MediaStore for names like the words
+asked, plus a short walk of the folders documents arrive in that MediaStore misses (WhatsApp's:
+6 of 74 PDFs on the user's phone), ranked by `files/FileNames` (word starts, one-letter slips in
+long words, recency). Needs All files access, asked on the first-launch page.
+
+A document is read only when asked about (`read_file` with a question, or attached in the chat).
+`files/DocumentText` takes the text from Android's PDF renderer (API 35+, or the SDK extension
+before it) or a small scanner for Word, Excel, PowerPoint and OpenDocument zips; a PDF of page
+pictures is drawn and read by the vision model. `files/DocumentReader` answers in its own short
+conversations after closing the chat's (`ModelAccess.withModelFree`): one pass up to ~5,500
+tokens, the best-matching ~1,200-token parts for a question on a longer one, or a note per ~5,000-token part
+and a combined summary (at most 8 parts, saying how much was read). Its answer is the reply and
+ends the turn, as `find_photos`' photo reading does.
+
+**Attached documents** (`AttachmentKind.DOCUMENT`) never reach the model as files. A question
+about one, a summary or nothing said goes to the reader alone (`ToolLoop.readAttached`); a
+request to act on it ("remind me to pay this bill") gets the reader's notes on it into the
+message, and the chat model acts with its tools. Both are stored as `read_file` calls, so a later
+question in the chat finds the attached copy by name, without All files access.
+
+"What's my PAN / Aadhaar / licence / passport number?" reads documents named after that card
+first (`FileTools.idNumber`), taking a number only with its shape and check digit
+(`PhotoReader.Field.valueIn`), and names files locked with a password.
+
+`DocumentChatEvalTest` (`-e eval documentchat`) and `DocumentReadingEvalTest` (`-e eval documents`)
+run made-up documents through the app's sender and the reader.
+
+## Messages
+
+With Settings › Messages › Keep messages for search on (off by default), `away/MessageListener`
+keeps the message lines of chat, SMS and email notifications in `inbox.db` (`inbox/Inbox`), and
+while the app is the default assistant with READ_SMS, `inbox/SmsSync` reads the SMS inbox from an
+`_id` watermark (on foreground, through a ContentObserver, and nightly). The SMS app's own
+notifications are skipped then, so nothing is kept twice. `NotificationLines.clean` drops
+one-time codes and masks ID numbers, as for the brief; `inbox/PromoFilter` leaves out ads (TRAI
+`-P` senders, promotion channels, or two or more ad signs with no transaction word). The nightly
+job deletes messages older than chats are kept, before anything that can end it early.
+
+`check_inbox(from, query, app, when)` searches the words with FTS (falling back to that person's
+or app's latest, and saying so) and returns at most six lines of at most 240 characters, marked
+as other people's words. It is a utility tool (`ChunkPolicy.UTILITY_TOOLS`), so nothing in it
+becomes a fact about the user, and it doesn't run on the lock screen. `InboxChatEvalTest`
+(`-e eval inboxchat`) asks about two made-up messages through the app and deletes them after.
 
 ## Hidden details
 
