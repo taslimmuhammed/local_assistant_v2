@@ -86,6 +86,8 @@ class ToolExecutor(
     private val notes: NoteStore = NoNotes,
     /** read_file: files on the phone by name, read when asked about; null without All files access wired. */
     private val files: com.local.assistant.files.FileTools? = null,
+    /** check_inbox: messages that came to the phone; null when not wired in. */
+    private val inbox: com.local.assistant.inbox.InboxTools? = null,
 ) {
 
     data class Outcome(
@@ -260,6 +262,11 @@ class ToolExecutor(
             val question = com.local.assistant.files.FileTools.questionIn(userText) ?: args.text("question")
             val done = files.read(args.text("name"), args.text("type"), args.text("when"), question, context.onStep, context.chatId)
             return Applied(done.result, done.chip, reply = done.reply)
+        }
+        if (call.name == ToolCatalog.CHECK_INBOX) {
+            val done = (inbox ?: throw ToolError("Messages aren't kept in this app."))
+                .check(args.text("query"), args.text("from"), args.text("app"), args.text("when"))
+            return Applied(done.result, done.chip)
         }
         val tools = device ?: throw ToolError("That isn't available in this app.")
         val done = when (call.name) {

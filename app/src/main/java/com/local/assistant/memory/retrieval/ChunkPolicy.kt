@@ -51,7 +51,7 @@ object ChunkPolicy {
      * edit_note too: the note itself is recalled as it is now, while "added eggs" from last week
      * would be recalled beside it after the eggs were bought and removed.
      */
-    val UTILITY_TOOLS = setOf("calculate", "set_timer", "open_app", "phone_setting", "find_photos", "health_data", "edit_note", "read_file")
+    val UTILITY_TOOLS = setOf("calculate", "set_timer", "open_app", "phone_setting", "find_photos", "health_data", "edit_note", "read_file", "check_inbox")
 
     /**
      * Whether an exchange is left out of the archive: all it did was work something out or work

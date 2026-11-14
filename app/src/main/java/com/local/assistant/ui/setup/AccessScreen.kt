@@ -212,7 +212,7 @@ fun AccessScreen(container: AppContainer, onDone: () -> Unit) {
             ) {
                 val anything = photos != PhotoLibrary.Access.NONE || files || notifications
                 val finish = {
-                    settings.keepMessages = keepMessages && MessageListener.allowed(context)
+                    settings.keepMessages = keepMessages && (MessageListener.allowed(context) || (isAssistant && smsGranted(context)))
                     settings.accessAsked = true
                     // Tools for files and messages come and go with these.
                     container.conversations.prefixMayHaveChanged()

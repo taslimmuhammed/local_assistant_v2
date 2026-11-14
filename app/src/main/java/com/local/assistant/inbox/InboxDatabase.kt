@@ -58,6 +58,9 @@ data class InboxMessageFts(
     val text: String,
 )
 
+/** An app messages were kept from, and how many ([InboxDao.apps]). */
+data class KeptApp(val packageName: String, val appLabel: String, val kept: Int)
+
 @Dao
 interface InboxDao {
 
@@ -93,6 +96,10 @@ interface InboxDao {
     /** What one app's notifications kept since [since]: to leave out SMS that came that way too. */
     @Query("SELECT * FROM messages WHERE source = 'NOTIFICATION' AND packageName = :packageName AND at >= :since")
     suspend fun fromApp(packageName: String, since: Long): List<InboxMessage>
+
+    /** Each app something was kept from, with how many, for Settings › Messages. */
+    @Query("SELECT packageName, MAX(appLabel) AS appLabel, COUNT(*) AS kept FROM messages GROUP BY packageName")
+    suspend fun apps(): List<KeptApp>
 
     @Query("SELECT COUNT(*) FROM messages")
     suspend fun count(): Int

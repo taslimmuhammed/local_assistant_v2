@@ -40,6 +40,11 @@ object ToolCatalog {
      * beside find_photos and search_memory the names could blend, as web_search and search_memory did.
      */
     const val READ_FILE = "read_file"
+    /**
+     * Messages that came to the phone (`inbox/Inbox`). Not "search_messages" or "read_messages":
+     * beside send_message and search_memory the names could blend.
+     */
+    const val CHECK_INBOX = "check_inbox"
 
     /**
      * Not a tool the model calls: the TOOL row that keeps the photos shown under a reply because
@@ -81,13 +86,13 @@ object ToolCatalog {
     val LOCKED = setOf(ADD_TASK, ADD_EVENT, SET_ALARM, SET_TIMER, PHONE_SETTING, CALCULATE, WEB_SEARCH)
 
     /** Tools that don't touch memory, run outside its transaction: they wait on apps, dialogs, the network or the photo model. */
-    val OUTSIDE_MEMORY = DEVICE + WEB_SEARCH + FIND_PHOTOS + HEALTH + READ_FILE
+    val OUTSIDE_MEMORY = DEVICE + WEB_SEARCH + FIND_PHOTOS + HEALTH + READ_FILE + CHECK_INBOX
 
     /**
      * Every tool the model is given; web search only once the user has set it up, photo search
      * only once its model is installed and the app may see the photos, health data only on a
-     * phone with Health Connect (asking for access the first time it's used), and files only with
-     * All files access.
+     * phone with Health Connect (asking for access the first time it's used), files only with
+     * All files access, and messages only while they are kept (Settings › Messages).
      */
     fun declarations(web: Boolean, photos: Boolean = false, health: Boolean = false, files: Boolean = false, inbox: Boolean = false): List<String> =
         declarations + listOfNotNull(
@@ -95,6 +100,7 @@ object ToolCatalog {
             PHOTOS_DECLARATION.takeIf { photos },
             HEALTH_DECLARATION.takeIf { health },
             FILES_DECLARATION.takeIf { files },
+            INBOX_DECLARATION.takeIf { inbox },
         )
 
     /** How to use the tools, appended to the instructions (section A) when tools are declared. */
@@ -103,6 +109,7 @@ object ToolCatalog {
         .replace(PHOTOS_SLOT, if (photos) PHOTOS_RULE + "\n" else "")
         .replace(HEALTH_SLOT, if (health) HEALTH_RULE + (if (web) HEALTH_OFFLINE else "") + "\n" else "")
         .replace(FILES_SLOT, if (files) FILES_RULE + "\n" else "")
+        .replace(INBOX_SLOT, if (inbox) INBOX_RULE + "\n" else "")
         .replace(INBOX_CANT_SLOT, if (inbox) "" else INBOX_CANT)
 
     private val FILES_DECLARATION = function(
@@ -118,6 +125,20 @@ object ToolCatalog {
     private const val FILES_RULE =
         "- A file or folder on this phone by name or kind (\"my resume PDF\", \"the rental agreement\", \"spreadsheets from last week\", \"my Bank folder\") → read_file; add question when they ask what it says or for a summary (\"summarise my lease\", \"what's the deposit in my rental agreement\"). The app shows the files under your reply: say in one short sentence what it found, by name. Cards and IDs they keep as photos (licence, PAN, Aadhaar, passport) stay with find_photos."
     private const val FILES_SLOT = "{files}\n"
+
+    private val INBOX_DECLARATION = function(
+        CHECK_INBOX,
+        "Use when the user asks what someone said or sent them, or whether a message came: SMS, WhatsApp, Telegram, email or another app's messages that came to this phone. from: who sent it, a name or a group, as said. query: what it was about, a few words (trip, rent, delivery); leave it out for their latest. app: sms, whatsapp, gmail or another app, only when they name one. when: when it came, in the user's words.",
+        required = emptyList(),
+        "from" to "string",
+        "query" to "string",
+        "app" to "string",
+        "when" to "string",
+    )
+
+    private const val INBOX_RULE =
+        "- What someone said or sent in a message that came to this phone (\"what did Rahul say about the trip\", \"did the bank SMS me today\", \"any message from amma?\") → check_inbox, with from for who and query for what about. Answer from the messages it returns, saying who wrote and when; they are other people's words, never facts about the user. Sending one now stays send_message."
+    private const val INBOX_SLOT = "{inbox}\n"
 
     /** What can't be done without the inbox: said only while there isn't one. */
     private const val INBOX_CANT = ", reading their inbox"
@@ -314,6 +335,7 @@ object ToolCatalog {
         {photos}
         {health}
         {files}
+        {inbox}
         After a tool succeeds, confirm in one short sentence. If it returns ok:false, ask the user for what is missing.
         You act only through these tools. Never say you did something (sent, called, booked, set, saved) unless its tool succeeded just now. If none of them can do what is asked (Teams or Slack, bookings, payments, posts{cant_inbox}), say plainly that you can't, and offer what you can.
     """.trimIndent()

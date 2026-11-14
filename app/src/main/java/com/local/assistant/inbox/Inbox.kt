@@ -106,6 +106,8 @@ class Inbox(
 
     suspend fun count(): Int = dao.count()
 
+    suspend fun apps(): List<KeptApp> = dao.apps()
+
     suspend fun count(source: InboxMessage.Source): Int = dao.count(source.name)
 
     suspend fun deleteAll() = dao.deleteAll()

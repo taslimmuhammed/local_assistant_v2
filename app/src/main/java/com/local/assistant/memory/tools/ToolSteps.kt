@@ -35,6 +35,7 @@ object ToolSteps {
             call.arguments["question"] != null || com.local.assistant.files.FileTools.questionIn(userText) != null -> "Finding the file to read…"
             else -> "Searching your files…"
         }
+        ToolCatalog.CHECK_INBOX -> "Checking your messages…"
         ToolCatalog.SEARCH_MEMORY -> "Searching your memories…"
         ToolCatalog.WEB_SEARCH -> "Searching the web…"
         ToolCatalog.GET_UPCOMING -> "Checking what's coming up…"
@@ -92,6 +93,7 @@ object ToolSteps {
             ToolCatalog.WEB_SEARCH -> "Web searched"
             ToolCatalog.FIND_PHOTOS -> "Photos searched"
             ToolCatalog.READ_FILE -> "Files searched"
+            ToolCatalog.CHECK_INBOX -> "Messages checked"
             ToolCatalog.HEALTH -> "Health data read"
             else -> return WRITING_REPLY
         }
