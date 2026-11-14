@@ -1,7 +1,10 @@
 package com.local.assistant.files
 
+import android.graphics.Bitmap
+import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
+import android.graphics.Rect
 import android.graphics.pdf.PdfDocument
 import android.os.SystemClock
 import android.util.Log
@@ -20,8 +23,9 @@ import java.util.zip.ZipOutputStream
 
 /**
  * The document reader on made-up documents of each kind, with known answers: a PDF with text, a
- * PDF of page pictures (read by the vision model), a Word file, a long Word file whose answer is
- * in one paragraph of many, and a spreadsheet; a summary too. Times each read.
+ * PDF of page pictures (read by the vision model), a PDF written by an app with only some of its
+ * text in its text layer, a Word file, a long Word file whose answer is in one paragraph of many,
+ * and a spreadsheet; a summary too. Times each read.
  *
  *     adb shell am instrument -w -e eval documents -e class com.local.assistant.files.DocumentReadingEvalTest \
  *         com.taslim.localassistant.dev.test/androidx.test.runner.AndroidJUnitRunner
@@ -50,6 +54,7 @@ class DocumentReadingEvalTest {
         Case("LA_test_long_lease.docx", { docx(longLease()) }, "what's the notice period to vacate?", listOf("two months")),
         Case("LA_test_expenses.xlsx", { xlsx() }, "how much did I spend on groceries in October?", listOf("4250")),
         Case("LA_test_receipt_scan.pdf", { picturePdf() }, "what's the total on this receipt?", listOf("935")),
+        Case("LA_test_receipt_app.pdf", { appPdf() }, "what's the total on this receipt?", listOf("935")),
     )
 
     @Test
@@ -126,14 +131,33 @@ class DocumentReadingEvalTest {
         return out.toByteArray()
     }
 
-    /** A receipt drawn as a picture, with no text layer: what a scan is. */
+    /** A receipt as a picture of the page, with no text layer: what a scan is. */
     private fun picturePdf(): ByteArray {
+        val bitmap = Bitmap.createBitmap(595 * 2, 842 * 2, Bitmap.Config.ARGB_8888)
+        try {
+            Canvas(bitmap).apply { scale(2f, 2f) }.drawReceipt()
+            return onePage { canvas -> canvas.drawBitmap(bitmap, null, Rect(0, 0, 595, 842), null) }
+        } finally {
+            bitmap.recycle()
+        }
+    }
+
+    /**
+     * The receipt written as text by Android's own PDF writer, as an app's export is: its text
+     * layer comes out with only some of the words (two of six lines on the phone, no total).
+     */
+    private fun appPdf(): ByteArray = onePage { canvas -> canvas.drawReceipt() }
+
+    private fun Canvas.drawReceipt() {
+        val paint = Paint().apply { color = Color.BLACK; textSize = 26f; isAntiAlias = true }
+        drawColor(Color.WHITE)
+        RECEIPT.forEachIndexed { i, line -> drawText(line, 60f, 120f + i * 48f, paint) }
+    }
+
+    private fun onePage(draw: (Canvas) -> Unit): ByteArray {
         val document = PdfDocument()
         val page = document.startPage(PdfDocument.PageInfo.Builder(595, 842, 1).create())
-        val paint = Paint().apply { color = Color.BLACK; textSize = 26f; isAntiAlias = true }
-        page.canvas.drawColor(Color.WHITE)
-        listOf("Green Leaf Cafe", "Receipt 2041", "2 x Masala dosa   Rs 240", "3 x Filter coffee   Rs 135", "1 x Thali   Rs 560", "TOTAL   Rs 935")
-            .forEachIndexed { i, line -> page.canvas.drawText(line, 60f, 120f + i * 48f, paint) }
+        draw(page.canvas)
         document.finishPage(page)
         val out = ByteArrayOutputStream()
         document.writeTo(out)
@@ -148,6 +172,8 @@ class DocumentReadingEvalTest {
 
     private companion object {
         const val TAG = "DocumentReadingEval"
+
+        val RECEIPT = listOf("Green Leaf Cafe", "Receipt 2041", "2 x Masala dosa   Rs 240", "3 x Filter coffee   Rs 135", "1 x Thali   Rs 560", "TOTAL   Rs 935")
 
         val RENTAL = listOf(
             "Rental Agreement",

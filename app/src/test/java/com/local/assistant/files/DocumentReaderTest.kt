@@ -20,10 +20,10 @@ class DocumentReaderTest {
     private val estimator = HeuristicTokenEstimator
 
     /** Answers every one-shot completion with [reply], keeping what it was asked. */
-    private class FakeBackend(private val reply: (String) -> String) : LlmBackend {
+    private class FakeBackend(private val vision: Int = 256, private val reply: (String) -> String) : LlmBackend {
         val inputs = ArrayList<String>()
         var freed = 0
-        override val capabilities = BackendCapabilities(tools = true, constrainedJson = false, thinking = false, speculativeDecoding = false, maxContextTokens = 8192, visionTokensPerImage = 256)
+        override val capabilities = BackendCapabilities(tools = true, constrainedJson = false, thinking = false, speculativeDecoding = false, maxContextTokens = 8192, visionTokensPerImage = vision)
         override suspend fun ensureReady() = true
         override suspend fun openChat(spec: ChatSpec): ChatSession = error("not in these tests")
         override suspend fun complete(system: String, input: String, jsonSchema: String?, maxTokens: Int, sampling: Sampling): String {
@@ -146,5 +146,28 @@ class DocumentReaderTest {
     fun `nothing said is not an answer`() = runBlocking {
         val reply = reader(FakeBackend { "  " }).answer("a.txt", Read.Text("Some text here that is long enough to read."), "what is it?")
         assertEquals(DocumentReader.COULDNT_READ_NOW, reply)
+    }
+
+    @Test
+    fun `pages to look at are read from their text when the model can't see`() = runBlocking {
+        val backend = FakeBackend(vision = 0) { "The total is Rs 935." }
+        val read = Read.Scanned(emptyList(), pageCount = 1, text = Read.Text("[Page 1]\nTOTAL Rs 935", parts = 1, unit = "page"))
+        assertEquals("The total is Rs 935.", reader(backend).answer("receipt.pdf", read, "what's the total?"))
+        assertTrue("TOTAL Rs 935" in backend.inputs.single())
+    }
+
+    @Test
+    fun `pages with no text and no sight say so`() = runBlocking {
+        val backend = FakeBackend(vision = 0) { "x" }
+        val reply = reader(backend).answer("scan.pdf", Read.Scanned(emptyList(), pageCount = 1), "what's the total?")
+        assertTrue(reply.startsWith("scan.pdf is pictures of pages"))
+        assertTrue(backend.inputs.isEmpty())
+    }
+
+    @Test
+    fun `the answer's language is named`() {
+        assertTrue("in English." in Plan.questionAsk("how much did I spend on groceries in October?"))
+        assertTrue("in Hindi." in Plan.questionAsk("किराया कितना है?"))
+        assertTrue("in the language of the question." in Plan.questionAsk("???"))
     }
 }

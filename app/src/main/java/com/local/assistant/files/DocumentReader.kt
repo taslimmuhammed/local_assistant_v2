@@ -1,6 +1,7 @@
 package com.local.assistant.files
 
 import android.util.Log
+import com.local.assistant.away.BriefTriage
 import com.local.assistant.data.db.AttachmentKind
 import com.local.assistant.files.DocumentText.Read
 import com.local.assistant.llm.ChatSpec
@@ -24,7 +25,7 @@ import kotlin.math.ln
  * A document that fits is read in one go. For a question about a longer one, the parts with the
  * question's words in them are read. A summary of a longer one is made part by part (at most
  * [MAX_SUMMARY_PARTS] parts), then put together; the reply says how much was read. A PDF of page
- * pictures has its first pages looked at by the vision model.
+ * pictures has its first pages looked at by the vision model, as does a short one with little text.
  *
  * The chat's live conversation is closed for this ([ModelAccess.withModelFree]): never two at once.
  */
@@ -40,8 +41,25 @@ class DocumentReader(
      */
     suspend fun answer(name: String, read: Read, question: String?, onStep: (String) -> Unit = {}): String = when (read) {
         is Read.Unreadable -> couldNotRead(name, read.why)
-        is Read.Scanned -> model.withModelFree { guarded(name) { scanned(name, read, question, onStep) } }
+        is Read.Scanned -> model.withModelFree {
+            guarded(name) {
+                when (val usable = readable(read)) {
+                    is Read.Text -> text(name, usable, question, onStep)
+                    else -> scanned(name, read, question, onStep)
+                }
+            }
+        }
         is Read.Text -> model.withModelFree { guarded(name) { text(name, read, question, onStep) } }
+    }
+
+    /**
+     * What of [read] the loaded model can take: a PDF's pages when it can look at pictures, else
+     * the text layer it has (null when it has none). Known only once the model is loaded.
+     */
+    private fun readable(read: Read): Read? = when {
+        read !is Read.Scanned -> read
+        (backend.capabilities?.visionTokensPerImage ?: 0) > 0 -> read
+        else -> read.text
     }
 
     /**
@@ -50,20 +68,20 @@ class DocumentReader(
      */
     suspend fun gist(name: String, read: Read, request: String, onStep: (String) -> Unit = {}): String? {
         if (read is Read.Unreadable) return null
-        if (read is Read.Scanned && (backend.capabilities?.visionTokensPerImage ?: 0) <= 0) return null
         return model.withModelFree {
             try {
                 if (!backend.ensureReady()) return@withModelFree null
-                if (read is Read.Scanned) {
+                val usable = readable(read) ?: return@withModelFree null
+                if (usable is Read.Scanned) {
                     // A bill or letter saved as a picture: its pages looked at, as for a question.
                     onStep("Looking at the pages of $name")
-                    return@withModelFree lookAt(name, read, Plan.gistAsk(request)).replace("**", "").trim().takeIf { it.isNotEmpty() }
+                    return@withModelFree lookAt(name, usable, Plan.gistAsk(request)).replace("**", "").trim().takeIf { it.isNotEmpty() }
                 }
-                read as Read.Text
+                usable as Read.Text
                 onStep("Reading $name")
-                val parts = Plan.chunks(read.text, estimator, QUESTION_PART_TOKENS)
+                val parts = Plan.chunks(usable.text, estimator, QUESTION_PART_TOKENS)
                 val picked = Plan.pick(parts, request, estimator, ONE_PASS_TOKENS)
-                val input = Plan.documentHeader(name, read) + Plan.joined(parts, picked) + "\n\n" + Plan.gistAsk(request)
+                val input = Plan.documentHeader(name, usable) + Plan.joined(parts, picked) + "\n\n" + Plan.gistAsk(request)
                 complete(input, GIST_TOKENS).trim().takeIf { it.isNotEmpty() }
             } catch (e: CancellationException) {
                 throw e
@@ -251,9 +269,16 @@ class DocumentReader(
             return "The document \"$name\"$size:\n\n"
         }
 
-        fun questionAsk(question: String): String =
-            "The user asks: \"$question\"\nAnswer from the document only, in a few sentences, in the language of the question. " +
+        /**
+         * The language is named, not "the language of the question": asked in English about a
+         * spreadsheet, the model answered in Spanish (14 Nov 2026), as the away brief's drafts
+         * once came out in the next chat's language.
+         */
+        fun questionAsk(question: String): String {
+            val language = BriefTriage.languageOf(question) ?: "the language of the question"
+            return "The user asks: \"$question\"\nAnswer from the document only, in a few sentences, in $language. " +
                 "Copy names, numbers, dates and amounts exactly as written. If the document doesn't say, say so in a few words."
+        }
 
         fun summaryAsk(): String =
             "Summarise this document for the user in at most 8 short bullet points: what it is, who it's from or between, " +

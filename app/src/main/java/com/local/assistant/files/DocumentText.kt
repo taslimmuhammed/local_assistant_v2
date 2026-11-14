@@ -28,8 +28,12 @@ object DocumentText {
          */
         data class Text(val text: String, val parts: Int? = null, val unit: String? = null, val cut: Boolean = false) : Read
 
-        /** A PDF of page pictures, no text: up to [MAX_SCANNED_PAGES] pages as JPEG files, for the vision model. */
-        data class Scanned(val pages: List<File>, val pageCount: Int) : Read
+        /**
+         * A PDF to look at rather than read: up to [MAX_SCANNED_PAGES] pages as JPEG files, for the
+         * vision model. [text] is the little text layer it has, if any, for when pictures can't be
+         * looked at.
+         */
+        data class Scanned(val pages: List<File>, val pageCount: Int, val text: Text? = null) : Read
 
         data class Unreadable(val why: Why) : Read
     }

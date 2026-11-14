@@ -48,7 +48,15 @@ object PdfText {
             Log.i(TAG, "Text layer: $letters letters and digits over ${text.pages} pages")
             // A few letters a page is a page number or a stamp on a scan, not text.
             if (letters >= MIN_LETTERS_PER_PAGE * min(text.pages, 5).coerceAtLeast(1)) {
-                return DocumentText.finish(text.text.toString(), text.pages, "page")
+                val read = DocumentText.finish(text.text.toString(), text.pages, "page")
+                // A short PDF with little text may have only some of it in its text layer: Android's
+                // own PDF writer leaves words out (a receipt read as two of its six lines, without
+                // the total, 14 Nov 2026). Its pages are looked at, the text kept for a phone that can't.
+                if (read !is Read.Text || text.pages > DocumentText.MAX_SCANNED_PAGES || letters >= THIN_LETTERS_PER_PAGE * text.pages) return read
+                return when (val drawn = pictures(open, pagesDir)) {
+                    is Read.Scanned -> drawn.copy(text = read)
+                    else -> read
+                }
             }
         }
         return pictures(open, pagesDir)
@@ -137,6 +145,12 @@ object PdfText {
     private const val MAX_PAGES = 400
 
     private const val MIN_LETTERS_PER_PAGE = 20
+
+    /**
+     * Below this many letters a page, a PDF of up to [DocumentText.MAX_SCANNED_PAGES] pages is
+     * looked at too: a bill or letter page has several hundred, a whole short receipt under 100.
+     */
+    private const val THIN_LETTERS_PER_PAGE = 150
 
     /** The "[Page N]" each page's text starts with here, not counted as the page's text. */
     private val PAGE_MARK = Regex("\\[Page \\d+]")

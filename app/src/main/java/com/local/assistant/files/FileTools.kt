@@ -160,20 +160,24 @@ class FileTools(
         }
         val locked = ArrayList<FileFinder.Found>()
         for (found in candidates.values.take(MAX_ID_FILES)) {
-            when (val text = read(found)) {
-                is DocumentText.Read.Text -> field.valueIn(text.text)?.let { value ->
-                    val chip = MemoryChip(MemoryChip.Kind.FILES, "Files", found.name, files = FileSet(field.document, listOf(refOf(found)), read = found.name, readPath = found.path))
-                    return IdFiles(
-                        ActionResult(
-                            linkedMapOf("ok" to true, "answered" to "from the file ${found.name}, read on its own"),
-                            chip,
-                            reply = "Your ${field.document} file, ${found.name}, shows your ${field.label}: $value.",
-                        ),
-                    )
+            val words = when (val text = read(found)) {
+                is DocumentText.Read.Text -> text.text
+                // A short PDF with little text is looked at elsewhere; the text it has may still hold the number.
+                is DocumentText.Read.Scanned -> text.text?.text
+                is DocumentText.Read.Unreadable -> {
+                    if (text.why == DocumentText.Why.PASSWORD) locked += found
+                    null
                 }
-                is DocumentText.Read.Unreadable -> if (text.why == DocumentText.Why.PASSWORD) locked += found
-                is DocumentText.Read.Scanned -> Unit
             }
+            val value = words?.let(field::valueIn) ?: continue
+            val chip = MemoryChip(MemoryChip.Kind.FILES, "Files", found.name, files = FileSet(field.document, listOf(refOf(found)), read = found.name, readPath = found.path))
+            return IdFiles(
+                ActionResult(
+                    linkedMapOf("ok" to true, "answered" to "from the file ${found.name}, read on its own"),
+                    chip,
+                    reply = "Your ${field.document} file, ${found.name}, shows your ${field.label}: $value.",
+                ),
+            )
         }
         return IdFiles(null, locked)
     }
