@@ -1021,7 +1021,12 @@ long words, recency). Needs All files access, asked on the first-launch page.
 A document is read only when asked about (`read_file` with a question, or attached in the chat).
 `files/DocumentText` takes the text from Android's PDF renderer (API 35+, or the SDK extension
 before it) or a small scanner for Word, Excel, PowerPoint and OpenDocument zips; a PDF of page
-pictures is drawn and read by the vision model. `files/DocumentReader` answers in its own short
+pictures is drawn and read by the vision model. So is a PDF of up to three pages with under 150
+letters a page, because Android's own PDF writer leaves words out of the text layer: a receipt an
+app wrote had two of its six lines there and no total. Its text is kept for a model that can't
+see, and for ID numbers. The reader names the question's language ("in English") instead of
+asking for "the language of the question": asked in English about a spreadsheet, it once
+answered in Spanish. `files/DocumentReader` answers in its own short
 conversations after closing the chat's (`ModelAccess.withModelFree`): one pass up to ~5,500
 tokens, the best-matching ~1,200-token parts for a question on a longer one, or a note per ~5,000-token part
 and a combined summary (at most 8 parts, saying how much was read). Its answer is the reply and
@@ -1038,7 +1043,9 @@ first (`FileTools.idNumber`), taking a number only with its shape and check digi
 (`PhotoReader.Field.valueIn`), and names files locked with a password.
 
 `DocumentChatEvalTest` (`-e eval documentchat`) and `DocumentReadingEvalTest` (`-e eval documents`)
-run made-up documents through the app's sender and the reader.
+run made-up documents through the app's sender and the reader. On the phone, 14 Nov 2026, they
+scored 5/5 and 7/7. A Word or Excel answer took about 1 s and a page picture about 2 s; the first
+read took 14 s, most of it loading the model.
 
 ## Messages
 
@@ -1055,7 +1062,8 @@ job deletes messages older than chats are kept, before anything that can end it 
 or app's latest, and saying so) and returns at most six lines of at most 240 characters, marked
 as other people's words. It is a utility tool (`ChunkPolicy.UTILITY_TOOLS`), so nothing in it
 becomes a fact about the user, and it doesn't run on the lock screen. `InboxChatEvalTest`
-(`-e eval inboxchat`) asks about two made-up messages through the app and deletes them after.
+(`-e eval inboxchat`) asks about two made-up messages through the app and deletes them after:
+3/3 on the phone, 14 Nov 2026, with 507 messages kept (482 of them SMS).
 
 **What the two tools cost.** Each is declared only while its access is on (All files access for
 `read_file`, Keep messages for `check_inbox`). Together they add 354 tokens to every chat's
@@ -1063,7 +1071,7 @@ preface: 122 and 125 for the declarations and 107 for their rules (`RoutingEvalT
 true`, 14 Nov 2026, after both texts were cut down from 529). With all 22 tools, the instructions
 are 1,355 tokens and the declarations 2,430; without these two, 1,248 and 2,183. On the 8K
 profile a chat is compacted once its prompt plus one envelope would pass the 5,200 ceiling. A
-preface of about 3,950 tokens therefore leaves about 950 tokens of chat before compaction, where
+new chat in the app opened at 3,947 tokens, down from 4,122 before the cut. That preface leaves about 950 tokens of chat before compaction, where
 main's ~3,600 left 1,300. The ceiling can't rise to make up for it: the budget test keeps 5% of
 the window free above the reply and tool rounds, and that allows only 84 more tokens.
 
