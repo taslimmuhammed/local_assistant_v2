@@ -1057,6 +1057,22 @@ as other people's words. It is a utility tool (`ChunkPolicy.UTILITY_TOOLS`), so 
 becomes a fact about the user, and it doesn't run on the lock screen. `InboxChatEvalTest`
 (`-e eval inboxchat`) asks about two made-up messages through the app and deletes them after.
 
+**What the two tools cost.** Each is declared only while its access is on (All files access for
+`read_file`, Keep messages for `check_inbox`). Together they add 354 tokens to every chat's
+preface: 122 and 125 for the declarations and 107 for their rules (`RoutingEvalTest -e costs
+true`, 14 Nov 2026, after both texts were cut down from 529). With all 22 tools, the instructions
+are 1,355 tokens and the declarations 2,430; without these two, 1,248 and 2,183. On the 8K
+profile a chat is compacted once its prompt plus one envelope would pass the 5,200 ceiling. A
+preface of about 3,950 tokens therefore leaves about 950 tokens of chat before compaction, where
+main's ~3,600 left 1,300. The ceiling can't rise to make up for it: the budget test keeps 5% of
+the window free above the reply and tool rounds, and that allows only 84 more tokens.
+
+Routing at temperature 1.0 (`-e tools main` leaves the two out): 109/114 with them, every file
+and message case right; 101/105 without. The six cases that differed or missed, asked three
+times each: 7/18 with them, 4/18 without. "I live in Bengaluru" (a bracketed note instead of
+`save_fact`), "I should call my mom more often" (`add_task`), "what does a sunset look like from
+space?" (`web_lookup`) and the "5 kilometer before Munnar" reminder miss either way.
+
 ## Hidden details
 
 Card, Aadhaar, account, PAN, driving licence and passport numbers, PINs, CVVs, OTPs and passwords

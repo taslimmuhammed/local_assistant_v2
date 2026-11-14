@@ -208,15 +208,20 @@ class RoutingEvalTest {
         Case("what's my PAN number?", setOf("find_photos")),
     )
 
-    /** "-e tools basic": the tools the earlier runs had (no health, files or messages), to compare with them. */
-    private val everyTool = InstrumentationRegistry.getArguments().getString("tools") != "basic"
+    /**
+     * "-e tools main": the tools main has (health data, no files or messages); "-e tools basic":
+     * the earlier runs' (no health either), to compare with them. Every tool otherwise.
+     */
+    private val toolSet = InstrumentationRegistry.getArguments().getString("tools") ?: "all"
+    private val everyTool = toolSet == "all"
+    private val health = toolSet != "basic"
     private val newTools = setOf(ToolCatalog.READ_FILE, ToolCatalog.CHECK_INBOX)
 
     private fun instructions() = Instructions.render(
-        PERSONA, withTools = true, webSearch = true, photoSearch = true, healthData = everyTool, fileSearch = everyTool, inbox = everyTool,
+        PERSONA, withTools = true, webSearch = true, photoSearch = true, healthData = health, fileSearch = everyTool, inbox = everyTool,
     )
 
-    private fun declared() = ToolCatalog.declarations(web = true, photos = true, health = everyTool, files = everyTool, inbox = everyTool)
+    private fun declared() = ToolCatalog.declarations(web = true, photos = true, health = health, files = everyTool, inbox = everyTool)
 
     @Before
     fun onlyWhenAsked() {

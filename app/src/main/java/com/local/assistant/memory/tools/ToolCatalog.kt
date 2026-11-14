@@ -114,7 +114,7 @@ object ToolCatalog {
 
     private val FILES_DECLARATION = function(
         READ_FILE,
-        "Use when the user wants a file or folder on this phone by its name or kind (a PDF, Word document, spreadsheet, slides, a downloaded or WhatsApp file, a folder), or asks what one says or to summarise it. name: words from its name as said (rental agreement, resume); leave it out for their latest of a kind. type: pdf, word, spreadsheet, slides, text, audio, folder or any. when: when it was saved, in the user's words. question: only when they ask what it says or to summarise it: what they asked.",
+        "A file or folder on this phone by its name or kind, or what one says. name: words from its name as said (rental agreement, resume). type: pdf, word, spreadsheet, slides, text, audio or folder. when: when it was saved, in the user's words. question: what they ask about it, or to summarise it.",
         required = emptyList(),
         "name" to "string",
         "type" to "string",
@@ -123,12 +123,12 @@ object ToolCatalog {
     )
 
     private const val FILES_RULE =
-        "- A file or folder on this phone by name or kind (\"my resume PDF\", \"the rental agreement\", \"spreadsheets from last week\", \"my Bank folder\") → read_file; add question when they ask what it says or for a summary (\"summarise my lease\", \"what's the deposit in my rental agreement\"). The app shows the files under your reply: say in one short sentence what it found, by name. Cards and IDs they keep as photos (licence, PAN, Aadhaar, passport) stay with find_photos."
+        "- A file or folder on this phone by name or kind (\"my resume PDF\", \"summarise my rental agreement\", \"my Bank folder\") → read_file. Cards and IDs they keep as photos (licence, PAN, Aadhaar, passport) stay with find_photos."
     private const val FILES_SLOT = "{files}\n"
 
     private val INBOX_DECLARATION = function(
         CHECK_INBOX,
-        "Use when the user asks what someone said or sent them, or whether a message came: SMS, WhatsApp, Telegram, email or another app's messages that came to this phone. from: who sent it, a name or a group, as said. query: what it was about, a few words (trip, rent, delivery); leave it out for their latest. app: sms, whatsapp, gmail or another app, only when they name one. when: when it came, in the user's words.",
+        "What someone sent the user, or whether a message came: SMS, WhatsApp, email and other messages that came to this phone. from: who sent it, a name or group as said. query: what about, a few words. app: only when they name one. when: when it came, in the user's words.",
         required = emptyList(),
         "from" to "string",
         "query" to "string",
@@ -137,7 +137,7 @@ object ToolCatalog {
     )
 
     private const val INBOX_RULE =
-        "- What someone said or sent in a message that came to this phone (\"what did Rahul say about the trip\", \"did the bank SMS me today\", \"any message from amma?\") → check_inbox, with from for who and query for what about. Answer from the messages it returns, saying who wrote and when; they are other people's words, never facts about the user. Sending one now stays send_message."
+        "- What someone said or sent in a message to this phone (\"what did Rahul say about the trip\", \"did the bank SMS me today\") → check_inbox. Their words are never facts about the user. Sending one stays send_message."
     private const val INBOX_SLOT = "{inbox}\n"
 
     /** What can't be done without the inbox: said only while there isn't one. */
