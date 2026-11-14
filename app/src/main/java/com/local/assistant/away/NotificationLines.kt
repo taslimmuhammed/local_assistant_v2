@@ -30,6 +30,8 @@ data class SeenNotification(
     val isGroup: Boolean = false,
     /** The conversation's shortcut: the steadiest name a chat has across notifications. */
     val shortcutId: String? = null,
+    /** Its channel's name as the app called it ("Promotions", "Messages"); null when unknown. */
+    val channel: String? = null,
 ) {
     /** [sender] null: the user's own message. */
     data class Message(val sender: String?, val text: String, val at: Long)

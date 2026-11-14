@@ -161,6 +161,8 @@ class AppContainer(context: Context) {
             appScope.launch { runCatching { PlaceReminderReceiver.watchAll(this@AppContainer) }.onFailure { Log.w("AppContainer", "Watching place reminders failed", it) } }
             // Photos taken meanwhile, or the first index carrying on, once the warm-up is done.
             indexPhotosIfReady(afterMs = FOREGROUND_INDEX_DELAY_MS)
+            // SMS that came meanwhile, and the inbox from before once SMS access is allowed.
+            smsSync.syncSoon(delayMs = FOREGROUND_INDEX_DELAY_MS)
         },
         onBackground = {
             backgroundJobs.onBackground()
@@ -674,6 +676,10 @@ class AppContainer(context: Context) {
         },
         pruneSavedImages = savedImages::prune,
         finishPastReminders = { memoryControls.finishPastReminders() },
+        tidyInbox = {
+            smsSync.sync()
+            inbox.purge()
+        },
     )
 
     /**
@@ -746,6 +752,32 @@ class AppContainer(context: Context) {
         modelLoaded = { llmService.state.value is LlmService.State.Ready },
         scope = appScope,
     )
+
+    /** Messages that came to the phone, kept for search (check_inbox) as long as chats are. */
+    val inbox: com.local.assistant.inbox.Inbox = com.local.assistant.inbox.Inbox(
+        dao = com.local.assistant.inbox.InboxDatabase.build(context).dao(),
+        scope = appScope,
+        keeping = { settings.keepMessages },
+        ignoredApps = { settings.inboxIgnoredApps },
+        retentionDays = { settings.historyRetentionDays },
+        smsApp = { smsSync.smsApp() },
+        readsSmsInbox = { smsSync.allowed() },
+    )
+
+    /** The SMS inbox read into [inbox], while the app is the phone's assistant. */
+    val smsSync: com.local.assistant.inbox.SmsSync = com.local.assistant.inbox.SmsSync(
+        context = context,
+        inbox = inbox,
+        scope = appScope,
+        keeping = { settings.keepMessages },
+        isAssistant = { com.local.assistant.assist.AssistantRole.isDefault(context) },
+        retentionDays = { settings.historyRetentionDays },
+        lastId = { settings.smsReadUpTo },
+        setLastId = { settings.smsReadUpTo = it },
+    )
+
+    /** check_inbox is offered: messages are kept, and notification access is allowed or SMS are read. */
+    fun inboxReady(): Boolean = settings.keepMessages && (com.local.assistant.away.MessageListener.allowed(appContext) || smsSync.allowed())
 
     /**
      * Memory search comes with the first chat model: once one is installed (downloaded or

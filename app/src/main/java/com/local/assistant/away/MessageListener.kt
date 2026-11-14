@@ -14,8 +14,10 @@ import androidx.core.content.ContextCompat
 import com.local.assistant.appContainer
 
 /**
- * Reads the phone's notifications for the brief, once the user has allowed notification access
- * (Settings → While you were away). Only when the brief is turned on; nothing leaves the phone.
+ * Reads the phone's notifications for the brief, and to keep people's messages for search
+ * ([com.local.assistant.inbox.Inbox]), once the user has allowed notification access. Only when
+ * one of them is turned on (Settings › While you were away, Settings › Messages); nothing leaves
+ * the phone.
  *
  * It also keeps time for the brief: the screen going off starts the user's time away, the next
  * unlock ends it. Both are only delivered to a receiver registered while running, and the system
@@ -49,10 +51,13 @@ class MessageListener : NotificationListenerService() {
         }
         // What's showing now: its lines (already stored ones are skipped) and, after the app was
         // killed, the buttons to answer them.
-        if (appContainer.settings.awayBrief) {
+        if (reading()) {
             runCatching { activeNotifications }.getOrNull()?.forEach(::take)
         }
     }
+
+    /** Notifications are read for the brief, or to keep messages for search (Settings › Messages). */
+    private fun reading(): Boolean = appContainer.settings.let { it.awayBrief || it.keepMessages }
 
     override fun onListenerDisconnected() {
         connected = false
@@ -62,7 +67,7 @@ class MessageListener : NotificationListenerService() {
     }
 
     override fun onNotificationPosted(sbn: StatusBarNotification, rankingMap: RankingMap?) {
-        if (!appContainer.settings.awayBrief) return
+        if (!reading()) return
         take(sbn, rankingMap)
     }
 
@@ -78,8 +83,11 @@ class MessageListener : NotificationListenerService() {
         val seen = runCatching { read(sbn, rankingMap) }
             .onFailure { Log.w(TAG, "Couldn't read a notification from ${sbn.packageName}", it) }
             .getOrNull() ?: return
-        val lines = NotificationLines.read(seen, packageName, container.settings.awayIgnoredApps, System.currentTimeMillis())
+        // Read once, for both: each leaves out the apps the user left out of it.
+        val lines = NotificationLines.read(seen, packageName, emptySet(), System.currentTimeMillis())
         if (lines.isEmpty()) return
+        container.inbox.keepNotification(seen, lines)
+        if (!container.settings.awayBrief || seen.packageName in container.settings.awayIgnoredApps) return
         val notification = sbn.notification
         val reply = ReplyActions.replyAction(notification)
         val callBack = if (lines.first().kind == Kind.CALL.name) ReplyActions.callBackAction(notification) else null
@@ -103,9 +111,9 @@ class MessageListener : NotificationListenerService() {
                 (me?.name != null && person.name?.toString() == me.name?.toString())
             SeenNotification.Message(sender = if (mine) null else person?.name?.toString() ?: "Someone", text = text, at = message.timestamp)
         }
-        val importance = rankingMap?.let { map ->
-            Ranking().takeIf { map.getRanking(sbn.key, it) }?.importance
-        }
+        val ranking = rankingMap?.let { map -> Ranking().takeIf { map.getRanking(sbn.key, it) } }
+        val importance = ranking?.importance
+        val channel = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) runCatching { ranking?.channel?.name?.toString() }.getOrNull() else null
         return SeenNotification(
             packageName = sbn.packageName,
             appLabel = label(sbn.packageName),
@@ -125,6 +133,7 @@ class MessageListener : NotificationListenerService() {
             conversationTitle = style?.conversationTitle?.toString(),
             isGroup = style?.isGroupConversation == true,
             shortcutId = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) notification.shortcutId else null,
+            channel = channel,
         )
     }
 
