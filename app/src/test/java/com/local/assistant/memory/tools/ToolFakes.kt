@@ -157,6 +157,9 @@ class ScriptedSession(private val script: ArrayDeque<List<GenEvent>>) : ChatSess
     val sentEnvelopes = mutableListOf<String>()
     val sentResults = mutableListOf<List<ToolResult>>()
 
+    /** How many times the model was stopped mid-reply. */
+    var cancelled = 0
+
     override val isAlive = true
 
     override fun send(envelope: String, attachment: PromptAttachment?): Flow<GenEvent> {
@@ -172,7 +175,9 @@ class ScriptedSession(private val script: ArrayDeque<List<GenEvent>>) : ChatSess
     private fun next(): Flow<GenEvent> = (script.removeFirstOrNull() ?: listOf(GenEvent.Done(null))).asFlow()
 
     override fun tokenCount(): Int? = null
-    override fun cancel() = Unit
+    override fun cancel() {
+        cancelled++
+    }
     override fun close() = Unit
 
     companion object {

@@ -66,6 +66,14 @@ sealed interface LoopEvent {
      * searches ([ToolLoop.run]'s canRebuild).
      */
     data object Rebuild : LoopEvent
+
+    /**
+     * The reply came out as token soup ([GarbledText]): the model was stopped and nothing more of
+     * the turn was done. What was shown of this round is already taken back ([Retract]); the turn
+     * is to go again from the start, on an engine loaded afresh ([TurnRunner]), unless a tool had
+     * already acted ([afterActing]): done once is enough.
+     */
+    data class Garbled(val afterActing: Boolean = false) : LoopEvent
 }
 
 /**
@@ -83,6 +91,11 @@ sealed interface LoopEvent {
  * holding it back cost a second or more before the first word (up to 200 characters, ~4 s at
  * 11 tokens a second), and the user chose seeing words at once over never seeing a false claim
  * (13 Nov 2026).
+ *
+ * Every round's reply is provisional, too, until its first ten words are known to be words, not
+ * token soup ([GarbledText]): about a second at 11 tokens a second, and less than the sentence the
+ * voice waits for anyway. Soup is taken back, the model stopped, and [LoopEvent.Garbled] ends the
+ * turn.
  */
 class ToolLoop(
     private val executor: ToolExecutor,
@@ -218,6 +231,11 @@ class ToolLoop(
             // After a call or message was got ready, the reply is checked whole: "I have sent the
             // message to Anjali" came 4 times in 6 after send_message (MultiStepEvalTest).
             val afterHandoff = if (ready.isNotEmpty()) StringBuilder() else null
+            // Every round's opening is shown provisionally until its first words are known to be
+            // words ([GarbledText]); soup is taken back and the model stopped.
+            val roundText = StringBuilder()
+            var wordsChecked = false
+            var garbled = false
             val roundSent = android.os.SystemClock.elapsedRealtime()
             var firstEvent: Long? = null
             reply.collect { event ->
@@ -225,14 +243,31 @@ class ToolLoop(
                     firstEvent = android.os.SystemClock.elapsedRealtime() - roundSent
                     if (rounds == 0 && !checked) timing?.firstTokenAt = timing?.now()
                 }
+                // Stopped for soup: what is still on its way is dropped, an error from the stop too.
+                if (garbled) return@collect
                 when (event) {
                     is GenEvent.TextDelta -> {
+                        if (!wordsChecked) {
+                            roundText.append(event.text)
+                            when (GarbledText.verdict(roundText, final = false)) {
+                                GarbledText.Verdict.SOUP -> {
+                                    garbled = true
+                                    retract()
+                                    session.cancel()
+                                    return@collect
+                                }
+                                GarbledText.Verdict.FINE -> wordsChecked = true
+                                null -> Unit
+                            }
+                        }
                         val opening = held
                         if (afterHandoff != null) {
                             afterHandoff.append(event.text)
                             show(event.text, provisional = true)
                         } else if (opening == null) {
-                            show(event.text)
+                            show(event.text, provisional = pending || !wordsChecked)
+                            // The words check out now: the opening held for them stands.
+                            if (wordsChecked) confirm()
                         } else {
                             opening.append(event.text)
                             if (!suspect) show(event.text, provisional = true)
@@ -247,7 +282,8 @@ class ToolLoop(
                                 ActionClaims.unshownDraft(opening) -> Unit
                                 else -> {
                                     held = null
-                                    confirm()
+                                    // Or, if its words aren't checked yet, once they are (above).
+                                    if (wordsChecked) confirm()
                                 }
                             }
                         }
@@ -269,6 +305,22 @@ class ToolLoop(
             mark("model answered (round $rounds: ${calls.joinToString { it.name }.ifEmpty { "no tool" }}, ${held?.length ?: 0} characters held)")
             timing?.round(rounds, firstEvent, android.os.SystemClock.elapsedRealtime() - roundSent, stats, calls.map { it.name })
             stats?.tokensPerSecond?.let { timing?.tokensPerSecond = it }
+            // A round that ended before its words could be judged as they came: judged whole.
+            if (!garbled && !wordsChecked && roundText.isNotEmpty()) {
+                if (GarbledText.verdict(roundText, final = true) == GarbledText.Verdict.SOUP) {
+                    garbled = true
+                    retract()
+                } else {
+                    wordsChecked = true
+                    if (held == null && afterHandoff == null) confirm()
+                }
+            }
+            if (garbled) {
+                mark("garbled reply, model stopped")
+                com.local.assistant.memory.prompt.TurnTimings.event("garbled", detail = "round $rounds, ${session.tokenCount() ?: "?"} tokens")
+                emit(LoopEvent.Garbled(afterActing = acted))
+                return@flow
+            }
             if (overflowed) {
                 retract()
                 emit(LoopEvent.Overflow)

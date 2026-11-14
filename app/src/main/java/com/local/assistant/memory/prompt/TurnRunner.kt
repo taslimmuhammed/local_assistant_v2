@@ -28,6 +28,9 @@ sealed interface TurnEvent {
     /** The text since the last [Confirm] is withdrawn. */
     data object Retract : TurnEvent
 
+    /** All of the reply so far is withdrawn, what stood too: the turn goes again from the start. */
+    data object Restart : TurnEvent
+
     /** Something was saved, scheduled or forgotten; its chip is also stored with the chat. */
     data class Memory(val recordId: Long, val chip: MemoryChip) : TurnEvent
 
@@ -140,6 +143,7 @@ class TurnRunner(
             var retried = false
             var reseeded = false
             var rebuiltForPhotos = false
+            var reloaded = false
             while (true) {
                 val preparing = android.os.SystemClock.elapsedRealtime()
                 val turn = conversations.prepareTurn(chatId, userMessageId, said, locked, screen = showScreen) { emit(TurnEvent.Step(it)) }
@@ -148,6 +152,8 @@ class TurnRunner(
                 var overflowed = false
                 var unreadable = false
                 var rebuild = false
+                var garbled = false
+                var garbledAfterActing = false
                 var photosShown = false
                 var acted = false
                 val reply = StringBuilder()
@@ -212,6 +218,13 @@ class TurnRunner(
                         }
                         LoopEvent.NeedsUnlock -> emit(TurnEvent.NeedsUnlock)
                         LoopEvent.Rebuild -> rebuild = true
+                        is LoopEvent.Garbled -> {
+                            reply.setLength(0)
+                            standing = 0
+                            emit(TurnEvent.Restart)
+                            garbled = true
+                            garbledAfterActing = event.afterActing
+                        }
                         is LoopEvent.Step -> emit(TurnEvent.Step(event.label))
                     }
                 }
@@ -228,6 +241,28 @@ class TurnRunner(
                         // The next prepareTurn rebuilds it from what is stored, tool calls included.
                         conversations.forget(chatId, "photo_retry")
                         rebuiltForPhotos = true
+                    }
+                    garbled && garbledAfterActing -> {
+                        // Something was done already (its chip is under the reply): not asked
+                        // again, so it isn't done twice. The next turn gets a fresh engine.
+                        conversations.recoverFromGarble(chatId)
+                        emit(TurnEvent.Text(GARBLED_AFTER_ACTING))
+                        emit(TurnEvent.Done(null))
+                        break
+                    }
+                    garbled && reloaded -> {
+                        // Soup again on a fresh engine: said plainly, rather than shown.
+                        conversations.forget(chatId, "garbled_again")
+                        emit(TurnEvent.Text(GARBLED_AGAIN))
+                        emit(TurnEvent.Done(null))
+                        break
+                    }
+                    garbled -> {
+                        // Once an engine gives soup it gives nothing else (14 Nov 2026): loaded
+                        // again, and the chat rebuilt from what is stored, about 20 s.
+                        emit(TurnEvent.Step(ToolSteps.RESTARTING))
+                        conversations.recoverFromGarble(chatId)
+                        reloaded = true
                     }
                     else -> break
                 }
@@ -251,4 +286,12 @@ class TurnRunner(
 
     /** The user is typing: background model work should get out of the way. */
     fun onUserActivity() = scheduler.onUserActivity()
+
+    companion object {
+        /** The reply came out garbled on an engine just loaded again, too ([com.local.assistant.memory.tools.GarbledText]). */
+        const val GARBLED_AGAIN = "My reply came out garbled, even after restarting the model. Closing the app and opening it again should fix it."
+
+        /** Garbled after a tool had acted: what was done shows under it. */
+        const val GARBLED_AFTER_ACTING = "I did what's shown below, but my reply after it came out garbled, so I've restarted the model."
+    }
 }

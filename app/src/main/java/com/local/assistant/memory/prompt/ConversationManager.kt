@@ -545,6 +545,18 @@ class ConversationManager(
     }
 
     /**
+     * The reply came out as token soup ([com.local.assistant.memory.tools.GarbledText]). On 14 Nov
+     * 2026 an engine that did it once did it in every chat after, until the app was restarted, so
+     * the engine goes as well: the next turn loads it again and rebuilds the chat from what is
+     * stored.
+     */
+    suspend fun recoverFromGarble(chatId: Long) = mutex.withLock {
+        Log.w(TAG, "Garbled reply in chat $chatId; loading the model again")
+        live?.let { close(it, "garbled") }
+        backend.release()
+    }
+
+    /**
      * Opens a conversation for a chat not begun yet and prefills it, so that a new chat's first
      * reply only has to read the message. The prefix — instructions, tool declarations, profile,
      * agenda: ~3,560 tokens — takes 6–10 s to prefill on the phone, while the reply after it

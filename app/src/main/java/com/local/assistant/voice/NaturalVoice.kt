@@ -171,6 +171,7 @@ class NaturalVoice(
     private fun releaseEngine() {
         main.removeCallbacks(releaseWhenIdle)
         synthesis.execute {
+            if (tts != null) com.local.assistant.memory.prompt.TurnTimings.event("voice_release")
             tts?.release()
             tts = null
             loadedFrom = null
@@ -196,6 +197,8 @@ class NaturalVoice(
                 tts = it
                 loadedFrom = want
                 Log.i(TAG, "Loaded ${want.voice.id} in ${SystemClock.elapsedRealtime() - started} ms")
+                // With the model's own events, for working out what went on beside a bad reply.
+                com.local.assistant.memory.prompt.TurnTimings.event("voice_load", SystemClock.elapsedRealtime() - started, want.voice.id)
             }
         } catch (e: Throwable) {
             Log.w(TAG, "${want.voice.id} did not load", e)

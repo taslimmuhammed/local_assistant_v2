@@ -148,6 +148,7 @@ class AppContainer(context: Context) {
     /** Coming to the foreground warms the engines, so they are usually ready by the first send. */
     val appForeground: AppForeground = AppForeground(
         onForeground = {
+            com.local.assistant.memory.prompt.TurnTimings.event("app_back")
             backgroundJobs.onForeground()
             speaker.setAway(false)
             if (settings.modelPath != null) llmService.warmUp()
@@ -165,6 +166,8 @@ class AppContainer(context: Context) {
             smsSync.syncSoon(delayMs = FOREGROUND_INDEX_DELAY_MS)
         },
         onBackground = {
+            // In the model's events: a bad reply on 14 Nov 2026 came after the app had been away.
+            com.local.assistant.memory.prompt.TurnTimings.event("app_away")
             backgroundJobs.onBackground()
             sensitiveLock.lock()
             // Out of sight, the photos wait for the charger at night, unless a big first index
@@ -1043,6 +1046,7 @@ class AssistantApplication : Application() {
      */
     override fun onTrimMemory(level: Int) {
         super.onTrimMemory(level)
+        com.local.assistant.memory.prompt.TurnTimings.event("trim_memory", detail = "level $level")
         val background = level >= ComponentCallbacks2.TRIM_MEMORY_BACKGROUND
         // Thumbnails are quick to read again; the model is not.
         if (background) container.photoThumbnails.clear()

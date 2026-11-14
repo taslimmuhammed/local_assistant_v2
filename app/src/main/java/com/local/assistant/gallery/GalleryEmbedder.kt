@@ -163,6 +163,8 @@ class GalleryEmbedder(
             ).also {
                 it.initialize()
                 Log.i(TAG, "Loaded ${GalleryModel.KEY} (vision on ${if (gpu) "GPU" else "CPU"}) in ${System.currentTimeMillis() - started} ms")
+                // A second engine beside the chat model's: in the model's events too.
+                com.local.assistant.memory.prompt.TurnTimings.event("photo_model_load", System.currentTimeMillis() - started, "vision on ${if (gpu) "GPU" else "CPU"}")
             }
         }
     } catch (e: CancellationException) {
@@ -173,7 +175,10 @@ class GalleryEmbedder(
     }
 
     private fun close() {
-        engine?.let { runCatching { it.close() } }
+        engine?.let {
+            com.local.assistant.memory.prompt.TurnTimings.event("photo_model_close", detail = if (holdsVision) "with vision" else "")
+            runCatching { it.close() }
+        }
         engine = null
         loadedFrom = null
         holdsVision = false

@@ -253,6 +253,12 @@ class ChatSender(
                             if (reply.isEmpty()) step = com.local.assistant.memory.tools.ToolSteps.THINKING
                             publish(now = true)
                         }
+                        TurnEvent.Restart -> {
+                            // Came out garbled: all of it goes, and the turn starts again.
+                            reply.clear()
+                            standing = 0
+                            publish(now = true)
+                        }
                         is TurnEvent.Step -> {
                             step = event.label
                             publish(now = true)

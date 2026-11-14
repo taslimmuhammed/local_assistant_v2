@@ -577,6 +577,22 @@ same words are true and pass.
   replies in the user's chats it found 19 claims, all real (17 after a tool, 2 with none), and
   no false ones. Holding the opening delays the first words of a reply with no tool call by the
   time it takes to write its first sentence.
+- **Token soup is taken back too** (`ToolLoop`, `GarbledText`). On 14 Nov 2026 one app process
+  replied with nothing but soup ("840tsetUauthorx205619i aponitimiCrap.M …") for 12 minutes, in
+  every chat, typed or spoken, until it was restarted. The instructions at the start of the
+  model's memory still read; what came after about token 4,100 did not. A fresh engine never did
+  it, at any position, by voice or typed (`AudioPositionProbeTest`), and neither did the same
+  chat replayed through the app, with the natural voice speaking or the photo model closed and
+  opened again mid-chat (`VoiceChatReplayTest`), so the cause is still open. Every round's reply
+  now streams provisionally until its first ten words are known to be words: none of a capital
+  inside a long word, letters run into digits, two scripts in one word, symbols between letters
+  or 21 Latin letters in a row, beyond three in ten. All 7 soup replies stored that day were
+  caught by their sixth to ninth word, and none of the 65 real ones or the 294 paragraphs of
+  these docs. Soup is taken back unspoken, the model stopped, the engine loaded again
+  (`ConversationManager.recoverFromGarble`, about 20 s with the re-read) and the turn sent once
+  more. Soup again says so plainly (`TurnRunner.GARBLED_AGAIN`); soup after a tool acted isn't
+  sent again, so nothing is done twice. Each catch is a `garbled` line in `model-events.csv`, with
+  its round and token count.
 - **A rule in the instructions:** the model acts only through its tools, never says it did
   something unless the tool succeeded just now, and says plainly when none can do what is asked
   (Teams or Slack, bookings, payments, posts, reading the inbox).
@@ -1249,7 +1265,9 @@ So the model answers in under a second; the waiting was loading it and reading t
 - **Where each turn's time goes** is written to `files/turn-timings.csv` (one row per turn: waits,
   engine load, opening and why, compaction, recall, first token, first word, each round's prefill
   and decode, each tool's time) and `files/model-events.csv` (engine loads, conversations opened,
-  adopted and closed, with reasons). Neither holds any words of a turn.
+  adopted and closed, with reasons; the app leaving and coming back, memory trims, the photo
+  model and the natural voice loading and going, garbled replies). Neither holds any words of a
+  turn.
 
 Typed chat turns before and after these changes, LiteRT-LM 0.18.1 to 0.19.1 with prediction off
 for chats (`AssistLatencyEvalTest`, 13 Nov 2026, time to the first word):

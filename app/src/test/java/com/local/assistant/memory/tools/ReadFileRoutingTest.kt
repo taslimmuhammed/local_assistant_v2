@@ -104,7 +104,8 @@ class ReadFileRoutingTest {
         val chip = events.filterIsInstance<LoopEvent.Memory>().single().chip
         assertEquals(MemoryChip.Kind.FILES, chip.kind)
         assertEquals(listOf(11L, 12L), chip.files!!.files.map { it.mediaId })
-        assertEquals(LoopEvent.Text("Found it."), events.filterIsInstance<LoopEvent.Text>().single())
+        assertEquals("Found it.", events.filterIsInstance<LoopEvent.Text>().single().delta)
+        assertTrue(LoopEvent.Confirm in events)
         assertTrue(completions.isEmpty())
     }
 
