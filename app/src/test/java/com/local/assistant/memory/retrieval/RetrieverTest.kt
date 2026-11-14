@@ -265,4 +265,27 @@ class RetrieverTest {
         val notes = FakeNotes(listOf(note(1, "Router box", "model number", along(0.7)), note(2, "Wifi card", "network and password", along(0.9, axis = 2))))
         assertEquals(2L, retriever(emptyList(), FakeEmbedder(mapOf(cardQuestion to query)), notes = notes).recall(1, cardQuestion, 1_000, 5, 4).image?.noteId)
     }
+    @Test
+    fun aMessageEmbeddedWhileTypedIsNotEmbeddedAgainWhenSent() = runBlocking {
+        val asked = "what did the dentist say about my tooth?"
+        val embedder = FakeEmbedder(mapOf(asked to query))
+        val retriever = retriever(listOf(chunk(1, "the dentist said the tooth needs a crown", query)), embedder)
+        retriever.prepareQuery(asked)
+        assertEquals(1, embedder.embedded)
+        val recall = retriever.recall(1, "$asked ", 1_000, 5, 4)
+        assertEquals(1, embedder.embedded)
+        assertEquals(1, recall.snippets.size)
+        // Typed further, it is a new question.
+        retriever.recall(1, "$asked and the bill", 1_000, 5, 4)
+        assertEquals(2, embedder.embedded)
+    }
+
+    @Test
+    fun commandsAndSmallTalkAreNotEmbeddedWhileTyped() = runBlocking {
+        val embedder = FakeEmbedder(emptyMap())
+        val retriever = retriever(emptyList(), embedder)
+        retriever.prepareQuery("set an alarm for 6:30 tomorrow")
+        retriever.prepareQuery("ok thanks")
+        assertEquals(0, embedder.embedded)
+    }
 }

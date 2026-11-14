@@ -5,6 +5,8 @@ import com.local.assistant.data.db.AttachmentKind
 import com.local.assistant.llm.GenStats
 import com.local.assistant.llm.PromptAttachment
 import com.local.assistant.memory.retrieval.QueryText
+import com.local.assistant.llm.ToolReplay
+import com.local.assistant.memory.tools.InstantCommands
 import com.local.assistant.memory.tools.LoopEvent
 import com.local.assistant.memory.tools.MemoryChip
 import com.local.assistant.memory.tools.NumberGrounding
@@ -93,6 +95,25 @@ class TurnRunner(
                 emit(TurnEvent.Text(answer))
                 emit(TurnEvent.Done(null))
                 return@flow
+            }
+        }
+        // The plainest commands (an alarm at a time, a timer, the flashlight) are carried out here,
+        // without the model, which took 2–3 s to write the one call and a line saying so. If the
+        // call fails, the model is asked as usual; its own call of it gets the same answer.
+        if (attachment == null && !showScreen) {
+            InstantCommands.match(userText)?.takeIf { !locked || it.name in ToolCatalog.LOCKED }?.let { call ->
+                val outcome = tools.runInstant(call, ToolContext(chatId, userMessageId, userText, locked, screenshot, heard = heard))
+                if (outcome.chip != null && outcome.recordId != null) emit(TurnEvent.Memory(outcome.recordId, outcome.chip))
+                @Suppress("UNCHECKED_CAST")
+                val result = runCatching { ToolReplay.gson.fromJson(outcome.result, Map::class.java) as Map<String, Any?> }.getOrNull()
+                val reply = result?.let { InstantCommands.reply(call, it, outcome.chip, java.time.ZonedDateTime.now()) }
+                if (outcome.ok && reply != null) {
+                    TurnTimings.current?.conversation = "instant"
+                    emit(TurnEvent.Text(reply))
+                    conversations.answeredWithoutModel(chatId, userMessageId, locked, userText, call.name, outcome.result, reply)
+                    emit(TurnEvent.Done(null))
+                    return@flow
+                }
             }
         }
         val asked = android.os.SystemClock.elapsedRealtime()

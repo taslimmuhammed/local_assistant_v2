@@ -270,10 +270,29 @@ class Retriever(
 
     /** The message as a query vector, and how long that took; nulls when there is no model to ask. */
     private suspend fun queryVector(text: String, embedQuery: Boolean): Pair<ByteArray?, Long?> {
-        if (!embedQuery || embedder.modelId == null) return null to null
+        val modelId = embedder.modelId
+        if (!embedQuery || modelId == null) return null to null
+        val key = modelId + "\u0000" + text.trim()
+        lastQuery?.let { (known, vector) -> if (known == key) return vector to 0L }
         val started = System.nanoTime()
         val vector = embedder.embed(text, EmbedKind.QUERY)?.let(Int8Vectors::quantize)
+        vector?.let { lastQuery = key to it }
         return vector to (System.nanoTime() - started) / 1_000_000
+    }
+
+    /** The last query embedded, with its model: the message typed and then sent is embedded once. */
+    @Volatile
+    private var lastQuery: Pair<String, ByteArray>? = null
+
+    /**
+     * Embeds [text] while it is still being typed, so its turn's recall has the vector waiting,
+     * and opens the model first if it was let go (recall goes without vectors when it isn't open).
+     * Nothing for what recall would skip: small talk, a command.
+     */
+    suspend fun prepareQuery(text: String) = withContext(dispatcher) {
+        if (QueryText.isTrivial(text) || QueryText.isCommand(text) || embedder.modelId == null) return@withContext
+        if (!embedder.isReady && !embedder.prepare()) return@withContext
+        queryVector(text, embedQuery = true)
     }
 
     /**

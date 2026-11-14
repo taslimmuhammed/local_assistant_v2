@@ -36,6 +36,20 @@ class ToolReplayTest {
     }
 
     @Test
+    fun `results go back marked as not the user's words, one line per call`() {
+        val text = ToolReplay.asMessage(listOf(ToolResult("set_alarm", """{"ok":true}"""), ToolResult("get_upcoming", """{"ok":true,"items":[]}""")))
+        assertEquals("[Tool results, not the user's words]\nset_alarm: {\"ok\":true}\nget_upcoming: {\"ok\":true,\"items\":[]}", text)
+        val withPhoto = ToolReplay.asMessage(listOf(ToolResult("find_photos", "{}")), note = "the image is the photo")
+        assertTrue(withPhoto.startsWith("[Tool results, not the user's words; the image is the photo]\n"))
+    }
+
+    @Test
+    fun `a stored call is replayed in the same form, its result shortened and numbers whole`() {
+        assertEquals(ToolResult("find_photos", """{"ok":true,"found":3,"people":["taslim"]}"""), ToolReplay.replayed(photos))
+        assertNull(ToolReplay.replayed("not json"))
+    }
+
+    @Test
     fun `a row that isn't a call replays as nothing`() {
         assertNull(ToolReplay.call("not json"))
         assertEquals(mapOf("ok" to false), ToolReplay.result("not json"))

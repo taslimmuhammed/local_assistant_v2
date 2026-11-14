@@ -163,6 +163,8 @@ class ConversationManager(
         val attachedPhotos: MutableSet<Long> = mutableSetOf(),
         /** Notes shown to a turn of this conversation, by id, and the version shown (its updatedAt). */
         val shownNotes: MutableMap<Long, Long> = mutableMapOf(),
+        /** Exchanges the app answered itself since this conversation's last turn: told with the next message ([answeredWithoutModel]). */
+        val doneByApp: MutableList<String> = mutableListOf(),
     )
 
     /** Plain turns' text and real cost, gathered until there is enough to learn from. */
@@ -364,6 +366,7 @@ class ConversationManager(
             asksForPhotos = asksForPhotos,
             screen = screen,
             heard = recording != null,
+            doneByApp = current.doneByApp.toList(),
         )
         val liveTokens = current.session.tokenCount() ?: 0
         var envelope = withContext(Dispatchers.Default) { assembler.fitEnvelope(liveTokens, inputs) }
@@ -390,6 +393,7 @@ class ConversationManager(
             envelope = assembler.buildEnvelope(inputs.copy(showNow = true))
         }
         if (envelope.showedNow) current.lastNowShown = now
+        current.doneByApp.clear()
         envelope.notes.forEach { current.shownNotes[it.id] = it.updatedAt }
         if (envelope.notes.isNotEmpty()) Log.i(TAG, "Notes for this message: ${envelope.notes.map { "${it.id}${if (it.shownAbove) " (above)" else ""}" }}")
         val attached = image?.takeIf { envelope.savedImage?.attached == true }
@@ -593,14 +597,34 @@ class ConversationManager(
     /**
      * The user is typing on the screen in front: what it shows is about to be asked, so its
      * conversation is made ready now if it isn't — while they type, rather than after they send.
-     * Checked every few seconds at most.
+     * Checked every few seconds at most. [draft], what they've typed so far, is embedded for
+     * recall once they pause ([Retriever.prepareQuery]).
      */
-    fun typing() {
+    fun typing(draft: String = "") {
+        draftRecall(draft)
         val target = onScreen ?: return
         val now = clock()
         if (now - typingCheckedAt < TYPING_RECHECK_MS || warmJob?.isActive == true) return
         typingCheckedAt = now
         warm(target, why = "typing")
+    }
+
+    private var draftJob: Job? = null
+
+    private fun draftRecall(draft: String) {
+        draftJob?.cancel()
+        val retriever = retriever ?: return
+        if (draft.isBlank()) return
+        draftJob = scope.launch {
+            delay(DRAFT_PAUSE_MS)
+            try {
+                retriever.prepareQuery(draft)
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                Log.w(TAG, "Couldn't embed the message being typed", e)
+            }
+        }
     }
 
     /**
@@ -721,6 +745,30 @@ class ConversationManager(
     private suspend fun prefixText(chatId: Long, budget: MemoryBudget, capabilities: BackendCapabilities): String {
         val inputs = prefixInputs(chatId, budget)
         return withContext(Dispatchers.Default) { assemblerFor(budget, capabilities).buildPrefix(inputs).text }
+    }
+
+    /**
+     * [chatId]'s message [userMessageId] was answered by the app itself, without the model
+     * ([com.local.assistant.memory.tools.InstantCommands]); [said] is the user's words, [result]
+     * the call's and [reply] what the app answered. The live conversation never saw the exchange:
+     * it is told of it with the next message, in a line, rather than rebuilt for it (a rebuild
+     * reads the whole conversation again, ~10 s on the phone). A new chat's first message takes the
+     * conversation made ready for it, as one the model answered would.
+     *
+     * Returns at once: the conversation may be busy being made ready, and the reply shouldn't wait.
+     */
+    fun answeredWithoutModel(chatId: Long, userMessageId: Long, locked: Boolean, said: String, call: String, result: String, reply: String) {
+        val line = "[Done by the app before this message, without you: the user said \"$said\"; $call returned $result; the app told them \"$reply\"]"
+        // Undispatched: in the mutex's queue before finishTurn, which follows the stored reply.
+        scope.launch(start = kotlinx.coroutines.CoroutineStart.UNDISPATCHED) {
+            mutex.withLock {
+                val capabilities = backend.capabilities ?: return@withLock
+                val budget = MemoryBudget.forWindow(capabilities.maxContextTokens)
+                val current = live?.takeIf { it.chatId == chatId && it.locked == locked }
+                    ?: if (locked) null else adoptFresh(chatId, historyFor(chatId, userMessageId), budget, capabilities)
+                current?.doneByApp?.add(line)
+            }
+        }
     }
 
     /**
@@ -1068,6 +1116,9 @@ class ConversationManager(
 
         /** How often typing checks the conversation on screen is ready, at most ([typing]). */
         const val TYPING_RECHECK_MS = 5_000L
+
+        /** A pause in typing this long, and what's typed is embedded for recall ([typing]). */
+        const val DRAFT_PAUSE_MS = 400L
 
         /** What the chat template adds around each message, about. */
         const val TEMPLATE_TOKENS_PER_MESSAGE = 4

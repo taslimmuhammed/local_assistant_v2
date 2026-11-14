@@ -496,6 +496,129 @@ class MemoryEvalTest {
     }
 
     /**
+     * Where a turn's recall time goes, to see what doing it while the user types would save: the
+     * embedding model opened, a question embedded, the same question again (the vector is kept),
+     * the photo search and memory recall each with a new question and with one already embedded.
+     * Times only; nothing found is reported.
+     */
+    @Test
+    fun recallTiming() = runBlocking {
+        enabled()
+        val embedder = container.embedder
+        val retriever = com.local.assistant.memory.retrieval.Retriever(
+            facts = container.memoryRepository,
+            archive = container.archive,
+            embedder = embedder,
+            notes = container.savedImages,
+            userNotes = container.userNotes,
+        )
+        val questions = listOf(
+            "what did I tell you about the car insurance renewal?",
+            "when is my sister's birthday party this year?",
+            "which restaurant did we like in Kochi last month?",
+            "remind me what the doctor said about my back pain",
+            "what was the name of that book I wanted to read?",
+            "how much did I spend on the trip to Munnar?",
+        )
+        fun ms(started: Long) = (System.nanoTime() - started) / 1_000_000
+        suspend fun timed(block: suspend () -> Unit): Long = System.nanoTime().let { started -> block(); ms(started) }
+        for (round in 0..1) {
+            embedder.unload()
+            val open = timed { check(embedder.prepare()) }
+            val first = timed { checkNotNull(embedder.embed(questions[0 + round * 3], com.local.assistant.memory.embed.EmbedKind.QUERY)) }
+            val again = timed { embedder.embed(questions[0 + round * 3], com.local.assistant.memory.embed.EmbedKind.QUERY) }
+            val photosNew = timed { container.galleryIndex.bestPhotos(questions[1 + round * 3], 10) }
+            val photosKnown = timed { container.galleryIndex.bestPhotos(questions[1 + round * 3], 10) }
+            val recallNew = timed { retriever.recall(-1, questions[2 + round * 3], Long.MAX_VALUE, 6, 4, maxNotes = 2) }
+            val recallKnown = timed { retriever.recall(-1, questions[2 + round * 3], Long.MAX_VALUE, 6, 4, maxNotes = 2) }
+            report(
+                "recall timing #$round: open $open ms · embed $first ms, again $again ms · photo search new $photosNew ms, embedded $photosKnown ms · " +
+                    "memory recall new $recallNew ms, embedded $recallKnown ms",
+            )
+        }
+        // Closed, then the first question straight away: a turn after the model was let go.
+        embedder.unload()
+        val cold = timed { retriever.recall(-1, questions[4], Long.MAX_VALUE, 6, 4, maxNotes = 2) }
+        report("recall timing: memory recall with the model closed $cold ms (ready after: ${embedder.isReady})")
+        Unit
+    }
+
+    /**
+     * The engine's own activation setting (LiteRT-LM 0.19.1 has one) against what the file's
+     * header asks for: per setting, how fast a long prefix is read and whether digits are copied
+     * exactly far into the window. -e modes "file,FLOAT16" (file: the header's, fp32 since
+     * [com.local.assistant.llm.ModelPrecision]); -e sizes "300,2600,4600". Doesn't touch the file.
+     */
+    @Test
+    fun activationModes() = runBlocking {
+        enabled()
+        val llm = container.llmService
+        val backend = container.llmBackend
+        val args = InstrumentationRegistry.getArguments()
+        val modes = (args.getString("modes") ?: "file,FLOAT16").split(',').map { it.trim() }
+        val sizes = (args.getString("sizes") ?: "300,2600,4600").split(',').map { it.trim().toInt() }
+        val numbers = listOf("4361044", "09/08/2001", "1800-209-4455", "98450 12345", "4417", "27.06.1994", "7300418826", "₹2,34,560")
+        val filler = "\nBe warm and plain in tone; avoid jargon, keep answers focused, and ask when something is unclear."
+        val model = File(checkNotNull(container.settings.modelPath))
+        report("header asks for ${com.local.assistant.llm.ModelPrecision.textDecoderPrecision(model)}")
+        try {
+            for (mode in modes) {
+                container.conversations.withModelFree { llm.unload() }
+                llm.activations = if (mode == "file") null else com.google.ai.edge.litertlm.ActivationDataType.valueOf(mode)
+                val loadStarted = System.currentTimeMillis()
+                val loaded = runCatching { backend.ensureReady() }.getOrDefault(false)
+                report("$mode | loaded=$loaded in ${System.currentTimeMillis() - loadStarted} ms, ${llm.state.value}")
+                if (!loaded) continue
+                for (target in sizes) {
+                    var system = "You are a helpful assistant."
+                    while (container.tokenEstimator.estimate(system) < target) system += filler
+                    var right = 0
+                    var total = 0
+                    val wrong = mutableListOf<String>()
+                    val opens = mutableListOf<Long>()
+                    var position: Int? = null
+                    val speeds = mutableListOf<com.local.assistant.llm.GenStats>()
+                    for (round in 0..1) {
+                        val shuffled = if (round == 0) numbers else numbers.reversed()
+                        val reply = container.conversations.withModelFree {
+                            val opened = System.currentTimeMillis()
+                            backend.openChat(com.local.assistant.llm.ChatSpec(systemPrefix = system, history = emptyList(), maxOutputTokens = 120, prefillOnOpen = true)).use { chat ->
+                                position = chat.tokenCount()
+                                opens += System.currentTimeMillis() - opened
+                                val out = StringBuilder()
+                                chat.send("Copy these exactly, one per line, nothing else:\n" + shuffled.joinToString("\n")).collect { e ->
+                                    when (e) {
+                                        is com.local.assistant.llm.GenEvent.TextDelta -> out.append(e.text)
+                                        is com.local.assistant.llm.GenEvent.Done -> e.stats?.let(speeds::add)
+                                        else -> Unit
+                                    }
+                                }
+                                out.toString()
+                            }
+                        }
+                        for (n in shuffled) {
+                            total++
+                            if (Regex("(?<![\\d])" + Regex.escape(n) + "(?![\\d])").containsMatchIn(reply)) right++ else wrong += n.length.toString() + " chars"
+                        }
+                    }
+                    val readMs = opens.average()
+                    report(
+                        "$mode | after $position tokens: $right/$total exact · prefix read in %.0f ms (%.0f tok/s) · %.1f tok/s writing · %.0f ms to first token · missed %s".format(
+                            readMs, (position ?: 0) * 1000.0 / readMs, speeds.map { it.tokensPerSecond }.average(), speeds.map { it.timeToFirstTokenMs }.average(), wrong,
+                        ),
+                    )
+                }
+            }
+        } finally {
+            llm.activations = null
+            container.conversations.withModelFree { llm.unload() }
+            check(backend.ensureReady())
+            report("restored: ${llm.state.value}, header ${com.local.assistant.llm.ModelPrecision.textDecoderPrecision(model)}")
+        }
+        Unit
+    }
+
+    /**
      * Where a saved image's numbers go wrong, on a saved image of the user's own (read-only, by
      * title: -e note "CBSE Mark Sheet"; -e expect "4361044,09/08/2001"). Each variant asks for
      * the same two numbers; the chat variant uses a chat of its own and deletes it.

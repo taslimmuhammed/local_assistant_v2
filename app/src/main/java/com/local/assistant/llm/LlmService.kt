@@ -3,6 +3,7 @@ package com.local.assistant.llm
 import android.content.Context
 import android.os.SystemClock
 import android.util.Log
+import com.google.ai.edge.litertlm.ActivationDataType
 import com.google.ai.edge.litertlm.Backend
 import com.google.ai.edge.litertlm.ModelInfo
 import com.google.ai.edge.litertlm.Conversation
@@ -134,6 +135,10 @@ class LlmService(
     /** Off only in evals that measure the model file's own fp16 against fp32. */
     @Volatile
     internal var setsPrecision: Boolean = true
+
+    /** Set only in evals that try the engine's own activation setting over the file's. */
+    @Volatile
+    internal var activations: ActivationDataType? = null
 
     /** True while a reply or background completion is being decoded. */
     val isGenerating: Boolean get() = activeConversation != null
@@ -292,6 +297,7 @@ class LlmService(
                     audioBackend = Backend.CPU().takeIf { modalities?.audio == true },
                     // A writable cache dir lets the runtime reuse compiled kernels on later loads.
                     cacheDir = context.cacheDir.absolutePath,
+                    activationDataType = activations,
                 ),
             ).apply { initialize() }
         }

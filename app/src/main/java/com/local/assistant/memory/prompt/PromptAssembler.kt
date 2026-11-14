@@ -167,7 +167,7 @@ class PromptAssembler(
 
         val screenLine = SCREEN.takeIf { inputs.screen }
         val said = if (inputs.heard) heard(inputs.userText) else inputs.userText
-        val text = (header() + noteLines + listOfNotNull(imageLine, photosLine, screenLine) + said).joinToString("\n")
+        val text = (header() + inputs.doneByApp + noteLines + listOfNotNull(imageLine, photosLine, screenLine) + said).joinToString("\n")
         val attachments = inputs.attachmentTokens +
             (if (inputs.screen) visionTokensPerImage else 0) +
             (if (imageLine != null && inputs.savedImage.attached) visionTokensPerImage else 0) +

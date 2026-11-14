@@ -37,6 +37,24 @@ object ToolReplay {
     const val MAX_ITEMS = 6
 
     /**
+     * Tool results as the model is handed them, live or replayed: a message of their own in the
+     * user's turn, marked as not the user's words; [note] adds to the mark (a photo sent along).
+     * In the runtime's own tool-response turn, with multi-token prediction on, a 50-token result
+     * was read at 3–4 tokens a second, 12–20 s before the reply's first word, 4 times in 6. As a
+     * message like this it took 0.5–0.75 s every time, and the model writes ~21 tokens a second
+     * instead of ~14 with prediction off (ToolResponseProbeTest, 13 Nov 2026).
+     */
+    fun asMessage(results: List<ToolResult>, note: String? = null): String = buildString {
+        append("[Tool results, not the user's words")
+        note?.let { append("; ").append(it) }
+        append("]")
+        results.forEach { append('\n').append(it.name).append(": ").append(it.json) }
+    }
+
+    /** A stored call's result as [asMessage] takes it: shortened ([result]), as JSON. */
+    fun replayed(json: String): ToolResult? = call(json)?.let { (name, _) -> ToolResult(name, gson.toJson(result(json))) }
+
+    /**
      * A tool result's JSON as the model is handed it, now or replayed. Whole numbers stay whole:
      * read Gson's default way every number became a Double, the model saw
      * "steps_left_to_goal": 7740.0 and wrote "7740.0 steps away" (5 Nov 2026).

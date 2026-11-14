@@ -10,8 +10,6 @@ import com.google.ai.edge.litertlm.OpenApiTool
 import com.google.ai.edge.litertlm.RepetitionPenaltyConfig
 import com.google.ai.edge.litertlm.ResponseFormat
 import com.google.ai.edge.litertlm.SamplerConfig
-import com.google.ai.edge.litertlm.SpeculativeDecodingConfig
-import com.google.ai.edge.litertlm.SpeculativeDecodingMode
 import com.google.ai.edge.litertlm.ThinkingConfig
 import com.google.ai.edge.litertlm.ToolCall as RuntimeToolCall
 import com.google.ai.edge.litertlm.tool
@@ -50,22 +48,46 @@ class LiteRtLmBackend(
         val conversation = llm.createConversation(
             ConversationConfig(
                 systemInstruction = spec.systemPrefix.takeIf { it.isNotBlank() }?.let { Contents.of(it) },
-                initialMessages = spec.history.flatMap { it.toLiteRtMessages() },
+                initialMessages = historyMessages(spec.history),
                 tools = spec.toolDeclarations.map { tool(DeclaredTool(it)) },
                 samplerConfig = spec.sampling.toConfig(),
                 automaticToolCalling = false,
                 prefillPrefaceOnInit = spec.prefillOnOpen,
                 maxOutputToken = spec.maxOutputTokens,
                 thinkingConfig = thinkingOff(),
-                // With multi-token prediction on, a tool's result took 15 s to read: 50 tokens at
-                // 3–4 a second, on runtime 0.18.1 and 0.19.1 alike, ON or ADAPTIVE; off, the reply
-                // after it started in 0.5 s (ToolResponseProbeTest, 13 Nov 2026). It also writes at
-                // ~15 tokens a second instead of ~22, still far faster than anyone reads. So a
-                // conversation that can get a tool's result has it off; the rest keep the engine's.
-                speculativeDecodingConfig = if (spec.toolDeclarations.isNotEmpty()) SpeculativeDecodingConfig(SpeculativeDecodingMode.OFF) else null,
+                // Multi-token prediction as the engine has it (on by default): tool results go back
+                // as a message of their own ([ToolReplay.asMessage]), which it reads as fast as any.
             ),
         )
         return LiteRtChatSession(conversation, llm, settings)
+    }
+
+    /**
+     * The stored turns as the runtime is handed them. A run of tool rows (one turn's calls) becomes
+     * one model turn making the calls and one message with their results, as they went live.
+     */
+    private fun historyMessages(history: List<MessageEntity>): List<Message> {
+        val messages = mutableListOf<Message>()
+        var i = 0
+        while (i < history.size) {
+            if (history[i].role != Role.TOOL) {
+                messages += history[i++].toLiteRtMessages()
+                continue
+            }
+            val calls = mutableListOf<RuntimeToolCall>()
+            val results = mutableListOf<ToolResult>()
+            while (i < history.size && history[i].role == Role.TOOL) {
+                val row = history[i++].text
+                val (name, arguments) = ToolReplay.call(row) ?: continue
+                calls += RuntimeToolCall(name, arguments)
+                ToolReplay.replayed(row)?.let(results::add)
+            }
+            if (calls.isNotEmpty()) {
+                messages += Message.model(Contents.of(emptyList()), calls)
+                messages += Message.user(Contents.of(ToolReplay.asMessage(results)))
+            }
+        }
+        return messages
     }
 
     override suspend fun complete(
@@ -135,13 +157,8 @@ class LiteRtLmBackend(
             ),
         )
         Role.ASSISTANT -> listOf(Message.model(text))
-        // As the model made it, and what it got back (cut short): see ConversationManager.withToolCalls.
-        Role.TOOL -> ToolReplay.call(text)?.let { (name, arguments) ->
-            listOf(
-                Message.model(Contents.of(emptyList()), listOf(RuntimeToolCall(name, arguments))),
-                Message.tool(Contents.of(listOf(Content.ToolResponse(name, ToolReplay.result(text))))),
-            )
-        }.orEmpty()
+        // Grouped with the rows beside it: see historyMessages and ConversationManager.withToolCalls.
+        Role.TOOL -> emptyList()
     }
 
     /** A declaration the model sees. Never executed by the runtime: tool calling is manual. */
@@ -166,13 +183,7 @@ private class LiteRtChatSession(
         stream(Message.user(contentsOf(envelope, attachments)))
 
     override fun sendToolResults(results: List<ToolResult>): Flow<GenEvent> =
-        stream(
-            Message.tool(
-                Contents.of(
-                    results.map { Content.ToolResponse(it.name, ToolReplay.gson.fromJson(it.json, Map::class.java)) },
-                ),
-            ),
-        )
+        stream(Message.user(Contents.of(ToolReplay.asMessage(results))))
 
     private fun stream(message: Message): Flow<GenEvent> = flow {
         llm.generationStarted(conversation)

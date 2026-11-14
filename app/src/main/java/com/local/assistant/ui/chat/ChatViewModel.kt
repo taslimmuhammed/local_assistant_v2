@@ -334,9 +334,9 @@ class ChatViewModel(
      * Every keystroke: background model work yields to the person typing, and the conversation
      * their message will go into is made ready if it isn't.
      */
-    fun onTyping() {
+    fun onTyping(draft: String) {
         turns.onUserActivity()
-        conversations.typing()
+        conversations.typing(draft)
     }
 
     /** The chat screen came into view again (back from the panel, Settings or another app). */

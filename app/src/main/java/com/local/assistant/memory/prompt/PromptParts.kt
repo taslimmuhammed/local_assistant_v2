@@ -128,6 +128,8 @@ data class EnvelopeInputs(
     val userText: String,
     /** The message is a recording, sent with it; [userText] is what the phone's recogniser wrote of it. */
     val heard: Boolean = false,
+    /** Exchanges the app finished itself since the conversation's last turn, one line each ([com.local.assistant.memory.tools.InstantCommands]). */
+    val doneByApp: List<String> = emptyList(),
 )
 
 data class Envelope(

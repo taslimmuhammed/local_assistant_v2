@@ -452,11 +452,15 @@ class ToolLoop(
     /** See [ToolExecutor.showRelatedPhotos]. */
     suspend fun showRelatedPhotos(chatId: Long, mediaIds: List<Long>): Pair<Long, MemoryChip> = executor.showRelatedPhotos(chatId, mediaIds)
 
-    /** The results as text, for the message that carries a result's picture. */
-    private fun toolResultsWithImage(results: List<ToolResult>): String = buildString {
-        append("[Tool results, not the user's words; the image is the photo the result's note refers to]\n")
-        results.forEach { append(it.name).append(": ").append(it.json).append('\n') }
+    /** A call the app makes itself, without the model ([InstantCommands]): run, checked and recorded as the model's are. */
+    suspend fun runInstant(call: ToolCall, context: ToolContext): ToolExecutor.Outcome {
+        val running = android.os.SystemClock.elapsedRealtime()
+        return executor.execute(call, context).also { com.local.assistant.memory.prompt.TurnTimings.current?.tool(call.name, android.os.SystemClock.elapsedRealtime() - running) }
     }
+
+    /** The results as text, for the message that carries a result's picture. */
+    private fun toolResultsWithImage(results: List<ToolResult>): String =
+        com.local.assistant.llm.ToolReplay.asMessage(results, note = "the image is the photo the result's note refers to")
 
     private fun answerOf(json: String): String? = runCatching {
         val result = gson.fromJson(json, Map::class.java)

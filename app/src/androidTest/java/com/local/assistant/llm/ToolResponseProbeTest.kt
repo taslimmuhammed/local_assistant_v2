@@ -268,6 +268,102 @@ class ToolResponseProbeTest {
      * tokens more in front, prediction on and off. `-e probe toolempty`.
      */
     @OptIn(com.google.ai.edge.litertlm.ExperimentalApi::class)
+    /**
+     * What multi-token prediction costs when a conversation is opened and in a short answer,
+     * off, on and adaptive in turn so the phone's heat is the same for each: the app's instructions and
+     * tools read at open, then a one-line question. -e rounds 3.
+     */
+    @Test
+    fun predictionOpenCost() = runBlocking<Unit> {
+        assumeTrue("opt-in: -e probe mtpopen", InstrumentationRegistry.getArguments().getString("probe") == "mtpopen")
+        val llm = container.llmService
+        check(container.llmBackend.ensureReady()) { "no model" }
+        report("--- prediction and opening ${java.util.Date()}")
+        val instructions = Instructions.render(container.settings.systemPrompt, withTools = true)
+        val tools = ToolCatalog.declarations(web = false)
+        val penalty = RepetitionPenaltyConfig(repetitionPenalty = 1.1f, windowSize = 256)
+        val rounds = InstrumentationRegistry.getArguments().getString("rounds")?.toIntOrNull() ?: 3
+        repeat(rounds) { round ->
+            for (mode in listOf(SpeculativeDecodingMode.OFF, SpeculativeDecodingMode.ON, SpeculativeDecodingMode.ADAPTIVE)) {
+                val started = SystemClock.elapsedRealtime()
+                val conversation = llm.createConversation(
+                    ConversationConfig(
+                        systemInstruction = Contents.of(instructions),
+                        tools = tools.map { tool(Declared(it)) },
+                        automaticToolCalling = false,
+                        prefillPrefaceOnInit = true,
+                        maxOutputToken = 200,
+                        thinkingConfig = ThinkingConfig(enableThinking = false),
+                        speculativeDecodingConfig = SpeculativeDecodingConfig(mode),
+                    ),
+                )
+                try {
+                    val openMs = SystemClock.elapsedRealtime() - started
+                    val tokens = conversation.getTokenCount()
+                    val answer = timedRaw(conversation, Message.user(Contents.of("What's the capital of Kerala?")), penalty)
+                    val long = timedRaw(conversation, Message.user(Contents.of(LONG_QUESTION)), penalty)
+                    report(
+                        "#${round + 1} MTP $mode: open $openMs ms for $tokens tokens (%.0f/s); short answer first word ${answer.firstMs} ms; long answer first word ${long.firstMs} ms, done ${long.doneMs} ms, ${long.bench}; battery ${batteryTemp()} °C"
+                            .format(tokens * 1000.0 / openMs),
+                    )
+                } finally {
+                    conversation.close()
+                    llm.conversationClosed(conversation)
+                }
+            }
+        }
+    }
+
+    private fun batteryTemp(): String {
+        val intent = context.registerReceiver(null, android.content.IntentFilter(android.content.Intent.ACTION_BATTERY_CHANGED))
+        return "%.1f".format((intent?.getIntExtra(android.os.BatteryManager.EXTRA_TEMPERATURE, 0) ?: 0) / 10.0)
+    }
+
+    /**
+     * What each tool costs in the prefix, in the runtime's own tokens: a conversation opened with
+     * one word of instructions and that tool alone, against none. Then the whole of it: the
+     * instructions with the tools' rules and every tool, against the instructions without.
+     */
+    @OptIn(com.google.ai.edge.litertlm.ExperimentalApi::class)
+    @Test
+    fun toolTokens() = runBlocking<Unit> {
+        assumeTrue("opt-in: -e probe tooltokens", InstrumentationRegistry.getArguments().getString("probe") == "tooltokens")
+        val llm = container.llmService
+        check(container.llmBackend.ensureReady()) { "no model" }
+        report("--- tool tokens ${java.util.Date()}")
+        suspend fun tokens(system: String, tools: List<String>): Int {
+            val conversation = llm.createConversation(
+                ConversationConfig(
+                    systemInstruction = Contents.of(system),
+                    tools = tools.map { tool(Declared(it)) },
+                    automaticToolCalling = false,
+                    prefillPrefaceOnInit = true,
+                    thinkingConfig = ThinkingConfig(enableThinking = false),
+                ),
+            )
+            return try { conversation.getTokenCount() } finally { conversation.close(); llm.conversationClosed(conversation) }
+        }
+        val bare = tokens("Hi.", emptyList())
+        val all = ToolCatalog.declarations(web = true, photos = true, health = true)
+        var sum = 0
+        for (declaration in all) {
+            val name = Regex("\"name\":\"([a-z_]+)\"").find(declaration)?.groupValues?.get(1)
+            val cost = tokens("Hi.", listOf(declaration)) - bare
+            sum += cost
+            report("$name: $cost tokens, ${declaration.length} chars")
+        }
+        val prompt = container.settings.systemPrompt
+        val without = tokens(Instructions.render(prompt, withTools = false), emptyList())
+        val with = tokens(Instructions.render(prompt, withTools = true, webSearch = true, photoSearch = true, healthData = true), all)
+        val declaredTogether = tokens("Hi.", all) - bare
+        // How the runtime writes a declaration out for the model, overhead and all.
+        val shown = llm.createConversation(
+            ConversationConfig(systemInstruction = Contents.of("Hi."), tools = listOf(tool(Declared(all.first { "set_timer" in it }))), automaticToolCalling = false),
+        )
+        try { report("set_timer as the model sees it: " + shown.renderPrefaceIntoString().replace("\n", "⏎")) } finally { shown.close(); llm.conversationClosed(shown) }
+        report("declarations one by one $sum, together $declaredTogether; instructions $without without tools, $with with every tool and rule (+${with - without})")
+    }
+
     @Test
     fun toolEmptyReplies() = runBlocking<Unit> {
         assumeTrue("opt-in: -e probe toolempty", InstrumentationRegistry.getArguments().getString("probe") == "toolempty")
@@ -276,7 +372,14 @@ class ToolResponseProbeTest {
         report("--- empty replies ${java.util.Date()}")
         val instructions = Instructions.render(container.settings.systemPrompt, withTools = true)
         val tools = ToolCatalog.declarations(web = false)
-        val result = Message.tool(Contents.of(listOf(Content.ToolResponse("get_upcoming", com.google.gson.Gson().fromJson(RESULT, Map::class.java)))))
+        // "-e results user": handed back as the app does now (ToolReplay.asMessage), else the runtime's tool turn.
+        val asUser = InstrumentationRegistry.getArguments().getString("results") == "user"
+        val result = if (asUser) {
+            Message.user(Contents.of(ToolReplay.asMessage(listOf(ToolResult("get_upcoming", RESULT)))))
+        } else {
+            Message.tool(Contents.of(listOf(Content.ToolResponse("get_upcoming", com.google.gson.Gson().fromJson(RESULT, Map::class.java)))))
+        }
+        report("results as ${if (asUser) "a user message" else "a tool turn"}")
         val seeds = InstrumentationRegistry.getArguments().getString("seeds")?.toIntOrNull() ?: 6
         // The app's own penalty, as LiteRtLmBackend sends it: the empty replies came through there.
         val settings = container.settings

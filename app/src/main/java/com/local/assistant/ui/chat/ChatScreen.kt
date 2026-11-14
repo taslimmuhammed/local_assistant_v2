@@ -692,7 +692,7 @@ private fun Composer(
     pendingAttachment: ChatViewModel.PendingAttachment?,
     recording: RecordingState?,
     onSend: (String) -> Unit,
-    onTyping: () -> Unit,
+    onTyping: (String) -> Unit,
     onStop: () -> Unit,
     onPickImage: () -> Unit,
     onDiscardAttachment: () -> Unit,
@@ -752,7 +752,7 @@ private fun Composer(
                             value = text,
                             onValueChange = {
                                 text = it
-                                onTyping()
+                                onTyping(it)
                             },
                             enabled = enabled,
                             textStyle = MaterialTheme.typography.bodyLarge.merge(

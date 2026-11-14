@@ -187,9 +187,14 @@ class MultiStepEvalTest {
                         if (call.name == ToolCatalog.SEND_MESSAGE && result["ok"] == true) {
                             ready += "WhatsApp is open with your message to ${call.args["to"]}; tap send."
                         }
-                        Content.ToolResponse(call.name, result)
+                        call.name to result
                     }
-                    message = Message.tool(Contents.of(results))
+                    // As the app hands them back (ToolReplay.asMessage); "-e results tool" for the runtime's tool turn.
+                    message = if (InstrumentationRegistry.getArguments().getString("results") == "tool") {
+                        Message.tool(Contents.of(results.map { (name, result) -> Content.ToolResponse(name, result) }))
+                    } else {
+                        Message.user(Contents.of(ToolReplay.asMessage(results.map { (name, result) -> ToolResult(name, gson.toJson(result)) })))
+                    }
                 }
             }
         }.exceptionOrNull()
