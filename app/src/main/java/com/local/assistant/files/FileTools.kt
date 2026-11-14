@@ -66,7 +66,8 @@ class FileTools(
             found = find(asked, FileNames.Type.ANY, period)
             if (found.isNotEmpty()) notes += "None of them is a ${type.name.lowercase(Locale.ROOT)}; these are named like it."
         }
-        if (inChat.isNotEmpty()) found = inChat + found
+        // The attached copy, not the phone's own of the same file too (what was attached from Download).
+        if (inChat.isNotEmpty()) found = inChat + found.filterNot { file -> inChat.any { it.name == file.name && it.sizeBytes == file.sizeBytes } }
         if (period != null) found = found.filter { it.modifiedMs in period }
         if (found.isEmpty()) {
             return ActionResult(
@@ -102,7 +103,7 @@ class FileTools(
             MemoryChip.Kind.FILES,
             "Files",
             if (found.size == 1) found.first().name else "${found.size} files for \"$label\"",
-            files = FileSet(label, found.map(::refOf), read = chosen?.name),
+            files = FileSet(label, found.map(::refOf), read = chosen?.name, readPath = chosen?.path),
         )
         return ActionResult(result, chip, reply = reply)
     }
@@ -161,7 +162,7 @@ class FileTools(
         for (found in candidates.values.take(MAX_ID_FILES)) {
             when (val text = read(found)) {
                 is DocumentText.Read.Text -> field.valueIn(text.text)?.let { value ->
-                    val chip = MemoryChip(MemoryChip.Kind.FILES, "Files", found.name, files = FileSet(field.document, listOf(refOf(found)), read = found.name))
+                    val chip = MemoryChip(MemoryChip.Kind.FILES, "Files", found.name, files = FileSet(field.document, listOf(refOf(found)), read = found.name, readPath = found.path))
                     return IdFiles(
                         ActionResult(
                             linkedMapOf("ok" to true, "answered" to "from the file ${found.name}, read on its own"),

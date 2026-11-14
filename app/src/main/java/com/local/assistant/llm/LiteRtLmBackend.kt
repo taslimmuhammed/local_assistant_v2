@@ -76,6 +76,7 @@ class LiteRtLmBackend(
         sampling: Sampling,
     ): String {
         llm.awaitEngine()
+        llm.openConversationCount().takeIf { it > 0 }?.let { Log.w("LiteRtLmBackend", "complete() with $it other conversations open") }
         val constrained = jsonSchema != null && capabilities?.constrainedJson == true
         val conversation = llm.createConversation(
             ConversationConfig(

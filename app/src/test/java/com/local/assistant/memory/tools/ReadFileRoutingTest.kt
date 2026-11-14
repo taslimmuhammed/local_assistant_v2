@@ -244,6 +244,19 @@ class ReadFileRoutingTest {
         assertEquals("Electricity_Bill_Oct.pdf", events.filterIsInstance<LoopEvent.Memory>().single().chip.files!!.read)
     }
 
+    @Test
+    fun `the phone's own copy of what was attached isn't listed again, and only the copy read is marked`() {
+        inChat = listOf(attachedBill)
+        // The same file in Download, where it was attached from; and an older bill, not the same.
+        val copy = FileFinder.Found("Electricity_Bill_Oct.pdf", "Download/", "/storage/emulated/0/Download/Electricity_Bill_Oct.pdf", 40, bill.length(), nowMs - day, "application/pdf").also { onPhone += it }
+        val other = FileFinder.Found("Electricity_Bill_Oct.pdf", "Documents/", "/storage/emulated/0/Documents/Electricity_Bill_Oct.pdf", 41, 55_000, nowMs - 400 * day, "application/pdf").also { onPhone += it }
+        val (_, events) = turn(call("name" to "electricity bill", "question" to "what's the amount?"), "what's the amount in the electricity bill?")
+        val files = events.filterIsInstance<LoopEvent.Memory>().single().chip.files!!
+        assertEquals(listOf(attachedBill.path, other.path), files.files.map { it.path })
+        assertEquals(listOf(true, false), files.files.map(files::wasRead))
+        assertFalse(files.files.any { it.path == copy.path })
+    }
+
     private fun onPhone(name: String, folder: String = "Download/") =
         FileFinder.Found(name, folder, "/storage/emulated/0/$folder$name", 30L + onPhone.size, 120_000, nowMs - 30 * day, null).also { onPhone += it }
 

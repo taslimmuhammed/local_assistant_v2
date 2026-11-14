@@ -372,6 +372,9 @@ class LlmService(
         synchronized(openConversations) { openConversations -= conversation }
     }
 
+    /** Conversations made and not yet closed; more than one at a time is never meant to happen. */
+    fun openConversationCount(): Int = synchronized(openConversations) { openConversations.size }
+
     /** Brackets every generation, so [stop] knows what to interrupt. */
     fun generationStarted(conversation: Conversation) {
         _lastGenerationStats.value = null

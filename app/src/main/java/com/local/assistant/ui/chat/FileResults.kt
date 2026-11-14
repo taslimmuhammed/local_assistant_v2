@@ -57,7 +57,7 @@ fun FileResults(files: FileSet, modifier: Modifier = Modifier) {
     var all by remember(files) { mutableStateOf(files.files.size <= SHOWN) }
     val shown = if (all) files.files else files.files.take(SHOWN)
     Column(modifier.widthIn(max = 320.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-        shown.forEach { FileRow(it, read = it.name == files.read) }
+        shown.forEach { FileRow(it, read = files.wasRead(it)) }
         if (!all) {
             Text(
                 "Show ${files.files.size - SHOWN} more",

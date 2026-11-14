@@ -43,7 +43,16 @@ data class MemoryChip(
 }
 
 /** Files or folders on the phone that answer [query], best first; [read] is the one a reply was read from. */
-data class FileSet(val query: String, val files: List<FileRef>, val read: String? = null)
+data class FileSet(
+    val query: String,
+    val files: List<FileRef>,
+    /** The name of the one read for the reply. */
+    val read: String? = null,
+    /** Its path, which tells it from a copy with the same name; null in chips from before it was kept. */
+    val readPath: String? = null,
+) {
+    fun wasRead(file: FileRef): Boolean = if (readPath != null) file.path == readPath else file.name == read
+}
 
 /**
  * A file (or with [folder], a folder) on the phone, as found: opened from where it is when tapped,
