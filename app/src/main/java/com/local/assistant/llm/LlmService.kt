@@ -42,6 +42,8 @@ class LlmService(
     private val context: Context,
     private val settings: SettingsStore,
     private val scope: CoroutineScope,
+    /** Runs before each load, once [holdsGpu] is set: the photo model leaves the GPU then. */
+    private val beforeLoad: suspend () -> Unit = {},
 ) {
 
     sealed interface State {
@@ -135,8 +137,23 @@ class LlmService(
     @Volatile
     internal var setsPrecision: Boolean = true
 
+    /**
+     * Set only in evals: the next reply in a chat is this instead of the model's, word by word,
+     * to try what the app does with token soup ([com.local.assistant.memory.tools.GarbledText]).
+     */
+    @Volatile
+    internal var soupNextReply: String? = null
+
     /** True while a reply or background completion is being decoded. */
     val isGenerating: Boolean get() = activeConversation != null
+
+    /**
+     * The engine is loaded or loading: nothing else may then close a model it put on the GPU
+     * ([com.local.assistant.gallery.GalleryEmbedder.leaveGpu] says what that broke).
+     */
+    @Volatile
+    var holdsGpu: Boolean = false
+        private set
 
     init {
         Engine.setNativeMinLogSeverity(LogSeverity.WARNING)
@@ -173,6 +190,8 @@ class LlmService(
 
         val loadStarted = SystemClock.elapsedRealtime()
         _state.value = State.Loading(loadStarted, settings.lastEngineLoadMs.takeIf { it > 0 })
+        holdsGpu = true
+        beforeLoad()
         // Before the engine opens the file: fp32 for the text decoder, or digits garble past token 2,048.
         val precision = withContext(Dispatchers.IO) {
             runCatching {
@@ -241,6 +260,7 @@ class LlmService(
         }
 
         _loadingBackend.value = null
+        holdsGpu = false
         _state.value = State.Failed("Could not start the model on this device.")
         null
     }
@@ -416,6 +436,7 @@ class LlmService(
         if (engine != null) com.local.assistant.memory.prompt.TurnTimings.event("engine_unload")
         runCatching { engine?.close() }
         engine = null
+        holdsGpu = false
         _activeContextTokens.value = 0
         _capabilities.value = null
         _state.value = if (settings.modelPath == null) State.NoModel else State.Idle

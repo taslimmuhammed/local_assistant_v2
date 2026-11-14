@@ -11,6 +11,7 @@ import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.FlowCollector
+import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.selects.select
 
@@ -238,7 +239,9 @@ class ToolLoop(
             var garbled = false
             val roundSent = android.os.SystemClock.elapsedRealtime()
             var firstEvent: Long? = null
-            reply.collect { event ->
+            // Stopped for soup, the runtime ends the reply as cancelled ("CANCELLED: Task
+            // cancelled", 14 Nov 2026): that ends the reply, not the turn.
+            reply.catch { if (!garbled) throw it }.collect { event ->
                 if (firstEvent == null && (event is GenEvent.TextDelta || event is GenEvent.ToolCalls)) {
                     firstEvent = android.os.SystemClock.elapsedRealtime() - roundSent
                     if (rounds == 0 && !checked) timing?.firstTokenAt = timing?.now()

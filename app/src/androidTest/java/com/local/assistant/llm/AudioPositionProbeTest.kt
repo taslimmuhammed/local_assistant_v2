@@ -20,11 +20,15 @@ import com.google.ai.edge.litertlm.SpeculativeDecodingConfig
 import com.google.ai.edge.litertlm.SpeculativeDecodingMode
 import com.google.ai.edge.litertlm.ThinkingConfig
 import com.google.ai.edge.litertlm.tool
+import com.local.assistant.appContainer
 import com.local.assistant.data.prefs.SettingsStore
+import com.local.assistant.gallery.GalleryEmbedder
 import com.local.assistant.memory.prompt.Instructions
 import com.local.assistant.memory.prompt.PromptAssembler
+import com.local.assistant.memory.tools.GarbledText
 import com.local.assistant.memory.tools.ToolCatalog
 import kotlinx.coroutines.runBlocking
+import kotlin.concurrent.thread
 import org.junit.Assume.assumeTrue
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -67,6 +71,27 @@ class AudioPositionProbeTest {
         // As LiteRtLmBackend: thinking turned off where the model has it.
         val thinks = ModelInfo.from(modelPath).use { (it as? ModelInfo.Llm)?.supportsThinking() == true }
         report("model thinks: $thinks")
+        // "-e photo concurrent": the photo model (memory search's too) loads while the chat model
+        // does, as the app did when it came to the front on 14 Nov 2026; "after": once it's up;
+        // "reload": up before each conversation opens, then closed and loaded again before the
+        // question, as when the app went away and came back with a chat open. Its vision on the
+        // GPU that crashed the chat model in OpenCL (14 Nov 2026); "-e vision cpu" keeps it off.
+        val photo = args.getString("photo")
+        val photoModel = if (args.getString("vision") == "cpu") {
+            GalleryEmbedder({ context.appContainer.galleryModelManager.installed.value?.file }, context.cacheDir, visionOnGpu = false)
+        } else {
+            context.appContainer.photoModel
+        }
+        val clock = SystemClock.elapsedRealtime()
+        val photoLoad = if (photo == "concurrent") {
+            thread {
+                val started = SystemClock.elapsedRealtime() - clock
+                val ready = runBlocking { photoModel.prepare() }
+                report("photo model ready $ready, loaded from $started to ${SystemClock.elapsedRealtime() - clock} ms")
+            }
+        } else {
+            null
+        }
         ExperimentalFlags.enableSpeculativeDecoding = true
         Engine(
             EngineConfig(
@@ -78,6 +103,9 @@ class AudioPositionProbeTest {
                 cacheDir = context.cacheDir.absolutePath,
             ),
         ).apply { initialize() }.use { engine ->
+            report("chat model loaded at ${SystemClock.elapsedRealtime() - clock} ms")
+            photoLoad?.join()
+            if (photo == "after" || photo == "reload") report("photo model ready ${runBlocking { photoModel.prepare() }}, after the chat model")
             val system = Instructions.render(
                 SettingsStore.DEFAULT_SYSTEM_PROMPT, withTools = true, webSearch = true, photoSearch = true, healthData = true, fileSearch = true, inbox = true,
             )
@@ -108,6 +136,10 @@ class AudioPositionProbeTest {
                 for (voice in listOf(true, false)) {
                     open(pairs).use { conversation ->
                         val at = conversation.getTokenCount()
+                        if (photo == "reload") {
+                            runBlocking { photoModel.unload() }
+                            check(runBlocking { photoModel.prepare() }) { "Photo model didn't load again" }
+                        }
                         val text = "[Now: Sat 14 Nov 2026, 13:00]\n" +
                             if (voice) PromptAssembler.heard(words) else words
                         val message = if (voice) Message.user(Contents.of(Content.AudioFile(clip.absolutePath), Content.Text(text))) else Message.user(Contents.of(text))
@@ -139,15 +171,12 @@ class AudioPositionProbeTest {
                 }
             }
         }
+        if (photo != null) runBlocking { photoModel.unload() }
     }
 
-    /** Words as a person writes them, not token soup ("840tsetUauthorx205619i aponitimiCrap.M"). */
-    private fun readsAsSentences(reply: String): Boolean {
-        val words = reply.split(Regex("\\s+")).filter { it.isNotBlank() }
-        if (words.isEmpty()) return false
-        val plain = words.count { it.matches(Regex("[\"'(*-]*[A-Za-z][a-z'’]*[.,!?:;)\"*]*|[\"'(]*\\d[\\d,.:%]*[.,!?)]*")) }
-        return plain >= words.size * 0.8
-    }
+    /** Words, not token soup ("840tsetUauthorx205619i aponitimiCrap.M"). */
+    private fun readsAsSentences(reply: String): Boolean =
+        reply.isNotBlank() && GarbledText.verdict(reply, final = true) == GarbledText.Verdict.FINE
 
     private fun report(line: String) {
         Log.i(TAG, line)

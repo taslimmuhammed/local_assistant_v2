@@ -179,6 +179,12 @@ private class LiteRtChatSession(
         )
 
     private fun stream(message: Message): Flow<GenEvent> = flow {
+        llm.soupNextReply?.let { soup ->
+            llm.soupNextReply = null
+            soup.split(' ').forEach { emit(GenEvent.TextDelta("$it ")) }
+            emit(GenEvent.Done(null))
+            return@flow
+        }
         llm.generationStarted(conversation)
         var stats: GenStats? = null
         var failure: Throwable? = null

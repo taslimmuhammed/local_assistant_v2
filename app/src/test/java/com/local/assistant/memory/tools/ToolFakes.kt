@@ -29,7 +29,7 @@ import com.local.assistant.location.PlaceSearchError
 import com.local.assistant.memory.notes.FoundImage
 import com.local.assistant.memory.notes.ImageNotes
 import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.flow.asFlow
+import kotlinx.coroutines.flow.flow
 
 /** The memory store in plain maps, applying the same upsert policy as the real one. */
 class FakeMemoryStore(private val clock: () -> Long) : MemoryStore {
@@ -172,7 +172,17 @@ class ScriptedSession(private val script: ArrayDeque<List<GenEvent>>) : ChatSess
         return next()
     }
 
-    private fun next(): Flow<GenEvent> = (script.removeFirstOrNull() ?: listOf(GenEvent.Done(null))).asFlow()
+    /** Stopped mid-reply, it ends as the runtime does: cancelled ("CANCELLED: Task cancelled"). */
+    private fun next(): Flow<GenEvent> {
+        val events = script.removeFirstOrNull() ?: listOf(GenEvent.Done(null))
+        val stoppedBefore = cancelled
+        return flow {
+            for (event in events) {
+                if (cancelled > stoppedBefore) throw kotlinx.coroutines.CancellationException("Task cancelled")
+                emit(event)
+            }
+        }
+    }
 
     override fun tokenCount(): Int? = null
     override fun cancel() {

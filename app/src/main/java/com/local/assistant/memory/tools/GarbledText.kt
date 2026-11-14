@@ -7,14 +7,16 @@ package com.local.assistant.memory.tools
  * On 14 Nov 2026 one app process gave nothing else for 12 minutes, in every chat, typed or spoken,
  * until it was restarted. The instructions at the start of the model's memory still read: one
  * reply came round to "no info has been provided in the prompt other than instructions". What
- * came after about token 4,100 did not. A fresh engine never did it (AudioPositionProbeTest,
- * VoiceChatReplayTest), so the cause is still open, and this catches it as it streams.
+ * came after about token 4,100 did not. The photo model closed on the GPU beside an open
+ * conversation did it ([com.local.assistant.gallery.GalleryEmbedder.leaveGpu]); this stays to
+ * catch any other cause as it streams.
  *
- * Judged by the first ten words of the reply, from words no one writes: a capital inside a long
- * word, letters run into digits, two scripts in one word, symbols between letters, a run of 21
- * Latin letters. Code, links, emails, file names and IDs (MH12AB1234) don't count. Of the replies
- * stored on the phone that day, all 7 soup ones were caught by their sixth to ninth word and none
- * of the 65 real ones was; nor was any of the 294 paragraphs of this app's docs.
+ * Judged by the first ten words of the reply (twenty if two of those are odd), from words no one
+ * writes: a capital inside a long word, letters run into digits, two scripts in one word, symbols
+ * between letters, a run of 21 Latin letters. Code, links, emails, file names and IDs
+ * (MH12AB1234) don't count. Of the replies stored on the phone that day, all 8 soup ones were
+ * caught by their sixth to eighth word and none of the 67 real ones was; nor was any of the 294
+ * paragraphs of this app's docs.
  */
 object GarbledText {
 
@@ -25,20 +27,25 @@ object GarbledText {
      * text is all there is; otherwise its last word may still be coming.
      */
     fun verdict(text: CharSequence, final: Boolean): Verdict? {
+        // The same broken state wrote its reasoning out instead, thinking being off: "[Thinking
+        // Process: 1. **Analyze the Request:** … <channel|>The Eiffel Tower was built …" (14 Nov 2026).
+        if (THINKING_OPENING.containsMatchIn(text) || "<channel|>" in text || "<|channel>" in text) return Verdict.SOUP
         // Code is judged by other rules than prose; a reply that opens with it is left alone.
         if ("```" in text) return Verdict.FINE
         val tokens = text.split(SPACE).filter { it.isNotEmpty() }
         val complete = if (final || text.isEmpty() || text.last().isWhitespace()) tokens else tokens.dropLast(1)
-        val words = complete.asSequence().mapNotNull(::kind).take(SETTLED_WORDS).toList()
+        val words = complete.asSequence().mapNotNull(::kind).take(LONGEST_WORDS).toList()
         // Word by word, so a reply is judged the same whole or as it streams.
         var odd = 0
         for ((index, isOdd) in words.withIndex()) {
             if (isOdd) odd++
             val seen = index + 1
             if (seen >= MIN_WORDS && odd >= MIN_ODD && odd >= seen * SOUP_SHARE) return Verdict.SOUP
+            // Ten words with one odd one at most are words; with two, it looks on.
+            if (seen >= SETTLED_WORDS && odd <= 1) return Verdict.FINE
         }
         return when {
-            words.size >= SETTLED_WORDS -> Verdict.FINE
+            words.size >= LONGEST_WORDS -> Verdict.FINE
             !final -> null
             // A short reply: half of it odd, and two words at least.
             words.size >= 2 && odd >= 2 && odd * 2 >= words.size -> Verdict.SOUP
@@ -83,8 +90,14 @@ object GarbledText {
     /** Below this many words, only a reply that has ended is judged. */
     private const val MIN_WORDS = 6
 
-    /** With this many words and no soup, the reply is fine: soup starts with the first word. */
+    /** With this many words and one odd one at most, the reply is fine: soup starts with the first word. */
     private const val SETTLED_WORDS = 10
+
+    /**
+     * How far it looks when the first ten have two odd words: "frt68other mouse T Auto-waiti1
+     * Jackie_like = 'donneisitcce ispareicuqi 00.preferencesa thank you" (14 Nov 2026).
+     */
+    private const val LONGEST_WORDS = 20
 
     private const val MIN_ODD = 3
     private const val SOUP_SHARE = 0.3
@@ -92,6 +105,7 @@ object GarbledText {
     /** Letters in a word with a capital inside it: WhatsApp and MakeMyTrip pass, aponitimiCrap doesn't. */
     private const val CAPITAL_IN_LONG = 13
 
+    private val THINKING_OPENING = Regex("^[\\s\\[*#]*thinking process\\s*:", RegexOption.IGNORE_CASE)
     private val SPACE = Regex("\\s+")
     private val STRIP = "\"'“”‘’«»()[]{}<>*_.,!?:;…-–—".toSet()
     private val FILE_NAME = Regex("[^\\s]+\\.[A-Za-z][A-Za-z0-9]{1,3}")
@@ -104,7 +118,7 @@ object GarbledText {
     )
     /** Rs500, v2, mp4. */
     private val PREFIXED_NUMBER = Regex("\\p{L}{1,3}\\.?\\d+(?:[.,]\\d+)*")
-    private val SYMBOL_BETWEEN = Regex("\\p{L}[=*&|\\\\^~<>{}\\[\\]#$%:]+\\p{L}")
+    private val SYMBOL_BETWEEN = Regex("\\p{L}[=*&|\\\\^~<>{}\\[\\]#$%:_]+\\p{L}")
     private val LONG_LATIN = Regex("[A-Za-z\\u00C0-\\u024F]{21,}")
     private val INNER_CAPITAL = Regex("\\p{Ll}\\p{Lu}")
 }

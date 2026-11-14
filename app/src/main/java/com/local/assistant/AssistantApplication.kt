@@ -212,7 +212,11 @@ class AppContainer(context: Context) {
     val galleryModelManager = ModelManager(context, GalleryModel.FILE, settings::galleryModelPath, appScope, wanted = wantedDownloads)
 
     /** One engine for photo search and memory search (see [GalleryEmbedder]). */
-    val photoModel = GalleryEmbedder(modelFile = { galleryModelManager.installed.value?.file }, cacheDir = context.cacheDir)
+    val photoModel: GalleryEmbedder = GalleryEmbedder(
+        modelFile = { galleryModelManager.installed.value?.file },
+        cacheDir = context.cacheDir,
+        gpuAllowed = { !llmService.holdsGpu },
+    )
 
     /** An embedding model the user imported from storage, used by memory search instead of the photo model. */
     val embedderManager = ModelManager(
@@ -274,7 +278,7 @@ class AppContainer(context: Context) {
         logScores = (context.applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE) != 0,
     )
 
-    val llmService = LlmService(context, settings, appScope)
+    val llmService: LlmService = LlmService(context, settings, appScope, beforeLoad = { photoModel.leaveGpu() })
 
     val llmBackend: LlmBackend = LiteRtLmBackend(llmService, settings)
 

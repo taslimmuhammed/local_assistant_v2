@@ -15,6 +15,17 @@ class GarbledTextTest {
         assertEquals(Verdict.SOUP, whole("\"840tsetUauthorx205619i aponitimiCrap.M WMWWCOMXIai /isdevincr 링Tı Microsoft Sound***passou"))
         assertEquals(Verdict.SOUP, whole("blorpique setzuL6yCblueCISTI a0 _38* = 4aciحمد for \"match_to rй's lineazgedisRempass is quiet"))
         assertEquals(Verdict.SOUP, whole("_am1018:tabeicon3mkeyWapi\nfoundemnegefundenameinmeplot seinstalledResnet=6stimize\n\nItheKedit remaind::iseteorle"))
+        // Two odd words in its first ten, so it is looked at further.
+        assertEquals(Verdict.SOUP, whole("grt71other lamp T Auto-waiti2 Jamie_like = 'donnasitcce isparquici 00.preferencesb thank you icymdokeeandEdx (Lufisaavue4w"))
+    }
+
+    @Test
+    fun `reasoning written out is caught`() {
+        // As the phone gave it on 14 Nov 2026, thinking being off.
+        assertEquals(Verdict.SOUP, GarbledText.verdict("[Thinking Process: \n1.  **Analyze the Request:** The user is", final = false))
+        assertEquals(Verdict.SOUP, whole("Thinking Process:\n1. The user wants a fact."))
+        assertEquals(Verdict.SOUP, whole("4.  **Formulate Response.**<channel|>The Eiffel Tower was built for the 1889 World's Fair."))
+        assertEquals(Verdict.FINE, whole("My thinking process: I'd start with the budget, then the dates."))
     }
 
     @Test

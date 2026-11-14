@@ -580,19 +580,39 @@ same words are true and pass.
 - **Token soup is taken back too** (`ToolLoop`, `GarbledText`). On 14 Nov 2026 one app process
   replied with nothing but soup ("840tsetUauthorx205619i aponitimiCrap.M …") for 12 minutes, in
   every chat, typed or spoken, until it was restarted. The instructions at the start of the
-  model's memory still read; what came after about token 4,100 did not. A fresh engine never did
-  it, at any position, by voice or typed (`AudioPositionProbeTest`), and neither did the same
-  chat replayed through the app, with the natural voice speaking or the photo model closed and
-  opened again mid-chat (`VoiceChatReplayTest`), so the cause is still open. Every round's reply
-  now streams provisionally until its first ten words are known to be words: none of a capital
-  inside a long word, letters run into digits, two scripts in one word, symbols between letters
-  or 21 Latin letters in a row, beyond three in ten. All 7 soup replies stored that day were
-  caught by their sixth to ninth word, and none of the 65 real ones or the 294 paragraphs of
-  these docs. Soup is taken back unspoken, the model stopped, the engine loaded again
-  (`ConversationManager.recoverFromGarble`, about 20 s with the re-read) and the turn sent once
-  more. Soup again says so plainly (`TurnRunner.GARBLED_AGAIN`); soup after a tool acted isn't
-  sent again, so nothing is done twice. Each catch is a `garbled` line in `model-events.csv`, with
-  its round and token count.
+  model's memory still read; what came after about token 4,100 did not.
+
+  **The cause** was the photo model's vision encoder on the GPU, where this branch had put it for
+  indexing speed. When it was closed and loaded again while a chat conversation was open, as the
+  app does when it leaves the screen and comes back, that conversation broke. In the app, a chat
+  opened before the app left the screen went bad once past ~4,096 tokens, 2 times in 2: soup, or
+  the model's reasoning written out ("[Thinking Process: 1. **Analyze the Request:** …
+  <channel|>The Eiffel Tower …"), thinking being off. Chats opened after it came back were fine.
+  `AudioPositionProbeTest -e photo reload` crashed the chat model in OpenCL (`clEnqueueMapBuffer`)
+  at the same point twice. With the photo model's vision on the CPU (`-e vision cpu`), 6 of 6
+  replies from 3,901 to 4,375 tokens were right. Loading the two models at once broke nothing,
+  6 of 6 (`-e photo concurrent`). Nor did closing them with no conversation open.
+
+  So the photo model's vision is now on the GPU only while the chat model isn't loaded, and it
+  leaves the GPU before the chat model loads (`GalleryEmbedder.leaveGpu`, `LlmService.holdsGpu`).
+  Indexing while the app is in use runs at the CPU's speed, as on main. Afterwards, in the app, a
+  chat carried over 2.7 minutes in the background gave right replies up to 4,415 tokens.
+
+  **The check stays, as a safety net.** Every round's reply streams provisionally until its
+  first ten words are known to be words, twenty if two of the ten are odd. A word is odd if it
+  has a capital inside a long word, letters run into digits, two scripts in one word, symbols
+  between letters, or 21 Latin letters in a row; more than three in ten makes it soup. A reply
+  that opens "Thinking Process:" or carries a `<channel|>` marker counts as soup too. On the
+  stored replies, all 8 soup ones were caught by their sixth to eighth word, and none of the 67
+  real ones or the 294 paragraphs of these docs.
+
+  Soup is taken back unspoken and the model stopped. The runtime ends the stopped reply as
+  "CANCELLED", which ends that reply, not the turn. The engine then loads again
+  (`ConversationManager.recoverFromGarble`, about 20 s with the re-read) and the turn is sent once
+  more; in a replay with made-up soup, the right answer came about 32 s after the question.
+  - Soup a second time says so plainly (`TurnRunner.GARBLED_AGAIN`).
+  - Soup after a tool acted isn't sent again, so nothing is done twice.
+  - Each catch is a `garbled` line in `model-events.csv`, with its round and token count.
 - **A rule in the instructions:** the model acts only through its tools, never says it did
   something unless the tool succeeded just now, and says plainly when none can do what is asked
   (Teams or Slack, bookings, payments, posts, reading the inbox).
@@ -827,7 +847,8 @@ it. The WAV is still what the chat plays back.
 - **Measured on the OnePlus** (`GalleryEvalTest`, 16 Wikipedia lead images, 18 queries): the
   right picture first for 16 of 16; load 1.4 s; a query 51 ms; a photo 224 ms with the vision
   encoder on the GPU against 474 ms on four CPU threads (six or eight were no faster), and 560 MB
-  of process memory against 812 MB. So vision runs on the GPU, falling back to the CPU.
+  of process memory against 812 MB. So vision runs on the GPU, falling back to the CPU, but only
+  while the chat model isn't loaded. Beside it, vision is on the CPU (see Token soup).
 - **Indexing speed** (2026-11-14, `IndexSpeedTest`, the phone's own 2,577 photos and 318 videos
   into a database in memory, 90 s passes; only timings and counts reported):
 
@@ -962,9 +983,11 @@ it. The WAV is still what the chat plays back.
   on the CPU: on LiteRT-LM 0.18.1, loaded on the GPU, it broke the chat model's vision for any
   image ("TensorBuffer must have all static dimensions"), found photos and photos sent in a chat
   alike. On 0.19.1 the chat model reads images beside it in every order tried
-  (`GpuVisionProbeTest`, 2026-11-14), so it is on the GPU again; GPU vectors match the CPU ones
-  already stored at cosine 0.98 or more, each nearest its own CPU twin (24 of 24), so the index
-  wasn't redone.
+  (`GpuVisionProbeTest`, 2026-11-14), so it is on the GPU again while the chat model isn't
+  loaded. Closed on the GPU beside an open chat conversation, it broke that conversation (Token
+  soup), so beside the chat model it stays on the CPU. GPU vectors match the CPU ones already
+  stored at cosine 0.98 or more, each nearest its own CPU twin (24 of 24), so the index wasn't
+  redone.
 - **Dates.** `find_photos` takes `when` in the user's words: "last December", "2023", "this
   year", "3 weeks ago", "since March", "25 Dec 2023". `PhotoPeriod` turns it into a stretch of the
   past (a month with no year is the latest one begun; "N years ago" is that calendar year), and
