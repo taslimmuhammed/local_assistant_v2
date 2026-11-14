@@ -89,9 +89,11 @@ object SummaryPrompts {
      * by every line of it.
      */
     fun transcript(messages: List<MessageEntity>, estimator: TokenEstimator, maxTokens: Int): String {
-        val lines = messages.filter { it.role != Role.TOOL && it.text.isNotBlank() }.map { message ->
+        // An attached document named, as the chat's history names it.
+        val said = { message: MessageEntity -> com.local.assistant.llm.ContextWindow.historyText(message.attachmentKind, message.attachmentPath, message.text) }
+        val lines = messages.filter { it.role != Role.TOOL && said(it).isNotBlank() }.map { message ->
             val limit = if (message.role == Role.USER) USER_CHARS else ASSISTANT_CHARS
-            val text = message.text.trim().replace(Regex("\\s*\\n\\s*"), " ").let {
+            val text = said(message).trim().replace(Regex("\\s*\\n\\s*"), " ").let {
                 if (it.length > limit) it.take(limit).substringBeforeLast(' ') + " …" else it
             }
             (if (message.role == Role.USER) "User: " else "Assistant: ") + text

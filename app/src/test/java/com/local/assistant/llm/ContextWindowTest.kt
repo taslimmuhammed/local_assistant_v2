@@ -48,6 +48,29 @@ class ContextWindowTest {
     }
 
     @Test
+    fun `a document is never sent as media, and is named in the history`() {
+        org.junit.Assert.assertNull(ContextWindow.sentAttachment(AttachmentKind.DOCUMENT, "summarise this"))
+        org.junit.Assert.assertNull(ContextWindow.sentAttachment(AttachmentKind.DOCUMENT, ""))
+        val path = "/data/files/attachments/0f8fad5b-d9cb-469f-a165-70867728950e-Electricity Bill Oct.pdf"
+        assertEquals("[Attached document \"Electricity Bill Oct.pdf\"] when is it due?", ContextWindow.historyText(AttachmentKind.DOCUMENT, path, "when is it due?"))
+        assertEquals("[Attached document \"Electricity Bill Oct.pdf\"]", ContextWindow.historyText(AttachmentKind.DOCUMENT, path, " "))
+        assertEquals("what breed is this", ContextWindow.historyText(AttachmentKind.IMAGE, "/tmp/a.jpg", "what breed is this"))
+        assertEquals(ContextWindow.DOCUMENT_NOTE_TOKENS, ContextWindow.attachmentTokens(message(AttachmentKind.DOCUMENT), 256))
+    }
+
+    @Test
+    fun `an attached document keeps the name it was picked with`() {
+        assertEquals("Rent agreement (final).docx", com.local.assistant.media.AttachmentStore.documentName("/x/0f8fad5b-d9cb-469f-a165-70867728950e-Rent agreement (final).docx"))
+        // Not an id in front: the name as it is.
+        assertEquals("2024-03-statement.pdf", com.local.assistant.media.AttachmentStore.documentName("/x/2024-03-statement.pdf"))
+        assertEquals("a_b_c.pdf", com.local.assistant.media.AttachmentStore.safeName("a/b:c.pdf"))
+        assertEquals("document", com.local.assistant.media.AttachmentStore.safeName("..."))
+        val long = com.local.assistant.media.AttachmentStore.safeName("x".repeat(300) + ".pdf")
+        assertEquals(120, long.length)
+        assertTrue(long.endsWith(".pdf"))
+    }
+
+    @Test
     fun `a voice message being sent is heard too, up to 30 seconds, when it has words`() {
         assertTrue(ContextWindow.heard(AttachmentKind.AUDIO, "call Umma", 8_000))
         assertTrue(ContextWindow.heard(AttachmentKind.AUDIO, "call Umma", 30_000))

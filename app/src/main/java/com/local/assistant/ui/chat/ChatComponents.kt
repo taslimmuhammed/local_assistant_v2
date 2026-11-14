@@ -102,6 +102,7 @@ fun UserMessage(message: MessageEntity, modifier: Modifier = Modifier) {
                     },
                 )
             }
+            AttachmentKind.DOCUMENT -> message.attachmentPath?.let { DocumentAttachment(it) }
             null -> Unit
         }
 

@@ -31,7 +31,7 @@ class ReadFileRoutingTest {
     private val nowMs = now.toInstant().toEpochMilli()
     private val day = 24 * 60 * 60_000L
 
-    private val onPhone = listOf(
+    private val onPhone = mutableListOf(
         FileFinder.Found("Rental_Agreement.pdf", "Download/", "/storage/emulated/0/Download/Rental_Agreement.pdf", 11, 210_000, nowMs - 3 * day, "application/pdf"),
         FileFinder.Found("Rental Agreement 2023.docx", "Documents/", "/storage/emulated/0/Documents/Rental Agreement 2023.docx", 12, 40_000, nowMs - 400 * day, null),
         FileFinder.Found("Invoice_10234.pdf", "Download/", "/storage/emulated/0/Download/Invoice_10234.pdf", 13, 90_000, nowMs - 20 * day, "application/pdf"),
@@ -39,7 +39,13 @@ class ReadFileRoutingTest {
     )
     private val asked = ArrayList<Pair<String, FileNames.Type>>()
     private var granted = true
+    private val bill = java.io.File.createTempFile("0f8fad5b-d9cb-469f-a165-70867728950e-", "-Electricity_Bill_Oct.pdf").apply { deleteOnExit() }
+    private val attachedBill = AttachedDocument(bill.path, "Electricity_Bill_Oct.pdf")
+    private var inChat = emptyList<AttachedDocument>()
     private val completions = ArrayList<String>()
+    /** What a file reads as, by its name; the rental agreement's text for any other. */
+    private val texts = HashMap<String, DocumentText.Read>()
+    private val readNames = ArrayList<String>()
 
     private val backend = object : LlmBackend {
         override val capabilities = BackendCapabilities(tools = true, constrainedJson = false, thinking = false, speculativeDecoding = false, maxContextTokens = 8192, visionTokensPerImage = 256)
@@ -60,12 +66,16 @@ class ReadFileRoutingTest {
             FileNames.rank(words, onPhone.filter { type.allows(it.name) && (period == null || it.modifiedMs in period) }, nowMs, 6) { it.entry }
         },
         folders = { listOf(FileFinder.Folder("Bank", "Documents/Bank/", 7, nowMs)) },
-        read = { DocumentText.Read.Text("[Page 1]\nThe security deposit is ₹50,000, refundable.", parts = 1, unit = "page") },
+        read = { found ->
+            readNames += found.name
+            texts[found.name] ?: DocumentText.Read.Text("[Page 1]\nThe security deposit is ₹50,000, refundable.", parts = 1, unit = "page")
+        },
         reader = DocumentReader(backend, object : ModelAccess {
             override suspend fun <T> withModelFree(block: suspend () -> T): T = block()
         }),
         now = { now },
         ready = { granted },
+        attached = { inChat },
     )
 
     private val log = FakeToolLog()
@@ -172,6 +182,131 @@ class ReadFileRoutingTest {
         assertTrue(session.sentResults.isEmpty())
         assertTrue(LoopEvent.NeedsUnlock in events)
         assertTrue(asked.isEmpty())
+    }
+
+    private fun attachedTurn(userText: String): List<LoopEvent> {
+        val context = ToolContext(chatId = 1, userMessageId = 10, userText = userText, document = attachedBill)
+        return runBlocking { loop.readAttached(context).toList() }
+    }
+
+    @Test
+    fun `an attached document's question is answered from it alone, recorded as read_file`() {
+        val events = attachedTurn("when is this due?")
+        assertEquals("The security deposit is ₹50,000.", events.filterIsInstance<LoopEvent.Text>().joinToString("") { it.delta })
+        assertTrue((events.last() as LoopEvent.Done).staleConversation)
+        assertTrue(events.filterIsInstance<LoopEvent.Step>().first().label.startsWith("Reading Electricity_Bill_Oct.pdf"))
+        // Shown with the message already: nothing under the reply.
+        assertTrue(events.none { it is LoopEvent.Memory })
+        assertTrue(completions.single().contains("when is this due?"))
+        val record = log.records.values.single()
+        assertEquals(ToolCatalog.READ_FILE, record.tool)
+        assertEquals(true, record.arguments[ToolExecutor.ATTACHED])
+        assertEquals("Electricity_Bill_Oct.pdf", record.arguments["name"])
+        // Never searched the phone for it.
+        assertTrue(asked.isEmpty())
+    }
+
+    @Test
+    fun `an attached document with nothing said is summarised`() {
+        attachedTurn("  ")
+        assertTrue(completions.single().contains("Summarise this document"))
+        assertFalse(log.records.values.single().arguments.containsKey("question"))
+    }
+
+    @Test
+    fun `a request to act on an attached document gets notes on it for the model, kept as the call's result`() {
+        val context = ToolContext(chatId = 1, userMessageId = 10, userText = "remind me to pay this bill", document = attachedBill)
+        val notes = runBlocking { loop.notesOnAttached(context, "remind me to pay this bill") }
+        assertEquals("[Attached document \"Electricity_Bill_Oct.pdf\". The app read it; notes on it for this request, not the user's words: The security deposit is ₹50,000.]", notes)
+        assertTrue(completions.single().contains("remind me to pay this bill"))
+        val record = log.records.values.single()
+        assertEquals("remind me to pay this bill", record.arguments[ToolExecutor.NOTES_FOR])
+        assertTrue(record.result.contains("\"notes\""))
+    }
+
+    @Test
+    fun `a document attached earlier in the chat is found by its name, even without All files access`() {
+        granted = false
+        inChat = listOf(attachedBill)
+        val (session, _) = turn(call("name" to "electricity bill"), "find the electricity bill")
+        val result = result(session)
+        assertEquals(true, result["ok"])
+        val first = (result["files"] as List<*>).first() as Map<*, *>
+        assertEquals("Electricity_Bill_Oct.pdf", first["name"])
+        assertEquals(FileTools.ATTACHED_FOLDER, first["folder"])
+        assertTrue(asked.isEmpty())
+    }
+
+    @Test
+    fun `a question about it later reads the attached copy first`() {
+        inChat = listOf(attachedBill)
+        val (_, events) = turn(call("name" to "Electricity_Bill_Oct.pdf", "question" to "what's the amount?"), "what's the amount in the electricity bill?")
+        assertEquals("Electricity_Bill_Oct.pdf", events.filterIsInstance<LoopEvent.Memory>().single().chip.files!!.read)
+    }
+
+    private fun onPhone(name: String, folder: String = "Download/") =
+        FileFinder.Found(name, folder, "/storage/emulated/0/$folder$name", 30L + onPhone.size, 120_000, nowMs - 30 * day, null).also { onPhone += it }
+
+    @Test
+    fun `an ID number is read from a document named after its card, with its check`() {
+        onPhone("e-PAN_card.pdf")
+        // Named like it, but not a document: never read.
+        onPhone("pan_photo.zip")
+        texts["e-PAN_card.pdf"] = DocumentText.Read.Text("[Page 1]\nIncome Tax Department\nPermanent Account Number\nABCPE1234F\nName: A Person", parts = 1, unit = "page")
+        val found = runBlocking { files.idNumber(com.local.assistant.gallery.PhotoReader.Field.PAN) }
+        val answer = found.answer!!
+        assertEquals("Your PAN card file, e-PAN_card.pdf, shows your PAN: ABCPE1234F.", answer.reply)
+        assertEquals("e-PAN_card.pdf", answer.chip!!.files!!.read)
+        // The number is in the reply only, not in what the chat keeps of the call.
+        assertFalse(answer.result.values.any { it.toString().contains("ABCPE1234F") })
+        assertEquals(listOf("e-PAN_card.pdf"), readNames)
+        assertTrue(completions.isEmpty())
+    }
+
+    @Test
+    fun `a number without its shape isn't taken, and a locked file is named`() {
+        onPhone("PAN.pdf")
+        onPhone("pan card scan.pdf", folder = "Documents/IDs/")
+        texts["PAN.pdf"] = DocumentText.Read.Text("[Page 1]\nApply for a PAN at the nearest centre. Ref 123456.", parts = 1, unit = "page")
+        texts["pan card scan.pdf"] = DocumentText.Read.Unreadable(DocumentText.Why.PASSWORD)
+        val found = runBlocking { files.idNumber(com.local.assistant.gallery.PhotoReader.Field.PAN) }
+        assertEquals(null, found.answer)
+        assertEquals(
+            "I also found pan card scan.pdf in IDs, but it's locked with a password, so I couldn't read it. Open it in your Files app to see the number.",
+            found.lockedNote,
+        )
+    }
+
+    @Test
+    fun `without All files access, or for a bank card, no file is looked at`() {
+        onPhone("e-PAN.pdf")
+        granted = false
+        assertEquals(null, runBlocking { files.idNumber(com.local.assistant.gallery.PhotoReader.Field.PAN) }.answer)
+        granted = true
+        assertEquals(null, runBlocking { files.idNumber(com.local.assistant.gallery.PhotoReader.Field.CARD) }.answer)
+        assertTrue(asked.isEmpty())
+    }
+
+    @Test
+    fun `beside a photo search, a number from a file wins, and a locked one is named when no photo gave it`() = runBlocking {
+        val photoSearch = ActionResult(linkedMapOf("ok" to true, "found" to 2), reply = "The closest photo I found isn't your PAN card, so I couldn't find your PAN.")
+        val fromFile = FileTools.IdFiles(ActionResult(linkedMapOf("ok" to true), reply = "Your PAN card file, e-PAN.pdf, shows your PAN: ABCPE1234F."))
+        var searched = false
+        val won = com.local.assistant.gallery.PhotoTools.withIdFiles(com.local.assistant.gallery.PhotoReader.Field.PAN, fromFile) { searched = true; photoSearch }
+        assertEquals(fromFile.answer, won)
+        assertFalse(searched)
+
+        val locked = FileTools.IdFiles(null, listOf(FileFinder.Found("e-PAN.pdf", "Download/", null, 1, 1, 1, null)))
+        val named = com.local.assistant.gallery.PhotoTools.withIdFiles(com.local.assistant.gallery.PhotoReader.Field.PAN, locked) { photoSearch }
+        assertTrue(named.reply!!.endsWith("I also found e-PAN.pdf in Download, but it's locked with a password, so I couldn't read it. Open it in your Files app to see the number."))
+
+        // A photo that gave the number: the reply as it was.
+        val fromPhoto = photoSearch.copy(reply = "Your PAN card shows your PAN: ABCPE1234F.")
+        assertEquals(fromPhoto, com.local.assistant.gallery.PhotoTools.withIdFiles(com.local.assistant.gallery.PhotoReader.Field.PAN, locked) { fromPhoto })
+
+        // Photos that can't be searched yet: the locked file still said.
+        val notReady = com.local.assistant.gallery.PhotoTools.withIdFiles(com.local.assistant.gallery.PhotoReader.Field.PAN, locked) { throw ToolError("The photos aren't ready for search yet.") }
+        assertTrue(notReady.result["note"].toString().contains("locked with a password"))
     }
 
     @Test

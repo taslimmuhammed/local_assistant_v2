@@ -11,6 +11,7 @@ import android.provider.MediaStore
 import android.util.Log
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
+import com.local.assistant.appContainer
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -90,6 +91,28 @@ class FilesProbeTest {
             made.forEach { runCatching { context.contentResolver.delete(it, null, null) } }
             save()
         }
+    }
+
+    /**
+     * One of our own test documents (named LA_test_…, never the user's) read as the chat reads
+     * it, and asked [question]: its text and the answer go to the report.
+     *
+     *     -e eval files -e path /sdcard/Download/LA_test_power_bill.pdf -e question "how much…"
+     */
+    @Test
+    fun readsATestDocument() = runBlocking<Unit> {
+        assumeTrue("opt-in: -e eval files", InstrumentationRegistry.getArguments().getString("eval") == "files")
+        val path = InstrumentationRegistry.getArguments().getString("path")
+        assumeTrue("-e path to an LA_test_ document", path != null && File(path).name.startsWith("LA_test_"))
+        val file = File(path!!)
+        val question = InstrumentationRegistry.getArguments().getString("question")
+        val read = DocumentFiles.read(context, file)
+        report("Read ${file.name}: ${read::class.simpleName}")
+        if (read is DocumentText.Read.Text) report("Text:\n${read.text}\n---")
+        val started = SystemClock.elapsedRealtime()
+        val answer = context.appContainer.documentReader.answer(file.name, read, question?.takeIf { it.isNotBlank() }) { report("step: $it") }
+        report("Answer in ${SystemClock.elapsedRealtime() - started} ms:\n$answer")
+        save()
     }
 
     @Test

@@ -139,7 +139,17 @@ data class ToolContext(
     val earlierText: String = "",
     /** How far a long call has got ("Reading part 2 of 5"), shown while it runs ([ToolLoop]). */
     val onStep: (String) -> Unit = {},
+    /** A document attached to the message, which read_file reads when asked to ([ToolLoop.readAttached]). */
+    val document: AttachedDocument? = null,
+    /**
+     * What the app read from [document] for the model to act on: the numbers in a call that came
+     * from it are the document's, so they're checked against it as well as the user's words.
+     */
+    val documentNotes: String = "",
 )
+
+/** A document attached to a message: the app's copy of it, and the name it was picked with. */
+data class AttachedDocument(val path: String, val name: String)
 
 /** Persists tool calls as TOOL rows in the chat. */
 interface ToolLog {

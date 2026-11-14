@@ -5,6 +5,7 @@ import com.local.assistant.data.db.AttachmentKind
 import com.local.assistant.llm.GenStats
 import com.local.assistant.llm.PromptAttachment
 import com.local.assistant.memory.retrieval.QueryText
+import com.local.assistant.memory.tools.AttachedDocument
 import com.local.assistant.memory.tools.LoopEvent
 import com.local.assistant.memory.tools.MemoryChip
 import com.local.assistant.memory.tools.NumberGrounding
@@ -77,6 +78,12 @@ class TurnRunner(
         screen: String? = null,
         /** A voice message the model may hear ([com.local.assistant.llm.ContextWindow.heard]): [userText] is the phone's hearing of it. */
         heard: Boolean = false,
+        /**
+         * A document attached to the message. A question about it, a summary, or nothing said is
+         * answered from it by the app's reader alone ([ToolLoop.readAttached]); a request to act
+         * on it ("remind me to pay this bill") goes to the chat model with notes on it.
+         */
+        document: AttachedDocument? = null,
     ): Flow<TurnEvent> = flow {
         // Never over the lock screen; shown to the model only for a message about it ("share
         // this with Anjali"), though the tools may still send it or save it either way.
@@ -86,7 +93,7 @@ class TurnRunner(
         // digits (see NumberGrounding). The live conversation never saw the exchange, so it goes;
         // the next message rebuilds it with this one in its history. Not a spoken one: its digits
         // are the recogniser's, which wrote "two thousand four hundred and fifty" as "200450".
-        if (attachment == null && !showScreen && !heard) {
+        if (attachment == null && document == null && !showScreen && !heard) {
             NumberGrounding.directAnswer(userText)?.let { answer ->
                 TurnTimings.current?.conversation = "direct_answer"
                 conversations.forget(chatId, "direct_answer")
@@ -99,12 +106,43 @@ class TurnRunner(
         scheduler.runUser {
             // Waiting here means the model was busy: a background job that can't be stopped mid-prefill.
             TurnTimings.current?.waitedMs = android.os.SystemClock.elapsedRealtime() - asked
+            if (document != null && locked) {
+                emit(TurnEvent.NeedsUnlock)
+                emit(TurnEvent.Done(null))
+                return@runUser
+            }
+            val acting = document != null && QueryText.isCommand(userText)
+            if (document != null && !acting) {
+                TurnTimings.current?.conversation = "attached_document"
+                tools.readAttached(ToolContext(chatId, userMessageId, userText, document = document)).collect { event ->
+                    when (event) {
+                        is LoopEvent.Text -> emit(TurnEvent.Text(event.delta))
+                        is LoopEvent.Memory -> emit(TurnEvent.Memory(event.recordId, event.chip))
+                        is LoopEvent.Step -> emit(TurnEvent.Step(event.label))
+                        is LoopEvent.Done -> {
+                            // Answered without the chat's conversation: rebuilt next turn from what is stored.
+                            conversations.forget(chatId, "attached_document")
+                            emit(TurnEvent.Done(null))
+                        }
+                        else -> Unit
+                    }
+                }
+                return@runUser
+            }
+            // A request to act on it: notes on the document go to the model with the message.
+            val notes = if (acting) {
+                emit(TurnEvent.Step("Reading ${document!!.name}…"))
+                tools.notesOnAttached(ToolContext(chatId, userMessageId, userText, document = document), userText)
+            } else {
+                null
+            }
+            val said = if (notes != null) "$userText\n\n$notes" else userText
             var retried = false
             var reseeded = false
             var rebuiltForPhotos = false
             while (true) {
                 val preparing = android.os.SystemClock.elapsedRealtime()
-                val turn = conversations.prepareTurn(chatId, userMessageId, userText, locked, screen = showScreen) { emit(TurnEvent.Step(it)) }
+                val turn = conversations.prepareTurn(chatId, userMessageId, said, locked, screen = showScreen) { emit(TurnEvent.Step(it)) }
                 android.util.Log.i("TurnTiming", "turn prepared in ${android.os.SystemClock.elapsedRealtime() - preparing} ms (${if (turn.fresh) "fresh" else "carried on"}, ${turn.recalledImages.size} images${if (turn.recording != null) ", the recording" else ""}, ${turn.envelope.tokens} tokens)")
                 emit(TurnEvent.Step(ToolSteps.THINKING))
                 var overflowed = false
@@ -121,7 +159,7 @@ class TurnRunner(
                 val recording = turn.recording?.let { PromptAttachment(it, AttachmentKind.AUDIO) }
                 val sent = listOfNotNull(screenshot?.takeIf { showScreen }?.let { PromptAttachment(it, AttachmentKind.IMAGE) }) +
                     (attachment?.let(::listOf) ?: recording?.let(::listOf) ?: turn.recalledImages.map { PromptAttachment(it, AttachmentKind.IMAGE) })
-                val context = ToolContext(chatId, userMessageId, userText, locked, screenshot, heard = recording != null, earlierText = turn.earlierText)
+                val context = ToolContext(chatId, userMessageId, userText, locked, screenshot, heard = recording != null, earlierText = turn.earlierText, documentNotes = notes.orEmpty())
                 tools.run(turn.session, turn.envelope.text, sent, context, sources = listOf(turn.prefix), canRebuild = !turn.fresh && !rebuiltForPhotos).collect { event ->
                     when (event) {
                         is LoopEvent.Text -> {

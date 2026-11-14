@@ -49,10 +49,17 @@ class DocumentReader(
      * its tools ("remind me to pay this bill"); null when it can't be read.
      */
     suspend fun gist(name: String, read: Read, request: String, onStep: (String) -> Unit = {}): String? {
-        if (read !is Read.Text) return null
+        if (read is Read.Unreadable) return null
+        if (read is Read.Scanned && (backend.capabilities?.visionTokensPerImage ?: 0) <= 0) return null
         return model.withModelFree {
             try {
                 if (!backend.ensureReady()) return@withModelFree null
+                if (read is Read.Scanned) {
+                    // A bill or letter saved as a picture: its pages looked at, as for a question.
+                    onStep("Looking at the pages of $name")
+                    return@withModelFree lookAt(name, read, Plan.gistAsk(request)).replace("**", "").trim().takeIf { it.isNotEmpty() }
+                }
+                read as Read.Text
                 onStep("Reading $name")
                 val parts = Plan.chunks(read.text, estimator, QUESTION_PART_TOKENS)
                 val picked = Plan.pick(parts, request, estimator, ONE_PASS_TOKENS)
@@ -109,9 +116,15 @@ class DocumentReader(
 
     private suspend fun scanned(name: String, read: Read.Scanned, question: String?, onStep: (String) -> Unit): String {
         if ((backend.capabilities?.visionTokensPerImage ?: 0) <= 0) return "$name is pictures of pages, with no text in it, and I can't look at pictures on this phone."
-        val summary = Plan.isSummary(question)
         onStep("Looking at the pages of $name")
-        val reply = backend.openChat(SCANNED_SPEC).use { session ->
+        val reply = lookAt(name, read, if (Plan.isSummary(question)) Plan.summaryAsk() else Plan.questionAsk(question!!))
+        val note = if (read.pageCount > read.pages.size) "I looked at the first ${read.pages.size} of its ${read.pageCount} pages, which are pictures with no text." else null
+        return Plan.reply(reply.replace("**", ""), note)
+    }
+
+    /** [read]'s pages shown to the vision model one by one, and [ask] put with the last. */
+    private suspend fun lookAt(name: String, read: Read.Scanned, question: String): String =
+        backend.openChat(SCANNED_SPEC).use { session ->
             suspend fun ask(prompt: String, page: java.io.File): String {
                 val out = StringBuilder()
                 session.send(prompt, PromptAttachment(page.path, AttachmentKind.IMAGE)).collect { event ->
@@ -128,12 +141,8 @@ class DocumentReader(
                 if (i == pages.lastIndex) break
                 ask("Page ${i + 1} of the document \"$name\". Read it; reply with only: OK", page)
             }
-            val ask = if (summary) Plan.summaryAsk() else Plan.questionAsk(question!!)
-            ask("Page ${pages.size} of the document \"$name\". From the page${if (pages.size > 1) "s" else ""} you've seen: $ask", pages.last())
+            ask("Page ${pages.size} of the document \"$name\". From the page${if (pages.size > 1) "s" else ""} you've seen: $question", pages.last())
         }
-        val note = if (read.pageCount > read.pages.size) "I looked at the first ${read.pages.size} of its ${read.pageCount} pages, which are pictures with no text." else null
-        return Plan.reply(reply.replace("**", ""), note)
-    }
 
     private suspend fun complete(input: String, maxTokens: Int): String =
         backend.complete(SYSTEM, input, maxTokens = maxTokens, sampling = Sampling.BACKGROUND).replace("**", "").trim()
@@ -326,8 +335,9 @@ class DocumentReader(
 
         const val COULDNT_READ_NOW = "I couldn't read it just now."
 
-        fun couldNotReadNow(name: String): String = "I found $name, but couldn't read it just now."
+        // Not "I found it, but…": the same words do for a document the user attached.
+        fun couldNotReadNow(name: String): String = "I couldn't read $name just now. Please try again."
 
-        fun couldNotRead(name: String, why: DocumentText.Why): String = "I found $name, but couldn't read it: ${why.said}."
+        fun couldNotRead(name: String, why: DocumentText.Why): String = "I couldn't read $name: ${why.said}."
     }
 }

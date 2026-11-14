@@ -36,11 +36,13 @@ import androidx.compose.ui.unit.dp
 import com.local.assistant.files.DocumentFiles
 import com.local.assistant.files.FileNames
 import com.local.assistant.files.FileTools
+import com.local.assistant.media.AttachmentStore
 import com.local.assistant.memory.tools.FileRef
 import com.local.assistant.memory.tools.FileSet
 import com.local.assistant.ui.theme.AppColors
 import com.local.assistant.ui.theme.Glass
 import com.local.assistant.ui.theme.glass
+import java.io.File
 import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
@@ -98,6 +100,43 @@ private fun FileRow(file: FileRef, read: Boolean) {
                 color = AppColors.TextSecondary,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
+            )
+        }
+    }
+}
+
+/**
+ * A document attached to a message ([com.local.assistant.data.db.AttachmentKind.DOCUMENT]), in
+ * its bubble or above the composer: its name, kind and size, tapped to open it.
+ */
+@Composable
+fun DocumentAttachment(path: String, modifier: Modifier = Modifier) {
+    val context = LocalContext.current
+    val name = remember(path) { AttachmentStore.documentName(path) }
+    val size = remember(path) { File(path).length() }
+    val ref = FileRef(name, "", path, sizeBytes = size)
+    Row(
+        modifier = modifier
+            .widthIn(max = 280.dp)
+            .glass(RoundedCornerShape(14.dp), Glass.Raised)
+            .clickable {
+                if (!DocumentFiles.open(context, path, name, null, null)) {
+                    Toast.makeText(context, "No app on this phone opens ${name.substringAfterLast('.', "this file")} files", Toast.LENGTH_SHORT).show()
+                }
+            }
+            .padding(horizontal = 12.dp, vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        Icon(iconOf(ref), contentDescription = null, tint = AppColors.TextSecondary, modifier = Modifier.size(26.dp))
+        Column(Modifier.weight(1f, fill = false)) {
+            Text(name, style = MaterialTheme.typography.bodySmall, color = AppColors.TextPrimary, maxLines = 2, overflow = TextOverflow.MiddleEllipsis)
+            val kind = FileNames.extensionOf(name).uppercase(Locale.ROOT).ifEmpty { "Document" }
+            Text(
+                listOfNotNull(kind, size.takeIf { it > 0 }?.let(FileTools::sizeOf)).joinToString(" · "),
+                style = MaterialTheme.typography.labelSmall,
+                color = AppColors.TextSecondary,
+                maxLines = 1,
             )
         }
     }

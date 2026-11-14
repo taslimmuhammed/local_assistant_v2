@@ -7,6 +7,8 @@ import com.local.assistant.data.repo.ChatRepository
 import com.local.assistant.llm.LlmService
 import com.local.assistant.llm.ContextWindow
 import com.local.assistant.llm.PromptAttachment
+import com.local.assistant.media.AttachmentStore
+import com.local.assistant.memory.tools.AttachedDocument
 import com.local.assistant.memory.prompt.TurnEvent
 import com.local.assistant.memory.prompt.TurnRunner
 import com.local.assistant.memory.prompt.TurnTimings
@@ -201,6 +203,7 @@ class ChatSender(
                         fallback = when (attachment?.kind) {
                             AttachmentKind.IMAGE -> "Image"
                             AttachmentKind.AUDIO -> ChatRepository.VOICE_TITLE
+                            AttachmentKind.DOCUMENT -> attachment?.path?.let(AttachmentStore::documentName) ?: ChatRepository.DEFAULT_TITLE
                             null -> ChatRepository.DEFAULT_TITLE
                         },
                     )
@@ -221,7 +224,14 @@ class ChatSender(
                 } else {
                     ContextWindow.heard(attachment?.kind, text, attachment?.durationMs)
                 }
-                turns.run(chat, asked, text, promptAttachment, locked, screen, heard).collect { event ->
+                // A document goes to the app's reader, never to the model as itself (TurnRunner).
+                val documentPath = if (stored != null) {
+                    stored.takeIf { it.attachmentKind == AttachmentKind.DOCUMENT }?.attachmentPath
+                } else {
+                    attachment?.takeIf { it.kind == AttachmentKind.DOCUMENT }?.path
+                }
+                val document = documentPath?.takeIf { java.io.File(it).isFile }?.let { AttachedDocument(it, AttachmentStore.documentName(it)) }
+                turns.run(chat, asked, text, promptAttachment, locked, screen, heard, document).collect { event ->
                     when (event) {
                         is TurnEvent.Text -> {
                             val first = reply.isEmpty()

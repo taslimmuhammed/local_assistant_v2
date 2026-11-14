@@ -472,6 +472,45 @@ class ToolLoop(
         running.await()
     }
 
+    /**
+     * The document attached to the message ([ToolContext.document]) read for its question, or
+     * summarised, and the answer given as the reply, with no turn of the chat model's: as if it had
+     * called read_file, so the chat records, replays and shows it the same way. The document
+     * reader closed the chat's conversation ([com.local.assistant.memory.work.ModelAccess.withModelFree]),
+     * so the turn ends stale and the next one rebuilds it.
+     */
+    fun readAttached(context: ToolContext): Flow<LoopEvent> = flow {
+        val document = context.document ?: error("Nothing attached")
+        val question = context.userText.trim().takeIf { it.isNotEmpty() }
+        val call = ToolCall(
+            ToolCatalog.READ_FILE,
+            linkedMapOf<String, Any?>("name" to document.name, ToolExecutor.ATTACHED to true, "question" to question).filterValues { it != null },
+        )
+        emit(LoopEvent.Step("Reading ${document.name}…"))
+        val outcome = executeShowingSteps(call, context)
+        if (outcome.chip != null && outcome.recordId != null) emit(LoopEvent.Memory(outcome.recordId, outcome.chip, call.name))
+        emit(LoopEvent.Text(outcome.reply ?: com.local.assistant.files.DocumentReader.couldNotReadNow(document.name)))
+        emit(LoopEvent.Done(null, changedPrefix = false, toolRounds = 1, staleConversation = true))
+    }
+
+    /**
+     * Notes on the attached document for [request], for the chat model to act on ("remind me to
+     * pay this bill"), kept as a read_file call so a later turn has them in its history. Null
+     * when it couldn't be read; the model is then told so instead.
+     */
+    suspend fun notesOnAttached(context: ToolContext, request: String): String {
+        val document = context.document ?: error("Nothing attached")
+        val call = ToolCall(ToolCatalog.READ_FILE, linkedMapOf("name" to document.name, ToolExecutor.ATTACHED to true, ToolExecutor.NOTES_FOR to request))
+        val result = executor.execute(call, context).result
+        val parsed = runCatching { com.google.gson.JsonParser.parseString(result).asJsonObject }.getOrNull()
+        val notes = parsed?.get("notes")?.takeIf { it.isJsonPrimitive }?.asString
+        return if (notes != null) {
+            "[Attached document \"${document.name}\". The app read it; notes on it for this request, not the user's words: $notes]"
+        } else {
+            "[Attached document \"${document.name}\". ${parsed?.get("note")?.takeIf { it.isJsonPrimitive }?.asString ?: "Couldn't read it just now."} Tell the user if that matters for what they asked.]"
+        }
+    }
+
     /** See [ToolExecutor.showRelatedPhotos]. */
     suspend fun showRelatedPhotos(chatId: Long, mediaIds: List<Long>): Pair<Long, MemoryChip> = executor.showRelatedPhotos(chatId, mediaIds)
 

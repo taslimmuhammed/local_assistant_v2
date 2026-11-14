@@ -49,11 +49,14 @@ import androidx.compose.material.icons.automirrored.outlined.VolumeUp
 import androidx.compose.material.icons.outlined.Add
 import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material.icons.outlined.DeleteOutline
+import androidx.compose.material.icons.outlined.Description
 import androidx.compose.material.icons.outlined.Image
 import androidx.compose.material.icons.outlined.Menu
 import androidx.compose.material.icons.outlined.Mic
 import androidx.compose.material.icons.outlined.Stop
 import androidx.compose.material3.DrawerValue
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -220,6 +223,11 @@ fun ChatScreen(
     val imagePicker = rememberLauncherForActivityResult(
         ActivityResultContracts.PickVisualMedia(),
     ) { uri -> uri?.let(viewModel::attachImage) }
+
+    // Read by the app itself (DocumentReader), so offered with any model, vision or not.
+    val documentPicker = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocument(),
+    ) { uri -> uri?.let(viewModel::attachDocument) }
 
     // Recording only starts once the permission is actually granted, never optimistically.
     val micPermission = rememberLauncherForActivityResult(
@@ -549,6 +557,7 @@ fun ChatScreen(
                             PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly),
                         )
                     },
+                    onPickDocument = { documentPicker.launch(DOCUMENT_TYPES) },
                     onDiscardAttachment = viewModel::discardPendingAttachment,
                     onStartRecording = {
                         val granted = ContextCompat.checkSelfPermission(
@@ -695,6 +704,7 @@ private fun Composer(
     onTyping: () -> Unit,
     onStop: () -> Unit,
     onPickImage: () -> Unit,
+    onPickDocument: () -> Unit,
     onDiscardAttachment: () -> Unit,
     onStartRecording: () -> Unit,
     onStopRecording: () -> Unit,
@@ -727,8 +737,36 @@ private fun Composer(
             verticalAlignment = Alignment.Bottom,
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            if (recording == null && supportsImages) {
-                GlassRoundButton(Icons.Outlined.Image, "Attach image", onPickImage, enabled = enabled && !isGenerating, size = COMPOSER_HEIGHT)
+            if (recording == null) {
+                // A photo (when the model can see) or a document: one button, as on WhatsApp.
+                var attachMenu by remember { mutableStateOf(false) }
+                Box {
+                    GlassRoundButton(
+                        Icons.Outlined.Add,
+                        "Attach",
+                        { if (supportsImages) attachMenu = true else onPickDocument() },
+                        enabled = enabled && !isGenerating,
+                        size = COMPOSER_HEIGHT,
+                    )
+                    DropdownMenu(expanded = attachMenu, onDismissRequest = { attachMenu = false }) {
+                        DropdownMenuItem(
+                            text = { Text("Photo") },
+                            leadingIcon = { Icon(Icons.Outlined.Image, contentDescription = null) },
+                            onClick = {
+                                attachMenu = false
+                                onPickImage()
+                            },
+                        )
+                        DropdownMenuItem(
+                            text = { Text("Document") },
+                            leadingIcon = { Icon(Icons.Outlined.Description, contentDescription = null) },
+                            onClick = {
+                                attachMenu = false
+                                onPickDocument()
+                            },
+                        )
+                    }
+                }
             }
             Box(
                 modifier = Modifier
@@ -1000,6 +1038,25 @@ private fun SpeakingBar(onStop: () -> Unit) {
     }
 }
 
+/**
+ * What the document picker offers: what DocumentText reads, and the old Office formats, so
+ * picking one gets a reply saying how to make it readable rather than nothing to pick.
+ */
+private val DOCUMENT_TYPES = arrayOf(
+    "application/pdf",
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+    "application/vnd.oasis.opendocument.text",
+    "application/vnd.oasis.opendocument.spreadsheet",
+    "application/vnd.oasis.opendocument.presentation",
+    "application/msword",
+    "application/vnd.ms-excel",
+    "application/vnd.ms-powerpoint",
+    "application/rtf",
+    "text/*",
+)
+
 /** Shorter than this, a press on the mic is a tap: hands-free recording rather than hold-to-talk. */
 private const val TAP_MS = 400L
 
@@ -1018,6 +1075,7 @@ private fun PendingAttachmentChip(
         when (attachment.kind) {
             AttachmentKind.IMAGE -> AttachedImage(attachment.path, maxHeight = 96)
             AttachmentKind.AUDIO -> AudioAttachment(attachment.path, attachment.durationMs)
+            AttachmentKind.DOCUMENT -> DocumentAttachment(attachment.path)
         }
         Spacer(Modifier.weight(1f))
         IconButton(onClick = onDiscard, modifier = Modifier.size(36.dp)) {

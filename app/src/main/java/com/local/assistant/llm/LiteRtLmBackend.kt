@@ -131,7 +131,10 @@ class LiteRtLmBackend(
     private fun MessageEntity.toLiteRtMessages(): List<Message> = when (role) {
         Role.USER -> listOf(
             Message.user(
-                contentsOf(text, listOfNotNull(attachmentPath?.let { path -> ContextWindow.sentAttachment(attachmentKind, text)?.let { PromptAttachment(path, it) } })),
+                contentsOf(
+                    ContextWindow.historyText(attachmentKind, attachmentPath, text),
+                    listOfNotNull(attachmentPath?.let { path -> ContextWindow.sentAttachment(attachmentKind, text)?.let { PromptAttachment(path, it) } }),
+                ),
             ),
         )
         Role.ASSISTANT -> listOf(Message.model(text))
@@ -232,6 +235,8 @@ private fun contentsOf(text: String, attachments: List<PromptAttachment>): Conte
         when (attachment.kind) {
             AttachmentKind.IMAGE -> Content.ImageFile(file.absolutePath)
             AttachmentKind.AUDIO -> Content.AudioFile(file.absolutePath)
+            // Read by the app, never sent as media (ContextWindow.sentAttachment).
+            AttachmentKind.DOCUMENT -> null
         }
     }
     if (media.isEmpty()) return Contents.of(text)

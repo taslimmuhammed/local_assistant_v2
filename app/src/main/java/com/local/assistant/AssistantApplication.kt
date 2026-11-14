@@ -553,6 +553,11 @@ class AppContainer(context: Context) {
         reader = documentReader,
         now = ZonedDateTime::now,
         ready = ::fileSearchReady,
+        attached = { chatId ->
+            chatRepository.messagesFor(chatId)
+                .filter { it.attachmentKind == com.local.assistant.data.db.AttachmentKind.DOCUMENT && it.attachmentPath?.let(::File)?.isFile == true }
+                .map { com.local.assistant.memory.tools.AttachedDocument(it.attachmentPath!!, com.local.assistant.media.AttachmentStore.documentName(it.attachmentPath)) }
+        },
     )
 
     val toolExecutor = ToolExecutor(
@@ -596,6 +601,7 @@ class AppContainer(context: Context) {
             },
             mayRead = { context.getSystemService(android.app.KeyguardManager::class.java)?.isKeyguardLocked != true },
             reader = { path, question -> if ((llmService.capabilities.value?.visionTokensPerImage ?: 0) > 0) photoReader.answer(path, question) else null },
+            documents = { field -> fileTools.idNumber(field) },
         ),
         health = healthTools,
         places = placeFinder,

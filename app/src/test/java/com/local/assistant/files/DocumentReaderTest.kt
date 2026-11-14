@@ -138,7 +138,7 @@ class DocumentReaderTest {
     fun `an unreadable one says why, without the model`() = runBlocking {
         val backend = FakeBackend { "x" }
         val reply = reader(backend).answer("aadhaar.pdf", Read.Unreadable(DocumentText.Why.PASSWORD), "what's my aadhaar number?")
-        assertEquals("I found aadhaar.pdf, but couldn't read it: it's protected with a password.", reply)
+        assertEquals("I couldn't read aadhaar.pdf: it's protected with a password.", reply)
         assertEquals(0, backend.freed)
     }
 

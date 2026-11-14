@@ -6,6 +6,7 @@ import android.graphics.BitmapFactory
 import android.graphics.Matrix
 import android.media.ExifInterface
 import android.net.Uri
+import android.provider.OpenableColumns
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.File
@@ -58,6 +59,32 @@ class AttachmentStore(private val context: Context) {
         destination
     }
 
+    /**
+     * Copies a picked document in as `<uuid>-<its name>`, so the name it had is kept for the
+     * chat ([documentName]). Its text is read when a message is sent with it, which takes well
+     * under a second, so nothing else is stored beside it.
+     */
+    suspend fun importDocument(uri: Uri): File = withContext(Dispatchers.IO) {
+        var name: String? = null
+        var size = -1L
+        context.contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME, OpenableColumns.SIZE), null, null, null)?.use { cursor ->
+            if (cursor.moveToFirst()) {
+                name = cursor.getString(0)
+                if (!cursor.isNull(1)) size = cursor.getLong(1)
+            }
+        }
+        if (size > MAX_DOCUMENT_BYTES) throw IOException("That document is over ${MAX_DOCUMENT_BYTES / (1024 * 1024)} MB, too big to attach")
+        val destination = File(dir, "${UUID.randomUUID()}-${safeName(name ?: uri.lastPathSegment ?: "document")}")
+        val copied = context.contentResolver.openInputStream(uri)?.use { input ->
+            destination.outputStream().use { output -> input.copyTo(output) }
+        } ?: throw IOException("Could not read the selected document")
+        if (copied > MAX_DOCUMENT_BYTES) {
+            destination.delete()
+            throw IOException("That document is over ${MAX_DOCUMENT_BYTES / (1024 * 1024)} MB, too big to attach")
+        }
+        destination
+    }
+
     fun delete(path: String?) {
         if (path == null) return
         val file = File(path)
@@ -70,6 +97,27 @@ class AttachmentStore(private val context: Context) {
             if (file.absolutePath !in keepPaths) file.delete()
         }
         Unit
+    }
+
+    companion object {
+        const val MAX_DOCUMENT_BYTES = 100L * 1024 * 1024
+
+        private val UUID_PREFIX = Regex("^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}-")
+
+        /** The name an attached document had when it was picked: its file's, less the id in front. */
+        fun documentName(path: String): String = File(path).name.replace(UUID_PREFIX, "")
+
+        /** A name that is safe as a file name, its extension kept when it's long. */
+        internal fun safeName(name: String): String {
+            val clean = name.map { if (it == '/' || it == '\\' || it.code < 32 || it == ':') '_' else it }.joinToString("").trim().trimStart('.')
+            if (clean.isEmpty()) return "document"
+            if (clean.length <= MAX_NAME) return clean
+            val dot = clean.lastIndexOf('.')
+            val extension = if (dot > 0 && clean.length - dot <= 8) clean.substring(dot) else ""
+            return clean.take(MAX_NAME - extension.length) + extension
+        }
+
+        private const val MAX_NAME = 120
     }
 
     private fun sampleSizeFor(width: Int, height: Int): Int {
