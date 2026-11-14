@@ -9,6 +9,7 @@ import com.local.assistant.gallery.GalleryDatabase
 import com.local.assistant.gallery.PersonEntity
 import com.local.assistant.gallery.PhotoLibrary
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -54,67 +55,124 @@ class FaceIndex(
     private val finderLock = Mutex()
     private var finder: FaceFinder? = null
 
+    /** "Find people" is on. */
+    val isOn: Boolean get() = enabled()
+
+    /** Faces found since they were last grouped: grouped again every [REGROUP_EVERY], and at the end of a pass. */
+    @Volatile
+    private var ungrouped = 0
+
+    /** Whether [photo] still needs its faces looked for: Find people is on, it's a photo, and these models haven't seen it. */
+    fun wants(photo: com.local.assistant.gallery.PhotoEntity): Boolean =
+        enabled() && photo.durationMs == null && photo.facesModel != MODEL_ID
+
     /**
-     * Finds the faces in photos not yet looked at, newest first, a batch per background slot via
-     * [runWhenIdle], until [deadline]. Regroups when it found any. False when photos are left.
+     * Finds and keeps the faces in [bitmap], photo [mediaId] decoded at up to
+     * [FaceFinder.PHOTO_PIXELS]; the caller recycles it. The photo index calls this for each
+     * photo as it embeds it, so people are found along with the photos, not after all of them.
+     * Returns how many faces it found.
      */
-    suspend fun indexPending(deadline: Long, runWhenIdle: suspend (suspend () -> Boolean) -> Boolean): Boolean {
-        if (!enabled()) return true
+    suspend fun lookAt(mediaId: Long, bitmap: android.graphics.Bitmap): Int {
         // New matching rules: the faces found so far are placed again by them, once.
         if (groupedBy() != FaceGrouping.VERSION) {
             regroup()
             setGroupedBy(FaceGrouping.VERSION)
         }
+        val inPhoto = finderLock.withLock { withContext(Dispatchers.Default) { finder().find(bitmap) } }
+        keep(mediaId, inPhoto)
+        ungrouped += inPhoto.size
+        foundSoFar += inPhoto.size
+        return inPhoto.size
+    }
+
+    /** Faces found since the app started, so a pass can tell whether it found any. */
+    @Volatile
+    var foundSoFar = 0L
+        private set
+
+    /** A photo that couldn't be read: marked looked at, with no faces, as before. */
+    suspend fun unreadable(mediaId: Long) = keep(mediaId, emptyList())
+
+    private suspend fun keep(mediaId: Long, inPhoto: List<FoundFace>) {
+        database.useWriterConnection { connection ->
+            connection.immediateTransaction {
+                faces.deleteForPhoto(mediaId)
+                if (inPhoto.isNotEmpty()) {
+                    faces.insert(
+                        inPhoto.map {
+                            FaceEntity(
+                                mediaId = mediaId,
+                                x = it.x, y = it.y, w = it.w, h = it.h,
+                                score = it.score,
+                                print = FacePrints.quantize(it.print),
+                            )
+                        },
+                    )
+                }
+                photos.setFacesModel(mediaId, MODEL_ID)
+            }
+        }
+    }
+
+    /** Groups the faces found so far once enough are new, so people appear while indexing runs. */
+    suspend fun regroupIfDue() {
+        if (ungrouped >= REGROUP_EVERY) regroupNew()
+    }
+
+    /**
+     * Groups whatever was found since the last grouping, even when the pass was stopped: a stopped
+     * pass used to leave its faces ungrouped until the next one finished.
+     */
+    suspend fun regroupNew() {
+        if (ungrouped == 0) return
+        withContext(NonCancellable) {
+            ungrouped = 0
+            regroup()
+        }
+    }
+
+    /**
+     * Finds the faces in photos not yet looked at, newest first, a batch per background slot via
+     * [runWhenIdle], until [deadline]: the photos indexed before Find people was turned on. Most
+     * photos get theirs from [lookAt] as they're indexed. False when photos are left.
+     */
+    suspend fun indexPending(deadline: Long, runWhenIdle: suspend (suspend () -> Boolean) -> Boolean): Boolean {
+        if (!enabled()) return true
         var looked = 0
         var found = 0
         val started = clock()
         try {
             while (clock() < deadline) {
-                val batch = photos.facesPending(MODEL_ID, BATCH)
-                if (batch.isEmpty()) return true
-                runWhenIdle {
+                val finished = runWhenIdle {
+                    // Read inside the slot: a batch read before it may be half done by the time it starts.
+                    val batch = photos.facesPending(MODEL_ID, BATCH)
+                    if (batch.isEmpty()) return@runWhenIdle true
                     for (photo in batch) {
                         coroutineContext.ensureActive()
-                        if (!enabled()) return@runWhenIdle false
+                        // Turned off meanwhile: stop rather than come back for the same batch.
+                        if (!enabled()) return@runWhenIdle true
                         val bitmap = withContext(Dispatchers.IO) { library.bitmap(photo.mediaId, FaceFinder.PHOTO_PIXELS) }
-                        val inPhoto = bitmap?.let { b ->
+                        if (bitmap == null) {
+                            unreadable(photo.mediaId)
+                        } else {
                             try {
-                                finderLock.withLock { withContext(Dispatchers.Default) { finder().find(b) } }
+                                found += lookAt(photo.mediaId, bitmap)
                             } finally {
-                                b.recycle()
-                            }
-                        }.orEmpty()
-                        database.useWriterConnection { connection ->
-                            connection.immediateTransaction {
-                                faces.deleteForPhoto(photo.mediaId)
-                                if (inPhoto.isNotEmpty()) {
-                                    faces.insert(
-                                        inPhoto.map {
-                                            FaceEntity(
-                                                mediaId = photo.mediaId,
-                                                x = it.x, y = it.y, w = it.w, h = it.h,
-                                                score = it.score,
-                                                print = FacePrints.quantize(it.print),
-                                            )
-                                        },
-                                    )
-                                }
-                                photos.setFacesModel(photo.mediaId, MODEL_ID)
+                                bitmap.recycle()
                             }
                         }
                         looked++
-                        found += inPhoto.size
                     }
-                    true
+                    false
                 }
                 refreshStatus()
+                if (!enabled() || finished) return true
+                regroupIfDue()
             }
             return false
         } finally {
-            if (looked > 0) {
-                Log.i(TAG, "Looked at $looked photos, $found faces, in ${(clock() - started) / 1000.0} s")
-                if (found > 0) regroup()
-            }
+            if (looked > 0) Log.i(TAG, "Looked at $looked photos, $found faces, in ${(clock() - started) / 1000.0} s")
+            regroupNew()
         }
     }
 
@@ -323,6 +381,9 @@ class FaceIndex(
         const val MODEL_ID = "yunet-2023mar+sface-2021dec-int8w"
 
         const val BATCH = 16
+
+        /** New faces between groupings while indexing: people show up as they're found. */
+        const val REGROUP_EVERY = 500
 
         val SELF = setOf("me", "myself", "i", "user", "the user", "my", "mine")
     }

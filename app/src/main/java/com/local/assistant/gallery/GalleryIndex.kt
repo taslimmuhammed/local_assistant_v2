@@ -1,6 +1,7 @@
 package com.local.assistant.gallery
 
 import android.util.Log
+import com.local.assistant.gallery.faces.FaceFinder
 import com.local.assistant.memory.embed.Int8Vectors
 import com.local.assistant.memory.work.ModelScheduler
 import com.local.assistant.privacy.LogText
@@ -8,6 +9,9 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.async
+import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -25,10 +29,11 @@ import kotlin.coroutines.coroutineContext
  * moments of each, so a search finds the moment as well as the video.
  *
  * [start] brings the index in line with MediaStore (new photos in, edited ones redone, deleted
- * ones out) and then embeds whatever has no vector yet, newest first. Every batch goes through
+ * ones out) and then embeds whatever has no vector yet: photos newest first, then videos. With
+ * Find people on, each photo's faces are looked for in the same slot. Every batch goes through
  * the [ModelScheduler], behind anything the user or the chat memory is doing, and stops between
- * photos when they start. It runs while the Photos screen is open, while the app stays in front
- * on phones with room for it, and on the charger at night ([indexUntil]).
+ * photos when they start. It starts once the photo model and access are there and runs while the
+ * app is in front, and on the charger at night ([indexUntil]).
  */
 class GalleryIndex(
     private val dao: PhotoDao,
@@ -42,6 +47,10 @@ class GalleryIndex(
     private val places: com.local.assistant.gallery.places.PlaceList? = null,
     /** Which photos look like documents, each time that's worked out again. */
     private val onDocuments: (Set<Long>) -> Unit = {},
+    /** After a pass that found faces: contacts' photos name the people they clearly match. */
+    private val afterFaces: suspend () -> Unit = {},
+    /** The phone's thermal status (`PowerManager.THERMAL_STATUS_*`); indexing waits while it's warm. */
+    private val heat: () -> Int = { 0 },
     private val clock: () -> Long = System::currentTimeMillis,
 ) {
 
@@ -51,6 +60,8 @@ class GalleryIndex(
         /** Of those, how many have been looked at (including the few that could not be read). */
         val indexed: Int = 0,
         val running: Boolean = false,
+        /** Waiting for the phone to cool before carrying on. */
+        val cooling: Boolean = false,
     ) {
         val remaining: Int get() = (total - indexed).coerceAtLeast(0)
     }
@@ -115,15 +126,27 @@ class GalleryIndex(
     private suspend fun pass(deadline: Long): Boolean {
         if (!embedder.isInstalled || library.access() == PhotoLibrary.Access.NONE) return true
         _status.update { it.copy(running = true) }
-        sync()
-        refreshStatus()
-        if (!indexPending(deadline)) return false
-        // Photo search first, then which are documents (the model is still loaded), then where
-        // they were taken (quick), then people.
-        scoreDocuments()
-        embedder.release()
-        if (!locatePending(deadline)) return false
-        return faces?.indexPending(deadline, ::runWhenIdle) ?: true
+        val facesBefore = faces?.foundSoFar ?: 0L
+        var finished = false
+        try {
+            sync()
+            refreshStatus()
+            // Photos and their faces together, then which are documents (the model is still
+            // loaded), then where they were taken (quick), then the faces of photos indexed
+            // before Find people was on.
+            if (!indexPending(deadline)) return false
+            scoreDocuments()
+            embedder.release()
+            if (!locatePending(deadline)) return false
+            finished = faces?.indexPending(deadline) { block -> runWhenIdle(block) } ?: true
+            return finished
+        } finally {
+            // Faces found are grouped even when the pass was stopped, so people show up.
+            faces?.regroupNew()
+            if (finished && faces != null && faces.foundSoFar > facesBefore) {
+                runCatching { afterFaces() }.onFailure { if (it is CancellationException) throw it else Log.w(TAG, "Naming people from contacts failed", it) }
+            }
+        }
     }
 
     /** Brings the table in line with what MediaStore lists now. */
@@ -151,42 +174,78 @@ class GalleryIndex(
         }
     }
 
+    private enum class Slot { MORE, DONE, NO_MODEL }
+
     private suspend fun indexPending(deadline: Long): Boolean {
         var embedded = 0
+        var looked = 0
         val started = clock()
         try {
             while (clock() < deadline) {
-                val batch = dao.pending(GalleryModel.MODEL_ID, BATCH)
-                if (batch.isEmpty()) return true
-                val finished = runWhenIdle {
+                val slot = runWhenIdle { coroutineScope {
+                    // Read inside the slot: a batch read before it could be half saved by a slot
+                    // the user's turn cut short, and those photos embedded twice.
+                    val batch = dao.pending(GalleryModel.MODEL_ID, BATCH)
+                    if (batch.isEmpty()) return@coroutineScope Slot.DONE
                     for (photo in batch) {
-                        coroutineContext.ensureActive()
+                        ensureActive()
                         if (photo.durationMs != null) {
                             // A video is a slot of its own: up to twenty moments, several seconds.
                             if (photo !== batch.first()) break
-                            if (!indexVideo(photo.mediaId, photo.durationMs)) return@runWhenIdle false
+                            if (!indexVideo(photo, photo.durationMs)) return@coroutineScope Slot.NO_MODEL
                             embedded++
                             break
                         }
+                        // Its faces while it's embedded (the face models run on the CPU, the photo
+                        // model's vision on the GPU), so people are found along with the photos.
+                        // Decoded on its own at the larger size faces need: the photo vector stays
+                        // exactly what it was.
+                        val lookedFor = if (faces?.wants(photo) == true) async(Dispatchers.Default) { lookForFaces(faces, photo.mediaId) } else null
                         val jpeg = withContext(Dispatchers.IO) { library.jpeg(photo.mediaId, GalleryModel.INPUT_PIXELS) }
                         val vector = jpeg?.let { embedder.embedImage(it) }?.let(Int8Vectors::quantize)
-                        if (vector == null && !embedder.isLoaded) return@runWhenIdle false
+                        if (vector == null && !embedder.isLoaded) {
+                            lookedFor?.cancelAndJoin()
+                            return@coroutineScope Slot.NO_MODEL
+                        }
                         dao.setEmbedding(photo.mediaId, vector, if (vector == null) PhotoEntity.FAILED else GalleryModel.MODEL_ID)
                         vectorsStale = true
                         embedded++
+                        if (lookedFor != null) {
+                            lookedFor.await()
+                            looked++
+                        }
                     }
-                    true
-                }
+                    Slot.MORE
+                } }
                 refreshStatus()
-                // The model would not load: nothing more can be done until it does.
-                if (!finished) return true
+                if (looked > 0) faces?.refreshStatus()
+                when (slot) {
+                    Slot.DONE -> return true
+                    // The model would not load: nothing more can be done until it does.
+                    Slot.NO_MODEL -> return true
+                    Slot.MORE -> faces?.regroupIfDue()
+                }
             }
             return false
         } finally {
             if (embedded > 0) {
                 val seconds = (clock() - started) / 1000.0
-                Log.i(TAG, "Indexed $embedded photos in ${"%.1f".format(seconds)} s; ${_status.value.remaining} left")
+                Log.i(TAG, "Indexed $embedded photos (faces looked for in $looked) in ${"%.1f".format(seconds)} s; ${_status.value.remaining} left")
             }
+        }
+    }
+
+    /** Finds and keeps the faces in photo [mediaId]; one that can't be read is marked looked at. */
+    private suspend fun lookForFaces(faces: com.local.assistant.gallery.faces.FaceIndex, mediaId: Long) {
+        val bitmap = withContext(Dispatchers.IO) { library.bitmap(mediaId, FaceFinder.PHOTO_PIXELS) }
+        if (bitmap == null) {
+            faces.unreadable(mediaId)
+            return
+        }
+        try {
+            faces.lookAt(mediaId, bitmap)
+        } finally {
+            bitmap.recycle()
         }
     }
 
@@ -217,12 +276,26 @@ class GalleryIndex(
         onDocuments(ids)
     }
 
-    /** Embeds moments of a video; false when the model won't load. A video that can't be read is marked failed. */
-    private suspend fun indexVideo(mediaId: Long, durationMs: Long): Boolean {
-        val frames = withContext(Dispatchers.IO) {
-            library.frames(mediaId, durationMs, GalleryModel.INPUT_PIXELS, FRAME_EVERY_MS, MAX_FRAMES)
+    /**
+     * Embeds moments of a video, saving each as it's done, so a video the user's turn interrupts
+     * carries on where it stopped rather than from its first moment. False when the model won't
+     * load. A video that can't be read is marked failed.
+     */
+    private suspend fun indexVideo(video: PhotoEntity, durationMs: Long): Boolean {
+        val mediaId = video.mediaId
+        val partial = PhotoEntity.partial(GalleryModel.MODEL_ID)
+        // Part done by this model: those moments are kept. New, edited or done by another model:
+        // its old moments go.
+        val done = if (video.modelId == partial) {
+            dao.frameTimes(mediaId).toHashSet()
+        } else {
+            dao.startVideo(mediaId, partial)
+            emptySet()
         }
-        val vectors = ArrayList<FrameEntity>(frames.size)
+        val frames = withContext(Dispatchers.IO) {
+            library.frames(mediaId, durationMs, GalleryModel.INPUT_PIXELS, FRAME_EVERY_MS, MAX_FRAMES, skip = done)
+        }
+        var kept = done.size
         for ((atMs, jpeg) in frames) {
             coroutineContext.ensureActive()
             val vector = embedder.embedImage(jpeg)?.let(Int8Vectors::quantize)
@@ -230,9 +303,10 @@ class GalleryIndex(
                 if (!embedder.isLoaded) return false
                 continue
             }
-            vectors += FrameEntity(mediaId, atMs, vector)
+            dao.insertFrame(FrameEntity(mediaId, atMs, vector))
+            kept++
         }
-        dao.setFrames(mediaId, vectors, if (vectors.isEmpty()) PhotoEntity.FAILED else GalleryModel.MODEL_ID)
+        dao.setEmbedding(mediaId, null, if (kept == 0) PhotoEntity.FAILED else GalleryModel.MODEL_ID)
         vectorsStale = true
         return true
     }
@@ -329,13 +403,31 @@ class GalleryIndex(
         _status.update { it.copy(total = total, indexed = total - pending) }
     }
 
-    /** Runs [block] in a background slot, waiting out the user's typing and turns. */
-    private suspend fun runWhenIdle(block: suspend () -> Boolean): Boolean {
+    /** Runs [block] in a background slot, waiting out the user's typing and turns, and the phone's heat. */
+    private suspend fun <T : Any> runWhenIdle(block: suspend () -> T): T {
         while (true) {
+            coolDown()
             val result = scheduler.runBackground(ModelScheduler.Priority.GALLERY_INDEX) { block() }
             if (result != null) return result
             delay(ModelScheduler.QUIET_MS)
         }
+    }
+
+    /**
+     * Waits while the phone is warm: from [HOT] until it is back to [COOL]. Indexing flat out
+     * took the OnePlus from cool to MODERATE in about three minutes, and it cooled again in one
+     * or two (2026-11-14).
+     */
+    private suspend fun coolDown() {
+        if (heat() < HOT) return
+        Log.i(TAG, "Paused while the phone cools")
+        _status.update { it.copy(cooling = true) }
+        try {
+            while (heat() > COOL) delay(COOL_CHECK_MS)
+        } finally {
+            _status.update { it.copy(cooling = false) }
+        }
+        Log.i(TAG, "Carrying on: the phone has cooled")
     }
 
     // --- Search ---
@@ -518,5 +610,10 @@ class GalleryIndex(
 
         /** How long the model stays loaded after a search from a chat, for a follow-up one. */
         const val IDLE_UNLOAD_MS = 2 * 60_000L
+
+        /** `PowerManager.THERMAL_STATUS_MODERATE` and `_LIGHT`: indexing pauses at the first and carries on at the second. */
+        const val HOT = 2
+        const val COOL = 1
+        const val COOL_CHECK_MS = 15_000L
     }
 }

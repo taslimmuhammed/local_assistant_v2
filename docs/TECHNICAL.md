@@ -79,7 +79,7 @@ AssistantApplication
     ├── LlmService                owns the LiteRT-LM Engine
     ├── LiteRtLmBackend           LlmBackend: conversations, streaming, one-shot completions
     ├── MemoryEmbedder            memory search's model: the photo model's text side (GalleryEmbedder,
-    │                             LiteRT-LM EmbeddingEngine, CPU), or an imported one (LiteRtEmbedder)
+    │                             LiteRT-LM EmbeddingEngine, text on the CPU), or an imported one (LiteRtEmbedder)
     ├── ModelScheduler            one model job at a time; the user always first
     ├── EmbeddingQueue            embeds the archive's backlog while the user is idle
     ├── Retriever                 per-turn recall: facts, then keyword + vector search, fused
@@ -775,16 +775,22 @@ it. The WAV is still what the chat plays back.
   directly with each photo's vector. Memory search uses its text side too, on the same engine (see
   Memory search). `ModelFormat.Kind.GALLERY` refuses a file without both the text and the vision
   encoder.
-- **Index.** `gallery.db`, a Room database of its own: one row per MediaStore photo, with its
-  date, its `DATE_MODIFIED` (an edited photo is redone) and a 256-byte int8 vector. Everything in
-  it can be rebuilt from the photos, so it never needs a migration of `assistant.db`; a schema
-  change simply drops it. Each photo goes to the model as a 512 px JPEG from the system's
-  thumbnail cache, at 70 vision tokens.
-- **When it indexes.** While the Photos screen is open; while the app stays in front on phones
-  with more than 8 GB (smaller ones stop when the screen closes); and in the nightly job on the
-  charger, after memory's own work. Newest photos first, in batches of 8 through the
-  `ModelScheduler` at `GALLERY_INDEX`, the lowest priority but one, so a chat turn stops it
-  between photos.
+- **Index.** `gallery.db`, a Room database of its own: one row per MediaStore photo or video,
+  with its date, its `DATE_MODIFIED` (an edited photo is redone) and a 256-byte int8 vector; a
+  video has a vector for each of up to 20 moments instead (`frames`). It is kept apart from
+  `assistant.db`, and since faces and the names given to them can't be rebuilt, it migrates like
+  any database (version 7 now) rather than being dropped. Each photo goes to the model as a
+  512 px JPEG from the system's thumbnail cache, at 70 vision tokens.
+- **When it indexes.** As soon as the photo model is here and photos may be read, while the app
+  is in front (`AppContainer.indexPhotosIfReady`: when the model arrives, and 10 s after coming to
+  the front, once the chat model's warm-up is done); while the Photos screen is open; and in the
+  nightly job on the charger, after memory's own work. Phones of 8 GB or less don't start it
+  while the chat model is loaded. Photos first, newest first, then videos, in batches of 8
+  through the `ModelScheduler` at `GALLERY_INDEX`, the lowest priority but one, so a chat turn
+  stops it between photos. Each batch is read inside its slot, so a batch cut short isn't
+  embedded twice, and a video's moments are saved as they're done (the video is marked
+  `~model` until then, and not searched), so a stopped video carries on where it stopped. At
+  thermal status MODERATE it waits until the phone is back to LIGHT.
 - **Search.** The query gets the model's search prompt, then an exact scan over every vector
   (`PhotoRanking`). A query matches only if its best photo scores at least 0.72; then every photo
   within 0.035 of that best is listed, best first. Calibrated on the phone's own 2,428 photos
@@ -798,9 +804,24 @@ it. The WAV is still what the chat plays back.
 - **Measured on the OnePlus** (`GalleryEvalTest`, 16 Wikipedia lead images, 18 queries): the
   right picture first for 16 of 16; load 1.4 s; a query 51 ms; a photo 224 ms with the vision
   encoder on the GPU against 474 ms on four CPU threads (six or eight were no faster), and 560 MB
-  of process memory against 812 MB. So vision runs on the GPU, falling back to the CPU. At that
-  rate 10,000 photos take about 37 minutes, which is why most of a large library is indexed at
-  night.
+  of process memory against 812 MB. So vision runs on the GPU, falling back to the CPU.
+- **Indexing speed** (2026-11-14, `IndexSpeedTest`, the phone's own 2,577 photos and 318 videos
+  into a database in memory, 90 s passes; only timings and counts reported):
+
+  | | Before (CPU vision, faces after everything) | Now |
+  |---|---|---|
+  | Embed, per photo | 495 ms | 202 ms (GPU) |
+  | Faces, per photo | 211 ms | 31 ms |
+  | In 90 s | 52 photos + 116 video moments, no faces | 416 photos, faces in all of them |
+
+  Faces had slowed to 211 ms because YuNet's 640×640 input was filled one `putFloat` at a time
+  inside `FaceFinder.find`: 187 ms of it, interpreted (the runtime never compiled that loop in
+  the big method). Filled as one array in a small function of its own and copied in at once, it
+  takes about 2 ms (`FaceSpeedProbeTest`); the detector itself takes 25 ms and each face 10–20.
+  Each photo's faces are now found while it's embedded, on the CPU beside the GPU's work (220 ms
+  per photo with faces, against 276 ms one after the other). Six threads for the photo model's
+  CPU side were no faster than four. Flat out, the phone went from cool to MODERATE in about
+  three minutes and cooled in one or two.
 - **In a chat.** `find_photos` (see the tool list) searches the same index from any chat or the
   power-button panel. The model only gets counts back (`{"ok":true,"found":117}`); the photos go in
   the reply's chip as MediaStore ids (`PhotoSet`, stored in the TOOL row like any chip), so no
@@ -823,7 +844,10 @@ it. The WAV is still what the chat plays back.
   checked against OpenCV's own FaceDetectorYN and FaceRecognizerSF: the same 34 faces on 18
   public photos, boxes and landmarks to the pixel, prints at cosine 0.996+ on the Mac and 0.960+
   on the phone (`FaceEvalTest`; the difference is resampling). The phone's 2,430 photos took 138
-  s: 2,199 faces in 900 photos. Faces are stored in `gallery.db` (version 2, the index's first
+  s: 2,199 faces in 900 photos. Each photo's faces are found as it is indexed (`FaceIndex.lookAt`),
+  grouped every 500 new faces and at the end of a pass, even a stopped one, so people show up
+  while it runs; photos indexed before Find people was on are looked at afterwards, and contacts'
+  photos name groups after each pass that found faces. Faces are stored in `gallery.db` (version 2, the index's first
   real migration, since names can't be rebuilt). `FaceGrouping` places them: faces the user
   confirmed stay; others join the named person whose three closest faces they match at 0.55 or
   more on average; the rest form unnamed groups by the same closest-faces rule at 0.65. Faces
@@ -911,9 +935,13 @@ it. The WAV is still what the chat plays back.
   chat read it. The PAN came out the same 6 times in 6 over three wordings, the licence number 6
   in 6, and the Aadhaar number 2 in 2, passing its check digit. Neither the card number nor a
   passport number was made up. The SSLC questions got the CGPA, and the maths one said its
-  photo was the plus-two certificate. Each turn took 12–22 s. The photo model's vision now runs on the CPU:
-  loaded on the GPU, it broke the chat model's vision for any image ("TensorBuffer must have all
-  static dimensions"), found photos and photos sent in a chat alike.
+  photo was the plus-two certificate. Each turn took 12–22 s. The photo model's vision then ran
+  on the CPU: on LiteRT-LM 0.18.1, loaded on the GPU, it broke the chat model's vision for any
+  image ("TensorBuffer must have all static dimensions"), found photos and photos sent in a chat
+  alike. On 0.19.1 the chat model reads images beside it in every order tried
+  (`GpuVisionProbeTest`, 2026-11-14), so it is on the GPU again; GPU vectors match the CPU ones
+  already stored at cosine 0.98 or more, each nearest its own CPU twin (24 of 24), so the index
+  wasn't redone.
 - **Dates.** `find_photos` takes `when` in the user's words: "last December", "2023", "this
   year", "3 weeks ago", "since March", "25 Dec 2023". `PhotoPeriod` turns it into a stretch of the
   past (a month with no year is the latest one begun; "N years ago" is that calendar year), and

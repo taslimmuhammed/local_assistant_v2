@@ -159,11 +159,14 @@ class AppContainer(context: Context) {
             resumeDownloads()
             // Fences dropped while location was off, or waiting for location all the time.
             appScope.launch { runCatching { PlaceReminderReceiver.watchAll(this@AppContainer) }.onFailure { Log.w("AppContainer", "Watching place reminders failed", it) } }
+            // Photos taken meanwhile, or the first index carrying on, once the warm-up is done.
+            indexPhotosIfReady(afterMs = FOREGROUND_INDEX_DELAY_MS)
         },
         onBackground = {
             backgroundJobs.onBackground()
             sensitiveLock.lock()
             // Out of sight, the photos wait for the charger at night.
+            synchronized(this) { autoIndex?.cancel() }
             appScope.launch { galleryIndex.pause() }
             // What only the app in use needs goes back, so the home screen has less to take back:
             // the natural voice once it falls quiet, memory search once its backlog is done.
@@ -308,7 +311,37 @@ class AppContainer(context: Context) {
         faces = faceIndex,
         places = placeList,
         onDocuments = { photoThumbnails.documents.value = it },
+        afterFaces = { contactNames.update() },
+        heat = ::thermalStatus,
     )
+
+    /** `PowerManager.THERMAL_STATUS_*`, or none before Android 10. */
+    fun thermalStatus(): Int =
+        if (android.os.Build.VERSION.SDK_INT >= 29) appContext.getSystemService(android.os.PowerManager::class.java)?.currentThermalStatus ?: 0 else 0
+
+    private var autoIndex: kotlinx.coroutines.Job? = null
+
+    /**
+     * Indexes the photos, and with Find people their faces, without waiting for the Photos
+     * screen: as soon as the photo model is here and photos may be read, while the app is in
+     * front. [afterMs] lets the chat model's warm-up go first on coming to the front. Phones of
+     * 8 GB or less do it only while the chat model isn't loaded (first setup, while it downloads);
+     * otherwise on the charger at night and while Photos is open, as before.
+     */
+    fun indexPhotosIfReady(afterMs: Long = 0) {
+        if (!photoSearchReady()) return
+        synchronized(this) {
+            autoIndex?.cancel()
+            autoIndex = appScope.launch {
+                kotlinx.coroutines.delay(afterMs)
+                // A load under way finishes first (a minute at most), so the first reply isn't slowed.
+                kotlinx.coroutines.withTimeoutOrNull(60_000L) { llmService.state.first { it !is LlmService.State.Loading } }
+                if (!appForeground.isForeground) return@launch
+                if (isSmallDevice && llmService.state.value is LlmService.State.Ready) return@launch
+                galleryIndex.start()
+            }
+        }
+    }
 
     init {
         // Which photos to keep hidden, from the index, before any is shown.
@@ -838,8 +871,14 @@ class AppContainer(context: Context) {
         com.local.assistant.model.BackgroundDownloads.watch(appContext, appScope, downloads(), resume = ::resumeDownloads, pending = ::downloadsPending)
         appScope.launch {
             dropOldEmbedder()
-            // Memory search starts once the photo model is here (downloaded later, or already).
-            galleryModelManager.installed.collect { if (it != null) embeddingQueue.kick() }
+            // Memory search starts once the photo model is here (downloaded later, or already),
+            // and so does indexing the photos.
+            galleryModelManager.installed.collect {
+                if (it != null) {
+                    embeddingQueue.kick()
+                    indexPhotosIfReady()
+                }
+            }
         }
         backgroundJobs.scheduleNightly()
         // Exchanges from before the archive existed, or missed by a crash, then their vectors.
@@ -863,6 +902,9 @@ class AppContainer(context: Context) {
 
         /** At or below this, the photo model's memory goes back as soon as the Photos screen closes. */
         const val SMALL_DEVICE_BYTES = 8L * 1024 * 1024 * 1024
+
+        /** After coming to the front, how long photo indexing waits: the chat model warms up first. */
+        const val FOREGROUND_INDEX_DELAY_MS = 10_000L
 
         /** EmbeddingGemma 300M's key, from before the photo model did memory search too. */
         const val OLD_EMBEDDER_KEY = "embeddinggemma-300m-wi8"

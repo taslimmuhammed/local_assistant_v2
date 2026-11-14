@@ -19,13 +19,15 @@ import java.io.File
 /**
  * EmbeddingGemma 2 on LiteRT-LM's `EmbeddingEngine`: photos and search words into one space.
  *
- * Everything runs on the CPU. The vision encoder was on the GPU at first: on the OnePlus (SM8850,
- * 2026-10-25, `GalleryEvalTest`) a photo took 224 ms there against 474 ms on four CPU threads (six
- * or eight threads were no faster), with 560 MB of process memory against 812 MB. But while it was
- * loaded on the GPU, the chat model's own vision failed on any image ("TensorBuffer must have all
- * static dimensions", 2026-10-26): a photo sent in a chat after a search, or a found photo given
- * to it to read a question from. With this one on the CPU, both work. The [com.local.assistant.memory.work.ModelScheduler] already
- * keeps it from running while the chat model is generating.
+ * The vision encoder runs on the GPU, the text side on the CPU. On the OnePlus (SM8850) a photo
+ * takes 223 ms on the GPU against 495 ms on four CPU threads (2026-11-14, `IndexSpeedTest`), with
+ * less process memory too. It ran on the CPU from 2026-10-26: on LiteRT-LM 0.18.1, while it was on
+ * the GPU, the chat model's own vision failed on any image ("TensorBuffer must have all static
+ * dimensions"). On 0.19.1 the chat model reads images in every order tried (`GpuVisionProbeTest`,
+ * 2026-11-14), and GPU vectors match the CPU ones already stored (cosine 0.98 or more on 24
+ * photos, each its own CPU twin's nearest), so the two mix in one index. If the GPU won't load,
+ * the CPU takes over. The [com.local.assistant.memory.work.ModelScheduler] keeps it from running
+ * while the chat model is generating.
  *
  * One engine serves photo search and memory search ([com.local.assistant.memory.embed.PhotoModelEmbedder]),
  * so the two never hold a copy each. Photos use it while they are indexed or searched and then
@@ -38,8 +40,8 @@ class GalleryEmbedder(
     private val modelFile: () -> File?,
     private val cacheDir: File?,
     private val threads: Int = DEFAULT_THREADS,
-    /** True puts the vision encoder on the GPU: faster, but the chat model can't see images meanwhile. */
-    private val visionOnGpu: Boolean = false,
+    /** False keeps the vision encoder on the CPU, as the speed and probe tests compare. */
+    private val visionOnGpu: Boolean = true,
 ) {
 
     private val mutex = Mutex()
