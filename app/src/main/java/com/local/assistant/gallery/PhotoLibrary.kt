@@ -157,15 +157,16 @@ class PhotoLibrary(private val context: Context) {
     /**
      * Moments of video [mediaId], one every [everyMs] (at most [maxFrames], at least one, each in
      * the middle of its stretch), as JPEGs at most [maxSide] pixels on the longer side, with when
-     * each is. Empty if the video can't be read.
+     * each is; the moments in [skip] (already done) aren't read. Empty if the video can't be read.
      */
-    fun frames(mediaId: Long, durationMs: Long, maxSide: Int, everyMs: Long, maxFrames: Int): List<Pair<Long, ByteArray>> {
+    fun frames(mediaId: Long, durationMs: Long, maxSide: Int, everyMs: Long, maxFrames: Int, skip: Set<Long> = emptySet()): List<Pair<Long, ByteArray>> {
         val retriever = MediaMetadataRetriever()
         return try {
             retriever.setDataSource(context, uri(mediaId))
             val count = (durationMs / everyMs).toInt().coerceIn(1, maxFrames)
             (0 until count).mapNotNull { i ->
                 val atMs = durationMs * (2 * i + 1) / (2 * count)
+                if (atMs in skip) return@mapNotNull null
                 val frame = if (Build.VERSION.SDK_INT >= 27) {
                     retriever.getScaledFrameAtTime(atMs * 1000, MediaMetadataRetriever.OPTION_CLOSEST_SYNC, maxSide, maxSide)
                 } else {

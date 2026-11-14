@@ -65,6 +65,40 @@ class SettingsStore(context: Context) {
         get() = prefs.getBoolean(KEY_WEB_SEARCH_ASKED, false)
         set(value) = prefs.edit { putBoolean(KEY_WEB_SEARCH_ASKED, value) }
 
+    /**
+     * Photos, files and messages have been offered once, after web search (allowed or skipped).
+     * False on installs from before the page, so they see it once too.
+     */
+    var accessAsked: Boolean
+        get() = prefs.getBoolean(KEY_ACCESS_ASKED, false)
+        set(value) = prefs.edit { putBoolean(KEY_ACCESS_ASKED, value) }
+
+    /**
+     * Messages that arrive (notifications from chat apps, and the SMS inbox while the app is the
+     * digital assistant) are kept on the phone for search, as long as chats are. Off until the
+     * user turns it on, on the first-launch page or in Settings › Messages.
+     */
+    var keepMessages: Boolean
+        get() = prefs.getBoolean(KEY_KEEP_MESSAGES, false)
+        set(value) = prefs.edit { putBoolean(KEY_KEEP_MESSAGES, value) }
+
+    fun observeKeepMessages(): Flow<Boolean> = observeKey(KEY_KEEP_MESSAGES) { keepMessages }
+
+    /** Apps whose messages aren't kept for search, by package name (Settings › Messages). */
+    var inboxIgnoredApps: Set<String>
+        get() = prefs.getStringSet(KEY_INBOX_IGNORED, emptySet()).orEmpty().toSet()
+        set(value) = prefs.edit { putStringSet(KEY_INBOX_IGNORED, value) }
+
+    fun observeInboxIgnoredApps(): Flow<Set<String>> = observeKey(KEY_INBOX_IGNORED) { inboxIgnoredApps }
+
+    /**
+     * The SMS inbox has been read up to this message ([com.local.assistant.inbox.SmsSync]). Not
+     * reset when the kept messages are deleted, so they don't come back.
+     */
+    var smsReadUpTo: Long
+        get() = prefs.getLong(KEY_SMS_READ_UP_TO, 0L)
+        set(value) = prefs.edit { putLong(KEY_SMS_READ_UP_TO, value) }
+
     /** The profile has been offered once (filled in or skipped); first launch asks for it. */
     var profileAsked: Boolean
         get() = prefs.getBoolean(KEY_PROFILE_ASKED, false)
@@ -280,6 +314,10 @@ class SettingsStore(context: Context) {
         private const val KEY_PROFILE_ASKED = "profile_asked"
         private const val KEY_TOUR_SEEN = "tour_seen"
         private const val KEY_WEB_SEARCH_ASKED = "web_search_asked"
+        private const val KEY_ACCESS_ASKED = "access_asked"
+        private const val KEY_KEEP_MESSAGES = "keep_messages"
+        private const val KEY_INBOX_IGNORED = "inbox_ignored_apps"
+        private const val KEY_SMS_READ_UP_TO = "sms_read_up_to"
         private const val KEY_HISTORY_RETENTION = "history_retention_days"
         private const val KEY_USE_GPU = "use_gpu"
         private const val KEY_SPECULATIVE = "speculative_decoding"

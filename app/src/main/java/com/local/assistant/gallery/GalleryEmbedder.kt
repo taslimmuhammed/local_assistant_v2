@@ -19,13 +19,16 @@ import java.io.File
 /**
  * EmbeddingGemma 2 on LiteRT-LM's `EmbeddingEngine`: photos and search words into one space.
  *
- * Everything runs on the CPU. The vision encoder was on the GPU at first: on the OnePlus (SM8850,
- * 2026-10-25, `GalleryEvalTest`) a photo took 224 ms there against 474 ms on four CPU threads (six
- * or eight threads were no faster), with 560 MB of process memory against 812 MB. But while it was
- * loaded on the GPU, the chat model's own vision failed on any image ("TensorBuffer must have all
- * static dimensions", 2026-10-26): a photo sent in a chat after a search, or a found photo given
- * to it to read a question from. With this one on the CPU, both work. The [com.local.assistant.memory.work.ModelScheduler] already
- * keeps it from running while the chat model is generating.
+ * The text side runs on the CPU, the vision encoder on the GPU while the chat model isn't loaded
+ * and on the CPU while it is ([leaveGpu] says why). On the OnePlus (SM8850) a photo
+ * takes 223 ms on the GPU against 495 ms on four CPU threads (2026-11-14, `IndexSpeedTest`), with
+ * less process memory too. It ran on the CPU from 2026-10-26: on LiteRT-LM 0.18.1, while it was on
+ * the GPU, the chat model's own vision failed on any image ("TensorBuffer must have all static
+ * dimensions"). On 0.19.1 the chat model reads images in every order tried (`GpuVisionProbeTest`,
+ * 2026-11-14), and GPU vectors match the CPU ones already stored (cosine 0.98 or more on 24
+ * photos, each its own CPU twin's nearest), so the two mix in one index. If the GPU won't load,
+ * the CPU takes over. The [com.local.assistant.memory.work.ModelScheduler] keeps it from running
+ * while the chat model is generating.
  *
  * One engine serves photo search and memory search ([com.local.assistant.memory.embed.PhotoModelEmbedder]),
  * so the two never hold a copy each. Photos use it while they are indexed or searched and then
@@ -38,14 +41,20 @@ class GalleryEmbedder(
     private val modelFile: () -> File?,
     private val cacheDir: File?,
     private val threads: Int = DEFAULT_THREADS,
-    /** True puts the vision encoder on the GPU: faster, but the chat model can't see images meanwhile. */
-    private val visionOnGpu: Boolean = false,
+    /** False keeps the vision encoder on the CPU, as the speed and probe tests compare. */
+    private val visionOnGpu: Boolean = true,
+    /** Whether the GPU may take the vision encoder now: not while the chat model holds it ([leaveGpu]). */
+    private val gpuAllowed: () -> Boolean = { true },
 ) {
 
     private val mutex = Mutex()
 
     @Volatile
     private var engine: EmbeddingEngine? = null
+
+    /** The loaded engine's vision encoder is on the GPU. */
+    @Volatile
+    private var onGpu = false
 
     @Volatile
     private var loadedFrom: File? = null
@@ -109,6 +118,17 @@ class GalleryEmbedder(
         close()
     }
 
+    /**
+     * Before the chat model loads: closed if its vision is on the GPU, and opened again with the
+     * vision on the CPU when next wanted. Closed on the GPU while a chat conversation was open,
+     * it broke that conversation: token soup past ~4,096 tokens in the app after it came back
+     * from the background, a crash in OpenCL in `AudioPositionProbeTest -e photo reload`
+     * (14 Nov 2026). Closed before the chat model is up, or on the CPU, it breaks nothing.
+     */
+    suspend fun leaveGpu() = mutex.withLock {
+        if (onGpu) close()
+    }
+
     private suspend fun compute(input: InputData): FloatArray? = mutex.withLock {
         val text = (input as? InputData.Text)?.text
         if (text != null && text == lastText) lastVector?.let { return@withLock it.copyOf() }
@@ -139,10 +159,11 @@ class GalleryEmbedder(
             Log.w(TAG, "Not loading ${file.name}: $problem")
             return null
         }
-        val gpu = if (visionOnGpu) load(file, gpu = true) else null
+        val gpu = if (visionOnGpu && gpuAllowed()) load(file, gpu = true) else null
         return (gpu ?: load(file, gpu = false))?.also {
             engine = it
             loadedFrom = file
+            onGpu = gpu != null
         }
     }
 
@@ -161,6 +182,8 @@ class GalleryEmbedder(
             ).also {
                 it.initialize()
                 Log.i(TAG, "Loaded ${GalleryModel.KEY} (vision on ${if (gpu) "GPU" else "CPU"}) in ${System.currentTimeMillis() - started} ms")
+                // A second engine beside the chat model's: in the model's events too.
+                com.local.assistant.memory.prompt.TurnTimings.event("photo_model_load", System.currentTimeMillis() - started, "vision on ${if (gpu) "GPU" else "CPU"}")
             }
         }
     } catch (e: CancellationException) {
@@ -171,9 +194,13 @@ class GalleryEmbedder(
     }
 
     private fun close() {
-        engine?.let { runCatching { it.close() } }
+        engine?.let {
+            com.local.assistant.memory.prompt.TurnTimings.event("photo_model_close", detail = if (holdsVision) "with vision" else "")
+            runCatching { it.close() }
+        }
         engine = null
         loadedFrom = null
+        onGpu = false
         holdsVision = false
         lastText = null
         lastVector = null

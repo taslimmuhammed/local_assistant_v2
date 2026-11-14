@@ -22,6 +22,9 @@ object ToolSteps {
     /** After the tools ran, while the model reads their results and starts its reply. */
     const val WRITING_REPLY = "Writing the reply…"
 
+    /** The reply came out garbled ([GarbledText]): the model is loaded again and asked again. */
+    const val RESTARTING = "That came out garbled. Restarting the model…"
+
     /** What [call] is doing, for a message that said [userText]. */
     fun of(call: ToolCall, userText: String): String = when (call.name) {
         ToolCatalog.FIND_PHOTOS ->
@@ -30,6 +33,12 @@ object ToolSteps {
             } else {
                 "Searching your photos…"
             }
+        ToolCatalog.READ_FILE -> when {
+            call.arguments["type"]?.toString()?.trim()?.lowercase() in setOf("folder", "folders") -> "Searching your folders…"
+            call.arguments["question"] != null || com.local.assistant.files.FileTools.questionIn(userText) != null -> "Finding the file to read…"
+            else -> "Searching your files…"
+        }
+        ToolCatalog.CHECK_INBOX -> "Checking your messages…"
         ToolCatalog.SEARCH_MEMORY -> "Searching your memories…"
         ToolCatalog.WEB_SEARCH -> "Searching the web…"
         ToolCatalog.GET_UPCOMING -> "Checking what's coming up…"
@@ -86,6 +95,8 @@ object ToolSteps {
             ToolCatalog.SEARCH_MEMORY -> "Memories searched"
             ToolCatalog.WEB_SEARCH -> "Web searched"
             ToolCatalog.FIND_PHOTOS -> "Photos searched"
+            ToolCatalog.READ_FILE -> "Files searched"
+            ToolCatalog.CHECK_INBOX -> "Messages checked"
             ToolCatalog.HEALTH -> "Health data read"
             else -> return WRITING_REPLY
         }

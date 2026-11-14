@@ -98,6 +98,7 @@ class LiteRtLmBackend(
         sampling: Sampling,
     ): String {
         llm.awaitEngine()
+        llm.openConversationCount().takeIf { it > 0 }?.let { Log.w("LiteRtLmBackend", "complete() with $it other conversations open") }
         val constrained = jsonSchema != null && capabilities?.constrainedJson == true
         val conversation = llm.createConversation(
             ConversationConfig(
@@ -153,7 +154,10 @@ class LiteRtLmBackend(
     private fun MessageEntity.toLiteRtMessages(): List<Message> = when (role) {
         Role.USER -> listOf(
             Message.user(
-                contentsOf(text, listOfNotNull(attachmentPath?.let { path -> ContextWindow.sentAttachment(attachmentKind, text)?.let { PromptAttachment(path, it) } })),
+                contentsOf(
+                    ContextWindow.historyText(attachmentKind, attachmentPath, text),
+                    listOfNotNull(attachmentPath?.let { path -> ContextWindow.sentAttachment(attachmentKind, text)?.let { PromptAttachment(path, it) } }),
+                ),
             ),
         )
         Role.ASSISTANT -> listOf(Message.model(text))
@@ -186,6 +190,12 @@ private class LiteRtChatSession(
         stream(Message.user(Contents.of(ToolReplay.asMessage(results))))
 
     private fun stream(message: Message): Flow<GenEvent> = flow {
+        llm.soupNextReply?.let { soup ->
+            llm.soupNextReply = null
+            soup.split(' ').forEach { emit(GenEvent.TextDelta("$it ")) }
+            emit(GenEvent.Done(null))
+            return@flow
+        }
         llm.generationStarted(conversation)
         var stats: GenStats? = null
         var failure: Throwable? = null
@@ -243,6 +253,8 @@ private fun contentsOf(text: String, attachments: List<PromptAttachment>): Conte
         when (attachment.kind) {
             AttachmentKind.IMAGE -> Content.ImageFile(file.absolutePath)
             AttachmentKind.AUDIO -> Content.AudioFile(file.absolutePath)
+            // Read by the app, never sent as media (ContextWindow.sentAttachment).
+            AttachmentKind.DOCUMENT -> null
         }
     }
     if (media.isEmpty()) return Contents.of(text)

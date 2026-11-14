@@ -223,7 +223,7 @@ private fun appLabel(context: Context, packageName: String): String =
         .getOrDefault(packageName)
 
 /** Android's page for this app's notification access, or the list of all apps with it. */
-private fun openAccess(context: Context) {
+internal fun openAccess(context: Context) {
     val component = ComponentName(context, MessageListener::class.java)
     val detail = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
         Intent(Settings.ACTION_NOTIFICATION_LISTENER_DETAIL_SETTINGS)
@@ -242,7 +242,7 @@ private fun openAccess(context: Context) {
     }
 }
 
-private fun openAppInfo(context: Context) {
+internal fun openAppInfo(context: Context) {
     runCatching {
         context.startActivity(
             Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.fromParts("package", context.packageName, null))

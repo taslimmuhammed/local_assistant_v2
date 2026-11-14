@@ -117,4 +117,30 @@ class QueryTextTest {
             "what's 18% of 2450?",
         ).forEach { assertFalse(it, QueryText.asksAboutScreen(it)) }
     }
+
+    @Test
+    fun questionsAboutMessagesAreSeenAsSuch() {
+        // The first five as asked on the phone (14 Nov 2026).
+        listOf(
+            "do you have any latest messages",
+            "Swami messages from yesterday",
+            "show me all the WhatsApp messages from yesterday",
+            "is there any pending messages that I didn't read today",
+            "could you brief me all the 100 messages from today",
+            "what did Rahul text me? no, what has he texted",
+            "any SMS from the bank?",
+            "did anyone message me about the trip",
+        ).forEach { assertTrue(it, QueryText.asksAboutMessages(it)) }
+    }
+
+    @Test
+    fun photosAndOtherQuestionsAreNotAboutMessages() {
+        listOf(
+            "show me the photos Rahul sent on WhatsApp",
+            "find the screenshot of the WhatsApp chat",
+            "what's the text on this poster",
+            "did I ever take part in a hackathon?",
+            "what's the capital of Kerala?",
+        ).forEach { assertFalse(it, QueryText.asksAboutMessages(it)) }
+    }
 }

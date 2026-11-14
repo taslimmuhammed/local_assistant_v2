@@ -130,8 +130,10 @@ object BriefTriage {
      * the model gave an English chat Hinglish replies when the chat next to it was in Hinglish
      * (seen on the phone). Null when the messages don't say: emoji only, a missed call.
      */
-    internal fun language(item: BriefItem): String? {
-        val text = item.fromOthers.joinToString(" ") { it.text }
+    internal fun language(item: BriefItem): String? = languageOf(item.fromOthers.joinToString(" ") { it.text })
+
+    /** The language [text] is written in, by its letters' script (and Hinglish words); null with no letters. */
+    fun languageOf(text: String): String? {
         val letters = HashMap<Character.UnicodeScript, Int>()
         text.codePoints().filter { Character.isLetter(it) }.forEach { letters.merge(Character.UnicodeScript.of(it), 1, Int::plus) }
         val script = letters.maxByOrNull { it.value }?.key ?: return null

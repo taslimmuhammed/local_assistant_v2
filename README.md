@@ -40,6 +40,12 @@ Android 8 or newer · 64-bit phone · 8 GB of RAM or more · about 4.5 GB free
   once: "call Mom and set an alarm for 7".
 - **Finds your photos and videos** by what's in them, who's in them, where and when: "beach
   videos", "photos of Anjali in Munnar last December". It names faces from your contacts' photos.
+- **Finds and reads your files.** "Find my resume PDF", "summarise my rental agreement", "what's
+  the deposit in it?": files are found by name and read when you ask, in PDF, Word, Excel, slides
+  and text. Attach a document in the chat to ask about it, or "remind me to pay this bill". "What's
+  my PAN number?" checks your documents as well as your photos.
+- **Knows what people sent you** (off by default). "What did Rahul say about the trip?" finds it in
+  the messages that came to your phone: chat apps, email and SMS, without ads or one-time codes.
 - **Reads your health data** from Health Connect: steps, distance, calories, heart rate, sleep and
   workouts.
 - **Tells you what you missed** (off by default). When you come back to your phone, a card shows
@@ -102,9 +108,14 @@ In the same place:
 - **Memory search** is set up with the model. If the download didn't finish, get it from
   Settings → Model and memory search. Without it, past chats are still found by keywords.
 - **Web search**: Settings → Web search, and paste a free key from [tavily.com](https://tavily.com).
-- **Photos**: tap **Photos** in the chat drawer and turn on photo search. It uses memory search's
-  model, so there is nothing more to download once that is here.
-  There, **Find people in your photos** groups faces and names them from your contacts' photos.
+- **Photos, files and messages** are offered on a page when the app first opens; each can be
+  skipped and turned on later. Photos and faces are indexed on their own from then on (a
+  notification shows it while the first index runs in the background). In **Photos** in the chat
+  drawer, **Find people in your photos** groups faces and names them from your contacts' photos.
+- **Files**: All files access, from that page or Android's settings, lets it find files by name.
+- **Messages**: Settings → Messages → **Keep messages for search**, then allow notification access.
+  To search your SMS from before too, make it your digital assistant and tap **Allow SMS**.
+  Messages are kept on the phone as long as your chats.
 - **Health data**: Settings → Health data → **Manage access**, to let it read Health Connect.
 - **While you were away**: Settings → While you were away, then allow notification access. The
   notifications are read on the phone and kept for two days.

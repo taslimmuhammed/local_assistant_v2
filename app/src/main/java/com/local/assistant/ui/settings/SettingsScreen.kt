@@ -26,6 +26,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ArrowBack
 import androidx.compose.material.icons.automirrored.outlined.KeyboardArrowRight
 import androidx.compose.material.icons.outlined.FavoriteBorder
+import androidx.compose.material.icons.outlined.Forum
 import androidx.compose.material.icons.outlined.History
 import androidx.compose.material.icons.outlined.Explore
 import androidx.compose.material.icons.outlined.Info
@@ -112,6 +113,7 @@ enum class SettingsSection(val title: String) {
     CALLING("Calling the assistant"),
     VOICE("Voice"),
     AWAY("While you were away"),
+    MESSAGES("Messages"),
     HEALTH("Health data"),
     MODEL("Model"),
     MEMORY("Memory and history"),
@@ -136,6 +138,10 @@ fun SettingsScreen(
     webSearchOn: Boolean,
     memory: MemoryViewModel,
     awayBrief: AwayBrief,
+    inbox: com.local.assistant.inbox.Inbox,
+    smsSync: com.local.assistant.inbox.SmsSync,
+    /** The tools a chat is given may have changed (check_inbox came or went). */
+    onToolsChanged: () -> Unit,
     health: com.local.assistant.health.HealthSource,
     section: SettingsSection?,
     onSection: (SettingsSection?) -> Unit,
@@ -179,10 +185,11 @@ fun SettingsScreen(
                 // Each page is one card of glass, the brief's.
                 GlassCard(Modifier.padding(start = 12.dp, end = 12.dp, top = 8.dp), padding = 6.dp) {
                 when (section) {
-                    null -> MainPage(settings, webSearchOn, memory, health, onSection, onOpenProfile, onOpenWebSearch, onOpenTour)
+                    null -> MainPage(settings, webSearchOn, memory, health, smsSync, onSection, onOpenProfile, onOpenWebSearch, onOpenTour)
                     SettingsSection.CALLING -> CallingSettings(settings)
                     SettingsSection.VOICE -> VoiceSettings(settings, speaker, voicePacks)
                     SettingsSection.AWAY -> AwaySettings(settings, awayBrief)
+                    SettingsSection.MESSAGES -> MessagesSettings(settings, inbox, smsSync, onToolsChanged)
                     SettingsSection.HEALTH -> HealthSettings(health, settings)
                     SettingsSection.MODEL -> {
                         val state by llmService.state.collectAsStateWithLifecycle()
@@ -214,6 +221,7 @@ private fun MainPage(
     webSearchOn: Boolean,
     memory: MemoryViewModel,
     health: com.local.assistant.health.HealthSource,
+    smsSync: com.local.assistant.inbox.SmsSync,
     onSection: (SettingsSection) -> Unit,
     onOpenProfile: () -> Unit,
     onOpenWebSearch: () -> Unit,
@@ -247,6 +255,7 @@ private fun MainPage(
         ).joinToString(" \u00b7 "),
     ) { onSection(SettingsSection.VOICE) }
     SectionRow(Icons.Outlined.NotificationsNone, SettingsSection.AWAY.title, awaySummary(settings, context)) { onSection(SettingsSection.AWAY) }
+    SectionRow(Icons.Outlined.Forum, SettingsSection.MESSAGES.title, messagesSummary(settings, smsSync, context)) { onSection(SettingsSection.MESSAGES) }
     SectionRow(Icons.Outlined.FavoriteBorder, SettingsSection.HEALTH.title, healthSummary(healthAccess)) { onSection(SettingsSection.HEALTH) }
     SectionRow(
         Icons.Outlined.Memory,

@@ -6,9 +6,14 @@ import com.local.assistant.llm.GenStats
 import com.local.assistant.llm.PromptAttachment
 import com.local.assistant.llm.ToolCall
 import com.local.assistant.llm.ToolResult
+import kotlinx.coroutines.async
+import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.FlowCollector
+import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.selects.select
 
 /** What one turn produced, as it happens. */
 sealed interface LoopEvent {
@@ -31,13 +36,15 @@ sealed interface LoopEvent {
     /**
      * [toolRounds] is how many rounds of tool calls the turn took; 0 for a plain reply.
      * [staleConversation]: the turn was finished without the runtime (a repaired call), so the
-     * live conversation no longer matches what is stored and has to be rebuilt.
+     * live conversation no longer matches what is stored and has to be rebuilt. [tools]: the
+     * names of the tools that ran.
      */
     data class Done(
         val stats: GenStats?,
         val changedPrefix: Boolean,
         val toolRounds: Int,
         val staleConversation: Boolean = false,
+        val tools: Set<String> = emptySet(),
     ) : LoopEvent
 
     /** The first send was refused as too long for the window, before anything was said. */
@@ -62,6 +69,14 @@ sealed interface LoopEvent {
      * searches ([ToolLoop.run]'s canRebuild).
      */
     data object Rebuild : LoopEvent
+
+    /**
+     * The reply came out as token soup ([GarbledText]): the model was stopped and nothing more of
+     * the turn was done. What was shown of this round is already taken back ([Retract]); the turn
+     * is to go again from the start, on an engine loaded afresh ([TurnRunner]), unless a tool had
+     * already acted ([afterActing]): done once is enough.
+     */
+    data class Garbled(val afterActing: Boolean = false) : LoopEvent
 }
 
 /**
@@ -79,6 +94,11 @@ sealed interface LoopEvent {
  * holding it back cost a second or more before the first word (up to 200 characters, ~4 s at
  * 11 tokens a second), and the user chose seeing words at once over never seeing a false claim
  * (13 Nov 2026).
+ *
+ * Every round's reply is provisional, too, until its first ten words are known to be words, not
+ * token soup ([GarbledText]): about a second at 11 tokens a second, and less than the sentence the
+ * voice waits for anyway. Soup is taken back, the model stopped, and [LoopEvent.Garbled] ends the
+ * turn.
  */
 class ToolLoop(
     private val executor: ToolExecutor,
@@ -155,7 +175,9 @@ class ToolLoop(
         // Whether something was done this turn, and whether any call failed: see the end.
         var acted = false
         var failed = false
+        val tools = mutableSetOf<String>()
         fun ran(call: ToolCall, outcome: ToolExecutor.Outcome) {
+            tools += call.name
             if (call.name == ToolCatalog.HEALTH) readHealth = true
             if (!outcome.ok) failed = true else if (call.name in ToolCatalog.ACTS) acted = true
         }
@@ -214,21 +236,45 @@ class ToolLoop(
             // After a call or message was got ready, the reply is checked whole: "I have sent the
             // message to Anjali" came 4 times in 6 after send_message (MultiStepEvalTest).
             val afterHandoff = if (ready.isNotEmpty()) StringBuilder() else null
+            // Every round's opening is shown provisionally until its first words are known to be
+            // words ([GarbledText]); soup is taken back and the model stopped.
+            val roundText = StringBuilder()
+            var wordsChecked = false
+            var garbled = false
             val roundSent = android.os.SystemClock.elapsedRealtime()
             var firstEvent: Long? = null
-            reply.collect { event ->
+            // Stopped for soup, the runtime ends the reply as cancelled ("CANCELLED: Task
+            // cancelled", 14 Nov 2026): that ends the reply, not the turn.
+            reply.catch { if (!garbled) throw it }.collect { event ->
                 if (firstEvent == null && (event is GenEvent.TextDelta || event is GenEvent.ToolCalls)) {
                     firstEvent = android.os.SystemClock.elapsedRealtime() - roundSent
                     if (rounds == 0 && !checked) timing?.firstTokenAt = timing?.now()
                 }
+                // Stopped for soup: what is still on its way is dropped, an error from the stop too.
+                if (garbled) return@collect
                 when (event) {
                     is GenEvent.TextDelta -> {
+                        if (!wordsChecked) {
+                            roundText.append(event.text)
+                            when (GarbledText.verdict(roundText, final = false)) {
+                                GarbledText.Verdict.SOUP -> {
+                                    garbled = true
+                                    retract()
+                                    session.cancel()
+                                    return@collect
+                                }
+                                GarbledText.Verdict.FINE -> wordsChecked = true
+                                null -> Unit
+                            }
+                        }
                         val opening = held
                         if (afterHandoff != null) {
                             afterHandoff.append(event.text)
                             show(event.text, provisional = true)
                         } else if (opening == null) {
-                            show(event.text)
+                            show(event.text, provisional = pending || !wordsChecked)
+                            // The words check out now: the opening held for them stands.
+                            if (wordsChecked) confirm()
                         } else {
                             opening.append(event.text)
                             if (!suspect) show(event.text, provisional = true)
@@ -243,7 +289,8 @@ class ToolLoop(
                                 ActionClaims.unshownDraft(opening) -> Unit
                                 else -> {
                                     held = null
-                                    confirm()
+                                    // Or, if its words aren't checked yet, once they are (above).
+                                    if (wordsChecked) confirm()
                                 }
                             }
                         }
@@ -265,6 +312,22 @@ class ToolLoop(
             mark("model answered (round $rounds: ${calls.joinToString { it.name }.ifEmpty { "no tool" }}, ${held?.length ?: 0} characters held)")
             timing?.round(rounds, firstEvent, android.os.SystemClock.elapsedRealtime() - roundSent, stats, calls.map { it.name })
             stats?.tokensPerSecond?.let { timing?.tokensPerSecond = it }
+            // A round that ended before its words could be judged as they came: judged whole.
+            if (!garbled && !wordsChecked && roundText.isNotEmpty()) {
+                if (GarbledText.verdict(roundText, final = true) == GarbledText.Verdict.SOUP) {
+                    garbled = true
+                    retract()
+                } else {
+                    wordsChecked = true
+                    if (held == null && afterHandoff == null) confirm()
+                }
+            }
+            if (garbled) {
+                mark("garbled reply, model stopped")
+                com.local.assistant.memory.prompt.TurnTimings.event("garbled", detail = "round $rounds, ${session.tokenCount() ?: "?"} tokens")
+                emit(LoopEvent.Garbled(afterActing = acted))
+                return@flow
+            }
             if (overflowed) {
                 retract()
                 emit(LoopEvent.Overflow)
@@ -279,7 +342,7 @@ class ToolLoop(
                 val fixed = repair(cause)?.takeIf { it.name in ToolCatalog.ACTS }
                 if (fixed != null && context.locked && fixed.name !in ToolCatalog.LOCKED) {
                     emit(LoopEvent.NeedsUnlock)
-                    emit(LoopEvent.Done(null, changedPrefix = false, toolRounds = 0, staleConversation = true))
+                    emit(LoopEvent.Done(null, changedPrefix = false, toolRounds = 0, staleConversation = true, tools = tools.toSet()))
                     return@flow
                 }
                 val outcome = fixed?.let { executor.execute(it, context) }
@@ -289,7 +352,7 @@ class ToolLoop(
                 }
                 if (outcome.chip != null && outcome.recordId != null) emit(LoopEvent.Memory(outcome.recordId, outcome.chip, fixed.name))
                 emit(LoopEvent.Text(REPAIRED_REPLY))
-                emit(LoopEvent.Done(null, outcome.changedPrefix, toolRounds = 1, staleConversation = true))
+                emit(LoopEvent.Done(null, outcome.changedPrefix, toolRounds = 1, staleConversation = true, tools = tools + fixed.name))
                 return@flow
             }
             val opening = held
@@ -373,7 +436,7 @@ class ToolLoop(
                     // Asked again and still nothing: better a plain line than an empty bubble.
                     show(NO_REPLY)
                 }
-                emit(LoopEvent.Done(stats, changedPrefix, rounds, staleConversation = checked || leftOver || nudged))
+                emit(LoopEvent.Done(stats, changedPrefix, rounds, staleConversation = checked || leftOver || nudged, tools = tools.toSet()))
                 return@flow
             }
 
@@ -381,7 +444,7 @@ class ToolLoop(
             // turn before anything runs: what the user asked goes again once they unlock.
             if (context.locked && calls.any { it.name !in ToolCatalog.LOCKED }) {
                 emit(LoopEvent.NeedsUnlock)
-                emit(LoopEvent.Done(stats, changedPrefix, rounds, staleConversation = true))
+                emit(LoopEvent.Done(stats, changedPrefix, rounds, staleConversation = true, tools = tools.toSet()))
                 return@flow
             }
 
@@ -406,7 +469,7 @@ class ToolLoop(
                 } else {
                     emit(LoopEvent.Step(ToolSteps.of(call, context.userText)))
                     val running = android.os.SystemClock.elapsedRealtime()
-                    val outcome = executor.execute(call, context)
+                    val outcome = executeShowingSteps(call, context)
                     timing?.tool(call.name, android.os.SystemClock.elapsedRealtime() - running)
                     mark("${call.name} ran")
                     ran(call, outcome)
@@ -427,7 +490,7 @@ class ToolLoop(
             // which closed this one: the reply is that answer, and the chat is rebuilt next turn.
             if (written.isNotEmpty()) {
                 emit(LoopEvent.Text((if (spoke) "\n" else "") + written.joinToString("\n")))
-                emit(LoopEvent.Done(stats, changedPrefix, rounds, staleConversation = true))
+                emit(LoopEvent.Done(stats, changedPrefix, rounds, staleConversation = true, tools = tools.toSet()))
                 return@flow
             }
             // Only sums, all worked out: the reply is the result itself, written here. The model
@@ -435,7 +498,7 @@ class ToolLoop(
             // (see NumberGrounding). The runtime never hears the results, so rebuild next turn.
             if (sums.isNotEmpty() && sums.size == calls.size) {
                 emit(LoopEvent.Text((if (spoke) "\n" else "") + sums.joinToString("\n")))
-                emit(LoopEvent.Done(stats, changedPrefix, rounds, staleConversation = true))
+                emit(LoopEvent.Done(stats, changedPrefix, rounds, staleConversation = true, tools = tools.toSet()))
                 return@flow
             }
             // A picture to look at (a found photo to read a question from) can't go in a tool
@@ -446,6 +509,64 @@ class ToolLoop(
             } else {
                 session.sendToolResults(results)
             }
+        }
+    }
+
+    /**
+     * [call] run, with the steps it reports on the way ([ToolContext.onStep]: "Reading part 2 of
+     * 5") shown as it reports them. Only the latest is kept while one waits to be shown.
+     */
+    private suspend fun FlowCollector<LoopEvent>.executeShowingSteps(call: ToolCall, context: ToolContext): ToolExecutor.Outcome = coroutineScope {
+        val steps = Channel<String>(Channel.CONFLATED)
+        val running = async { executor.execute(call, context.copy(onStep = { steps.trySend(it) })) }
+        var done = false
+        while (!done) {
+            // A step waiting goes first: a call that never had to wait still shows where it got to.
+            select<Unit> {
+                steps.onReceive { emit(LoopEvent.Step(it)) }
+                running.onAwait { done = true }
+            }
+        }
+        steps.close()
+        running.await()
+    }
+
+    /**
+     * The document attached to the message ([ToolContext.document]) read for its question, or
+     * summarised, and the answer given as the reply, with no turn of the chat model's: as if it had
+     * called read_file, so the chat records, replays and shows it the same way. The document
+     * reader closed the chat's conversation ([com.local.assistant.memory.work.ModelAccess.withModelFree]),
+     * so the turn ends stale and the next one rebuilds it.
+     */
+    fun readAttached(context: ToolContext): Flow<LoopEvent> = flow {
+        val document = context.document ?: error("Nothing attached")
+        val question = context.userText.trim().takeIf { it.isNotEmpty() }
+        val call = ToolCall(
+            ToolCatalog.READ_FILE,
+            linkedMapOf<String, Any?>("name" to document.name, ToolExecutor.ATTACHED to true, "question" to question).filterValues { it != null },
+        )
+        emit(LoopEvent.Step("Reading ${document.name}…"))
+        val outcome = executeShowingSteps(call, context)
+        if (outcome.chip != null && outcome.recordId != null) emit(LoopEvent.Memory(outcome.recordId, outcome.chip, call.name))
+        emit(LoopEvent.Text(outcome.reply ?: com.local.assistant.files.DocumentReader.couldNotReadNow(document.name)))
+        emit(LoopEvent.Done(null, changedPrefix = false, toolRounds = 1, staleConversation = true, tools = setOf(call.name)))
+    }
+
+    /**
+     * Notes on the attached document for [request], for the chat model to act on ("remind me to
+     * pay this bill"), kept as a read_file call so a later turn has them in its history. Null
+     * when it couldn't be read; the model is then told so instead.
+     */
+    suspend fun notesOnAttached(context: ToolContext, request: String): String {
+        val document = context.document ?: error("Nothing attached")
+        val call = ToolCall(ToolCatalog.READ_FILE, linkedMapOf("name" to document.name, ToolExecutor.ATTACHED to true, ToolExecutor.NOTES_FOR to request))
+        val result = executor.execute(call, context).result
+        val parsed = runCatching { com.google.gson.JsonParser.parseString(result).asJsonObject }.getOrNull()
+        val notes = parsed?.get("notes")?.takeIf { it.isJsonPrimitive }?.asString
+        return if (notes != null) {
+            "[Attached document \"${document.name}\". The app read it; notes on it for this request, not the user's words: $notes]"
+        } else {
+            "[Attached document \"${document.name}\". ${parsed?.get("note")?.takeIf { it.isJsonPrimitive }?.asString ?: "Couldn't read it just now."} Tell the user if that matters for what they asked.]"
         }
     }
 

@@ -36,11 +36,18 @@ class PhotoTools(
      */
     private val reader: (suspend (path: String, question: String) -> String?)? = null,
     private val now: () -> ZonedDateTime = ZonedDateTime::now,
+    /**
+     * An ID number looked for in the phone's documents first ([com.local.assistant.files.FileTools.idNumber]):
+     * read from a file's text, it's exact and takes no model.
+     */
+    private val documents: (suspend (PhotoReader.Field) -> com.local.assistant.files.FileTools.IdFiles)? = null,
 ) {
 
     /**
      * [question]: what the user wants to know from the photos ("SSLC score"); the best match then
-     * goes back to the model with the result, to answer from what it shows.
+     * goes back to the model with the result, to answer from what it shows. An ID number
+     * ("what's my PAN number?") is looked for in documents named after its card first; one
+     * found there is the answer, and one locked with a password is named when no photo gives it.
      */
     internal suspend fun find(
         query: String?,
@@ -48,6 +55,18 @@ class PhotoTools(
         taken: String? = null,
         place: String? = null,
         question: String? = null,
+    ): ActionResult {
+        val field = question?.let { PhotoReader.Field.of(it) }
+        val files = if (field != null && mayRead()) documents?.invoke(field) else null
+        return withIdFiles(field, files) { search(query, person, taken, place, question) }
+    }
+
+    private suspend fun search(
+        query: String?,
+        person: String?,
+        taken: String?,
+        place: String?,
+        question: String?,
     ): ActionResult {
         if (!ready()) throw ToolError("Photo search isn't set up. Tell the user to open Photos in the menu to turn it on.")
         val names = people(person).toMutableList()
@@ -213,6 +232,28 @@ class PhotoTools(
 
     companion object {
         const val MAX_QUERY = 120
+
+        /**
+         * A photo search for an ID number ([field]) beside what the phone's documents gave
+         * ([files]): a number read from a file is the answer, with no photo search; a file locked
+         * with a password is named in the reply when no photo gave the number, or told to the
+         * model when the photos go to it, or when the photos can't be searched at all.
+         */
+        internal suspend fun withIdFiles(field: PhotoReader.Field?, files: com.local.assistant.files.FileTools.IdFiles?, search: suspend () -> ActionResult): ActionResult {
+            files?.answer?.let { return it }
+            val locked = files?.lockedNote ?: return search()
+            val found = try {
+                search()
+            } catch (e: ToolError) {
+                return ActionResult(linkedMapOf("ok" to true, "found" to 0, "note" to "Photo search: ${e.message} Files: $locked Tell the user both, briefly."))
+            }
+            val reply = found.reply
+            return when {
+                reply != null && field?.valueIn(reply) != null -> found
+                reply != null -> found.copy(reply = "$reply\n\n$locked")
+                else -> found.copy(result = LinkedHashMap(found.result).apply { this["note"] = listOfNotNull(this["note"] as? String, "Say this too: $locked").joinToString(" ") })
+            }
+        }
 
         /** Words that ask for videos rather than photos (declared before [FILLER], which takes them in). */
         private val VIDEO_WORDS = setOf("video", "videos", "clip", "clips", "footage", "recording", "recordings")

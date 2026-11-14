@@ -38,8 +38,12 @@ data class ChatEntity(
  */
 enum class Role { USER, ASSISTANT, TOOL }
 
-/** What kind of file a message carries alongside its text. */
-enum class AttachmentKind { IMAGE, AUDIO }
+/**
+ * What kind of file a message carries alongside its text. Stored by name, so a new kind needs no
+ * migration. A [DOCUMENT] never reaches the model as media: it is read by the app
+ * ([com.local.assistant.files.DocumentReader]), and named in the history.
+ */
+enum class AttachmentKind { IMAGE, AUDIO, DOCUMENT }
 
 @Entity(
     tableName = "messages",

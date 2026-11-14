@@ -367,6 +367,21 @@ class ChatViewModel(
         }
     }
 
+    /**
+     * A PDF, Word, Excel or other document to send with the next message. The app reads it
+     * ([com.local.assistant.files.DocumentReader]), so it works with any model, vision or not.
+     */
+    fun attachDocument(uri: Uri) {
+        viewModelScope.launch {
+            discardPendingAttachment()
+            runCatching { attachments.importDocument(uri) }
+                .onSuccess {
+                    _pendingAttachment.value = PendingAttachment(it.absolutePath, AttachmentKind.DOCUMENT)
+                }
+                .onFailure { _error.value = it.message ?: "Could not attach that document" }
+        }
+    }
+
     fun discardPendingAttachment() {
         _pendingAttachment.value?.let { attachments.delete(it.path) }
         _pendingAttachment.value = null
@@ -586,6 +601,7 @@ internal fun replyReport(
         val attached = when (message.attachmentKind) {
             AttachmentKind.IMAGE -> "[a photo]"
             AttachmentKind.AUDIO -> "[a voice message]"
+            AttachmentKind.DOCUMENT -> "[a document]"
             null -> null
         }
         listOfNotNull(attached, message.text.takeIf { it.isNotBlank() }?.let(SensitiveText::masked)).joinToString(" ")

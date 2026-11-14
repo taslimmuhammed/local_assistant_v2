@@ -19,7 +19,21 @@ object ContextWindow {
      * message being sent may go as its recording too ([heard]).
      */
     fun sentAttachment(kind: AttachmentKind?, text: String): AttachmentKind? =
-        kind.takeUnless { it == AttachmentKind.AUDIO && text.isNotBlank() }
+        kind.takeUnless { it == AttachmentKind.AUDIO && text.isNotBlank() || it == AttachmentKind.DOCUMENT }
+
+    /**
+     * A message's words as its history gives them: an attached document named before them, since
+     * the model never gets the file itself (the app reads it: TurnRunner).
+     */
+    fun historyText(kind: AttachmentKind?, path: String?, text: String): String =
+        if (kind == AttachmentKind.DOCUMENT && path != null) {
+            "[Attached document \"${com.local.assistant.media.AttachmentStore.documentName(path)}\"]" + if (text.isBlank()) "" else " $text"
+        } else {
+            text
+        }
+
+    /** What naming an attached document in the history costs ([historyText]). */
+    const val DOCUMENT_NOTE_TOKENS = 16
 
     /**
      * Whether a voice message being sent goes as its recording, its words beside it as the phone
@@ -41,10 +55,14 @@ object ContextWindow {
     const val AUDIO_TOKENS_PER_SECOND = 32
 
     fun attachmentTokens(message: MessageEntity, visionTokensPerImage: Int): Int =
-        when (sentAttachment(message.attachmentKind, message.text)) {
-            AttachmentKind.IMAGE -> visionTokensPerImage
-            AttachmentKind.AUDIO -> audioTokens(message.attachmentDurationMs)
-            null -> 0
+        if (message.attachmentKind == AttachmentKind.DOCUMENT) {
+            DOCUMENT_NOTE_TOKENS
+        } else {
+            when (sentAttachment(message.attachmentKind, message.text)) {
+                AttachmentKind.IMAGE -> visionTokensPerImage
+                AttachmentKind.AUDIO -> audioTokens(message.attachmentDurationMs)
+                AttachmentKind.DOCUMENT, null -> 0
+            }
         }
 
     fun audioTokens(durationMs: Long?): Int = ceil((durationMs ?: 0L) / 1000.0).toInt() * AUDIO_TOKENS_PER_SECOND

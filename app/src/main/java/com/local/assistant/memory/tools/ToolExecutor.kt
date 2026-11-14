@@ -84,6 +84,10 @@ class ToolExecutor(
     private val places: PlaceFinder? = null,
     /** The user's notes and lists, for edit_note; none when not wired in. */
     private val notes: NoteStore = NoNotes,
+    /** read_file: files on the phone by name, read when asked about; null without All files access wired. */
+    private val files: com.local.assistant.files.FileTools? = null,
+    /** check_inbox: messages that came to the phone; null when not wired in. */
+    private val inbox: com.local.assistant.inbox.InboxTools? = null,
 ) {
 
     data class Outcome(
@@ -141,7 +145,7 @@ class ToolExecutor(
     }
 
     suspend fun execute(model: ToolCall, context: ToolContext): Outcome {
-        val call = if (context.heard) model else grounded(model, context.userText)
+        val call = if (context.heard) model else grounded(model, listOf(context.userText, context.documentNotes).filter { it.isNotBlank() }.joinToString("\n"))
         if (call != model) Log.i(TAG, "Numbers or names in ${model.name} taken from the user's words: ${LogText.of(model.arguments)} -> ${LogText.of(call.arguments)}")
         val nowMs = nowMs()
         val key = dedupeKey(call)
@@ -205,6 +209,8 @@ class ToolExecutor(
                 call.name == ToolCatalog.CALCULATE && key == "expression" -> NumberGrounding.groundExpression(value, userText)
                 // "list 3" is the id from "Notes and lists:", not a number the user said.
                 call.name == ToolCatalog.EDIT_NOTE && key == "note" -> value
+                // A file's name as the earlier result listed it ("Invoice_10234"), not the user's numbers.
+                call.name == ToolCatalog.READ_FILE && key == "name" -> value
                 // Who to call or message: a name spelled as the user spelled it.
                 call.name == ToolCatalog.CALL && key == "who" || call.name == ToolCatalog.SEND_MESSAGE && key == "to" ->
                     ContactMatcher.asSaid(NumberGrounding.ground(value, userText), userText)
@@ -239,6 +245,28 @@ class ToolExecutor(
                 .find(args.text("query"), args.text("person"), args.text("when"), args.text("place"), question)
             val result = if (userText.isBlank()) withRemembered(done.result, args) else done.result
             return Applied(result, done.chip, image = done.image, reply = done.reply)
+        }
+        if (call.name == ToolCatalog.READ_FILE) {
+            val files = files ?: throw ToolError("Finding files isn't available in this app.")
+            // A document attached to the message, read by the app ([ToolLoop.readAttached]).
+            val document = context.document
+            if (document != null && call.arguments[ATTACHED] == true) {
+                val done = if (call.arguments[NOTES_FOR] != null) {
+                    files.notesOnAttached(document, args.text(NOTES_FOR).orEmpty())
+                } else {
+                    files.readAttached(document, args.text("question"), context.onStep)
+                }
+                return Applied(done.result, done.chip, reply = done.reply)
+            }
+            // As for photos: the user's own question when they asked one, the model's otherwise.
+            val question = com.local.assistant.files.FileTools.questionIn(userText) ?: args.text("question")
+            val done = files.read(args.text("name"), args.text("type"), args.text("when"), question, context.onStep, context.chatId)
+            return Applied(done.result, done.chip, reply = done.reply)
+        }
+        if (call.name == ToolCatalog.CHECK_INBOX) {
+            val done = (inbox ?: throw ToolError("Messages aren't kept in this app."))
+                .check(args.text("query"), args.text("from"), args.text("app"), args.text("when"))
+            return Applied(done.result, done.chip)
         }
         val tools = device ?: throw ToolError("That isn't available in this app.")
         val done = when (call.name) {
@@ -1238,6 +1266,16 @@ class ToolExecutor(
         private const val TAG = "ToolExecutor"
         const val DEDUPE_WINDOW_MS = 2 * 60 * 1000L
         const val DEVICE_DEDUPE_WINDOW_MS = 15 * 1000L
+
+        /**
+         * read_file's arguments when the app reads a document attached to the message itself
+         * ([ToolLoop.readAttached]): never declared, so only the app makes such a call; one
+         * replayed from the history reads as an ordinary search by name.
+         */
+        const val ATTACHED = "attached"
+
+        /** With [ATTACHED]: notes on it for this request, for the chat model to act on ([ToolLoop.notesOnAttached]). */
+        const val NOTES_FOR = "notes_for"
 
         /** A place reminder saved without location all the time: what the model tells the user. */
         private const val CANT_RING =

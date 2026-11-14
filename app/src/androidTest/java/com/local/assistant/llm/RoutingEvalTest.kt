@@ -191,7 +191,37 @@ class RoutingEvalTest {
         Case("my torch isn't working, what should I do?", setOf(null)),
         Case("explain how a rainbow forms", setOf(null)),
         Case("give me a recipe for dal tadka", setOf(null)),
+        // Files by name, read when asked about (not with "-e tools basic").
+        Case("find my resume pdf", setOf("read_file")) { args -> "resume" in args["name"].toString().lowercase() },
+        Case("summarise my rental agreement", setOf("read_file")) { args -> "rental" in args["name"].toString().lowercase() },
+        Case("what's the deposit in my rental agreement?", setOf("read_file")) { args -> "rental" in args["name"].toString().lowercase() },
+        Case("open my Bank folder", setOf("read_file")) { args -> "bank" in args["name"].toString().lowercase() },
+        Case("show the spreadsheets I downloaded last week", setOf("read_file")),
+        Case("how do I write a good resume?", setOf(null, "web_lookup")),
+        // Messages that came to the phone; sending one stays send_message.
+        Case("what did Rahul say about the trip?", setOf("check_inbox")) { args -> "rahul" in args["from"].toString().lowercase() },
+        Case("did the bank SMS me today?", setOf("check_inbox")),
+        Case("any messages from amma?", setOf("check_inbox")) { args -> "amma" in args["from"].toString().lowercase() },
+        Case("read me Priya's last message", setOf("check_inbox")) { args -> "priya" in args["from"].toString().lowercase() },
+        Case("text Rahul I'm late", setOf("send_message")),
+        Case("what did we talk about last week?", setOf("search_memory")),
+        Case("what's my PAN number?", setOf("find_photos")),
     )
+
+    /**
+     * "-e tools main": the tools main has (health data, no files or messages); "-e tools basic":
+     * the earlier runs' (no health either), to compare with them. Every tool otherwise.
+     */
+    private val toolSet = InstrumentationRegistry.getArguments().getString("tools") ?: "all"
+    private val everyTool = toolSet == "all"
+    private val health = toolSet != "basic"
+    private val newTools = setOf(ToolCatalog.READ_FILE, ToolCatalog.CHECK_INBOX)
+
+    private fun instructions() = Instructions.render(
+        PERSONA, withTools = true, webSearch = true, photoSearch = true, healthData = health, fileSearch = everyTool, inbox = everyTool,
+    )
+
+    private fun declared() = ToolCatalog.declarations(web = true, photos = true, health = health, files = everyTool, inbox = everyTool)
 
     @Before
     fun onlyWhenAsked() {
@@ -228,7 +258,7 @@ class RoutingEvalTest {
 
     /** What the tool declarations really cost: the same prefix with and without them. */
     private fun measureDeclarations(engine: Engine) {
-        val system = Instructions.render(PERSONA, withTools = true, webSearch = true, photoSearch = true)
+        val system = instructions()
         fun count(withTools: Boolean): Int = engine.createConversation(
             ConversationConfig(
                 systemInstruction = Contents.of(system),
@@ -241,13 +271,36 @@ class RoutingEvalTest {
         val with = count(true)
         report("prefix.tokens.instructions", without)
         report("prefix.tokens.toolDeclarations", with - without)
+        // "-e costs true": what each tool adds, its declaration and its rule, each left out in turn.
+        if (InstrumentationRegistry.getArguments().getString("costs") == "true") {
+            val all = declared()
+            for (json in all) {
+                val name = com.google.gson.JsonParser.parseString(json).asJsonObject.get("name").asString
+                val rest = engine.createConversation(
+                    ConversationConfig(
+                        systemInstruction = Contents.of(system),
+                        tools = (all - json).map(::toolOf),
+                        automaticToolCalling = false,
+                        prefillPrefaceOnInit = true,
+                    ),
+                ).use { it.getTokenCount() }
+                report("prefix.tokens.tool.$name", with - rest)
+            }
+            if (everyTool) {
+                val bare = Instructions.render(PERSONA, withTools = true, webSearch = true, photoSearch = true, healthData = true)
+                fun rules(system: String) = engine.createConversation(
+                    ConversationConfig(systemInstruction = Contents.of(system), automaticToolCalling = false, prefillPrefaceOnInit = true),
+                ).use { it.getTokenCount() }
+                report("prefix.tokens.rules.filesAndInbox", rules(system) - rules(bare))
+            }
+        }
     }
 
     private fun evaluate(engine: Engine, temperature: Double) {
         // "-e profile Taslim": the user's name in the prompt, as the app puts it, which changes how
         // the model reads "photos of <that name>".
         val profile = InstrumentationRegistry.getArguments().getString("profile")
-        val system = Instructions.render(PERSONA, withTools = true, webSearch = true, photoSearch = true) +
+        val system = instructions() +
             (profile?.let { "\n\n${com.local.assistant.memory.core.CoreMemoryRenderer.HEADER}\nProfile: Name: $it" } ?: "")
         val now = "[Now: ${DateTimeFormatter.ofPattern("EEE d MMM yyyy, HH:mm", Locale.ENGLISH).format(ZonedDateTime.now())}]"
         var right = 0
@@ -257,7 +310,7 @@ class RoutingEvalTest {
 
         val only = InstrumentationRegistry.getArguments().getString("only")
         val raw = InstrumentationRegistry.getArguments().getString("raw") == "true"
-        val repair = ToolCallRepair(ToolCatalog.declarations(web = true, photos = true))
+        val repair = ToolCallRepair(declared())
         // "-e samples 3" asks each three times, each with its own seed: the runtime's sampler is
         // seeded (0 by default), so the same prompt with the same seed always gives the same reply.
         val samples = InstrumentationRegistry.getArguments().getString("samples")?.toIntOrNull() ?: 1
@@ -272,6 +325,7 @@ class RoutingEvalTest {
         // "-e only '<words>|<other words>'": the cases whose request has any of them.
         val selected = (if (only == null) cases else cases.filter { case -> only.split('|').any { it in case.prompt } })
             .filter { voice == null || clip(it) != null }
+            .filter { everyTool || it.accept.none { tool -> tool in newTools } }
             .flatMap { case -> List(samples) { seed -> case to seed } }
         for ((case, seed) in selected) {
             val conversation = engine.createConversation(
@@ -348,12 +402,12 @@ class RoutingEvalTest {
     private fun voiceDir(): File? = InstrumentationRegistry.getArguments().getString("voice")
         ?.let { File(context.getExternalFilesDir(null), it) }
 
-    private fun declarations() = ToolCatalog.declarations(web = true, photos = true).map { json ->
-        tool(object : OpenApiTool {
-            override fun getToolDescriptionJsonString() = json
-            override fun execute(paramsJsonString: String): String = error("manual")
-        })
-    }
+    private fun declarations() = declared().map(::toolOf)
+
+    private fun toolOf(json: String) = tool(object : OpenApiTool {
+        override fun getToolDescriptionJsonString() = json
+        override fun execute(paramsJsonString: String): String = error("manual")
+    })
 
     private fun report(key: String, value: Any) {
         Log.i(TAG, "$key = $value")

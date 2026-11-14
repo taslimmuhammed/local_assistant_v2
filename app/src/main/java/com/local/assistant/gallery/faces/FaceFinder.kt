@@ -46,6 +46,8 @@ class FaceFinder(private val assets: AssetManager, private val threads: Int = DE
     private val detectorInput = ByteBuffer.allocateDirect(4 * YuNet.SIZE * YuNet.SIZE * 3).order(ByteOrder.nativeOrder())
     private val recognizerInput = ByteBuffer.allocateDirect(4 * FaceAlign.CROP * FaceAlign.CROP * 3).order(ByteOrder.nativeOrder())
     private val recognizerOutput = ByteBuffer.allocateDirect(4 * PRINT_SIZE).order(ByteOrder.nativeOrder())
+    private val detectorValues = FloatArray(YuNet.SIZE * YuNet.SIZE * 3)
+    private val recognizerValues = FloatArray(FaceAlign.CROP * FaceAlign.CROP * 3)
     private val letterbox = Bitmap.createBitmap(YuNet.SIZE, YuNet.SIZE, Bitmap.Config.ARGB_8888)
     private val crop = Bitmap.createBitmap(FaceAlign.CROP, FaceAlign.CROP, Bitmap.Config.ARGB_8888)
     private val pixels = IntArray(YuNet.SIZE * YuNet.SIZE)
@@ -63,13 +65,12 @@ class FaceFinder(private val assets: AssetManager, private val threads: Int = DE
             drawBitmap(photo, Matrix().apply { setScale(scale, scale) }, paint)
         }
         letterbox.getPixels(pixels, 0, YuNet.SIZE, 0, 0, YuNet.SIZE, YuNet.SIZE)
+        // BGR, 0–255: OpenCV's blobFromImage with no scaling or swap. Filled as one array and
+        // copied in at once: a putFloat per value, inside this method, took 187 ms of a 215 ms
+        // face pass on the phone (2026-11-14); this takes about 2 ms, the detector 25.
+        bgr(pixels, detectorValues, pixels.size)
         detectorInput.rewind()
-        for (p in pixels) {
-            // BGR, 0–255: OpenCV's blobFromImage with no scaling or swap.
-            detectorInput.putFloat((p and 0xFF).toFloat())
-            detectorInput.putFloat((p shr 8 and 0xFF).toFloat())
-            detectorInput.putFloat((p shr 16 and 0xFF).toFloat())
-        }
+        detectorInput.asFloatBuffer().put(detectorValues)
         detectorInput.rewind()
         outputs.values.forEach { it.rewind() }
         detector.runForMultipleInputsOutputs(arrayOf<Any>(detectorInput), outputs as Map<Int, Any>)
@@ -105,14 +106,10 @@ class FaceFinder(private val assets: AssetManager, private val threads: Int = DE
             drawBitmap(photo, Matrix().apply { setValues(FaceAlign.transform(landmarks) + floatArrayOf(0f, 0f, 1f)) }, paint)
         }
         crop.getPixels(pixels, 0, FaceAlign.CROP, 0, 0, FaceAlign.CROP, FaceAlign.CROP)
+        // RGB, 0–255: OpenCV's blobFromImage(swapRB = true) with no scaling.
+        rgb(pixels, recognizerValues, FaceAlign.CROP * FaceAlign.CROP)
         recognizerInput.rewind()
-        for (i in 0 until FaceAlign.CROP * FaceAlign.CROP) {
-            val p = pixels[i]
-            // RGB, 0–255: OpenCV's blobFromImage(swapRB = true) with no scaling.
-            recognizerInput.putFloat((p shr 16 and 0xFF).toFloat())
-            recognizerInput.putFloat((p shr 8 and 0xFF).toFloat())
-            recognizerInput.putFloat((p and 0xFF).toFloat())
-        }
+        recognizerInput.asFloatBuffer().put(recognizerValues)
         recognizerInput.rewind()
         recognizerOutput.rewind()
         recognizer.run(recognizerInput, recognizerOutput)
@@ -163,6 +160,35 @@ class FaceFinder(private val assets: AssetManager, private val threads: Int = DE
     }
 
     companion object {
+        /**
+         * The first [count] pixels as blue, green, red values, 0–255. Small functions of their
+         * own: the runtime compiles a hot small loop, while inside [find] it stayed interpreted.
+         */
+        @JvmStatic
+        private fun bgr(pixels: IntArray, out: FloatArray, count: Int) {
+            var at = 0
+            for (i in 0 until count) {
+                val p = pixels[i]
+                out[at] = (p and 0xFF).toFloat()
+                out[at + 1] = (p shr 8 and 0xFF).toFloat()
+                out[at + 2] = (p shr 16 and 0xFF).toFloat()
+                at += 3
+            }
+        }
+
+        /** As [bgr], red first. */
+        @JvmStatic
+        private fun rgb(pixels: IntArray, out: FloatArray, count: Int) {
+            var at = 0
+            for (i in 0 until count) {
+                val p = pixels[i]
+                out[at] = (p shr 16 and 0xFF).toFloat()
+                out[at + 1] = (p shr 8 and 0xFF).toFloat()
+                out[at + 2] = (p and 0xFF).toFloat()
+                at += 3
+            }
+        }
+
         private const val TAG = "FaceFinder"
         const val DETECTOR = "faces/yunet_2023mar.tflite"
         const val RECOGNIZER = "faces/sface_2021dec_int8w.tflite"

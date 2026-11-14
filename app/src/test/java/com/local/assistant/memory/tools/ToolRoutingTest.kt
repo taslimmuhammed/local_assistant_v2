@@ -110,7 +110,8 @@ class ToolRoutingTest {
         assertEquals(at(9, 22, 11), store.tasks.values.single().dueAt)
         assertEquals(true, result(session)["ok"])
         assertTrue(events.none { it == LoopEvent.NeedsUnlock })
-        assertEquals(LoopEvent.Text("Done."), events.filterIsInstance<LoopEvent.Text>().single())
+        assertEquals("Done.", events.filterIsInstance<LoopEvent.Text>().single().delta)
+        assertTrue(LoopEvent.Confirm in events)
     }
 
     @Test
@@ -171,7 +172,8 @@ class ToolRoutingTest {
         assertEquals("Tue 22 Sep 11:00", result(session)["due"])
         val chip = events.filterIsInstance<LoopEvent.Memory>().single().chip
         assertEquals(MemoryChip(MemoryChip.Kind.TASK, "Reminder", "Call the CA", at(9, 22, 11), editable = true), chip)
-        assertEquals(LoopEvent.Text("Done."), events.filterIsInstance<LoopEvent.Text>().single())
+        assertEquals("Done.", events.filterIsInstance<LoopEvent.Text>().single().delta)
+        assertTrue(LoopEvent.Confirm in events)
         assertTrue(events.last() is LoopEvent.Done)
     }
 
@@ -858,6 +860,62 @@ class ToolRoutingTest {
     private fun stoodBeforeRetract(events: List<LoopEvent>): Boolean =
         events.takeWhile { it != LoopEvent.Retract }.any { it == LoopEvent.Confirm || (it is LoopEvent.Text && !it.provisional) }
 
+    // ---- Token soup ----
+
+    /** Made up in the style of what the phone gave on 14 Nov 2026. */
+    private val soup = listOf("\"840tsetUauthorx205619i ", "aponitimiCrap.M WMWWCOMXIai ", "/isdevincr 링Tı ", "Microsoft Sound***passou ", "setzuL6yCblue ", "and more")
+
+    @Test
+    fun `token soup is taken back before it stands, the model stopped, and the turn ends for another go`() {
+        val (session, events) = replies(soup.map { GenEvent.TextDelta(it) } + GenEvent.Done(null))
+        assertEquals(LoopEvent.Garbled(), events.last())
+        assertEquals("", shown(events))
+        assertFalse(stoodBeforeRetract(events))
+        assertEquals(1, session.cancelled)
+        // Stopped by its sixth word: what came after was never shown.
+        assertFalse(events.filterIsInstance<LoopEvent.Text>().any { "and more" in it.delta })
+        assertEquals(listOf("envelope"), session.sentEnvelopes)
+    }
+
+    @Test
+    fun `soup after a tool's result goes too, and what stood before it stays for the turn to clear`() {
+        val (_, events) = replies(
+            listOf(GenEvent.TextDelta("Let me check your calendar. "), GenEvent.ToolCalls(listOf(call("get_upcoming", "days" to 7))), GenEvent.Done(null)),
+            soup.map { GenEvent.TextDelta(it) } + GenEvent.Done(null),
+        )
+        assertEquals(LoopEvent.Garbled(), events.last())
+        assertEquals("Let me check your calendar. ", shown(events))
+    }
+
+    @Test
+    fun `soup after a tool acted says so, so the turn isn't asked again and done twice`() {
+        val (_, events) = replies(
+            ScriptedSession.calls(call("add_task", "title" to "Call the CA", "when" to "tomorrow at 11")),
+            soup.map { GenEvent.TextDelta(it) } + GenEvent.Done(null),
+        )
+        assertEquals(LoopEvent.Garbled(afterActing = true), events.last())
+        assertEquals(1, store.tasks.size)
+    }
+
+    @Test
+    fun `a short soup reply is caught when it ends`() {
+        val (_, events) = replies(ScriptedSession.says("840tsetUauthorx205619i aponitimiCrap.M"))
+        assertEquals(LoopEvent.Garbled(), events.last())
+        assertEquals("", shown(events))
+    }
+
+    @Test
+    fun `a reply after a tool's result stands once its first words are words`() {
+        val (_, events) = replies(
+            ScriptedSession.calls(call("get_upcoming", "days" to 7)),
+            listOf("You have ", "nothing due ", "this week, ", "so the weekend ", "is free.").map { GenEvent.TextDelta(it) } + GenEvent.Done(null),
+        )
+        assertEquals("You have nothing due this week, so the weekend is free.", shown(events))
+        val beforeConfirm = events.takeWhile { it != LoopEvent.Confirm }.filterIsInstance<LoopEvent.Text>()
+        assertTrue(beforeConfirm.isNotEmpty() && beforeConfirm.all { it.provisional })
+        assertFalse(events.any { it is LoopEvent.Garbled })
+    }
+
     // ---- Nothing written after a lookup's result ----
 
     @Test
@@ -1069,10 +1127,11 @@ class ToolRoutingTest {
         val pieces = listOf("Here is ", "a short haiku about the rain", ". ", "Drops on the tin roof,\n", "the street ", "goes quiet.")
         val (session, events) = replies(pieces.map { GenEvent.TextDelta(it) } + GenEvent.Done(null))
         assertEquals(pieces.joinToString(""), shown(events))
-        // Shown from the first piece, provisionally, and confirmed once the first sentence was known to claim nothing.
+        // Shown from the first piece, provisionally, and confirmed once the first sentence was known
+        // to claim nothing and its first ten words to be words (GarbledText).
         assertEquals(LoopEvent.Text("Here is ", provisional = true), events.first { it is LoopEvent.Text })
         val beforeConfirm = events.takeWhile { it != LoopEvent.Confirm }.filterIsInstance<LoopEvent.Text>()
-        assertEquals("Here is a short haiku about the rain. ", beforeConfirm.joinToString("") { it.delta })
+        assertEquals("Here is a short haiku about the rain. Drops on the tin roof,\n", beforeConfirm.joinToString("") { it.delta })
         assertTrue(beforeConfirm.all { it.provisional })
         assertEquals(1, events.count { it == LoopEvent.Confirm })
         assertFalse(LoopEvent.Retract in events)

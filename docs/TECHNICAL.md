@@ -79,7 +79,7 @@ AssistantApplication
     ├── LlmService                owns the LiteRT-LM Engine
     ├── LiteRtLmBackend           LlmBackend: conversations, streaming, one-shot completions
     ├── MemoryEmbedder            memory search's model: the photo model's text side (GalleryEmbedder,
-    │                             LiteRT-LM EmbeddingEngine, CPU), or an imported one (LiteRtEmbedder)
+    │                             LiteRT-LM EmbeddingEngine, text on the CPU), or an imported one (LiteRtEmbedder)
     ├── ModelScheduler            one model job at a time; the user always first
     ├── EmbeddingQueue            embeds the archive's backlog while the user is idle
     ├── Retriever                 per-turn recall: facts, then keyword + vector search, fused
@@ -227,6 +227,13 @@ and to leave them unmentioned if they aren't about it (`PromptAssembler.renderPh
   call…) gets no card, however it was put; "set alarm at 4:30" written down as "sarlamat 4:30
   p.m. today" got one before. Greetings ("good morning Luna", "hi, how are you?",
   `QueryText.isSmallTalk`) aren't searched for photos at all; memory still is.
+- **Not with messages or files.** "Do you have any latest messages" got a card of chat
+  screenshots under check_inbox's answer, twice on 14 Nov 2026. While messages are kept, a
+  question that names them ("messages", "texted", "SMS", "WhatsApp"…, with no photo or screenshot
+  named: `QueryText.asksAboutMessages`) isn't searched for photos, and a turn that ran check_inbox
+  or read_file (`ToolCatalog.ANSWERS_FROM_ELSEWHERE`, from `LoopEvent.Done.tools`) gets no card
+  however it was put. In VoiceChatReplayTest the two "latest messages" turns had the card before
+  and none after, in two runs.
 - **Only a clear match goes to the model.** A whole question scores differently from a short search: of 30
   general questions on the test phone's 2,685 photos ("what is the capital of France?", "tell me a
   joke") the best photo scored up to 0.777, so the search's own floor (0.72) would have sent
@@ -442,6 +449,8 @@ messaging app opens ready, and the user presses the button.
 | `calculate` | Exact arithmetic and unit conversions | **expression** | the app |
 | `web_lookup` | News, weather, prices, scores — anything current (only with a Tavily key) | **query**, topic | Tavily |
 | `find_photos` | The user's own photos and documents: of something or someone, from a place or a time; shown under the reply, never sent to the model | query, person, place, when (one at least) | the photo index |
+| `read_file` | Files and folders by name or kind, shown under the reply; with a question, the best match read and answered on its own (only with All files access) | name, type, when, question | MediaStore + `files/` |
+| `check_inbox` | Messages that came to the phone, as six short lines of who, app, when and what (only while messages are kept) | from, query, app, when | `inbox.db` |
 
 ### Tools and reminders
 
@@ -575,6 +584,42 @@ same words are true and pass.
   replies in the user's chats it found 19 claims, all real (17 after a tool, 2 with none), and
   no false ones. Holding the opening delays the first words of a reply with no tool call by the
   time it takes to write its first sentence.
+- **Token soup is taken back too** (`ToolLoop`, `GarbledText`). On 14 Nov 2026 one app process
+  replied with nothing but soup ("840tsetUauthorx205619i aponitimiCrap.M …") for 12 minutes, in
+  every chat, typed or spoken, until it was restarted. The instructions at the start of the
+  model's memory still read; what came after about token 4,100 did not.
+
+  **The cause** was the photo model's vision encoder on the GPU, where this branch had put it for
+  indexing speed. When it was closed and loaded again while a chat conversation was open, as the
+  app does when it leaves the screen and comes back, that conversation broke. In the app, a chat
+  opened before the app left the screen went bad once past ~4,096 tokens, 2 times in 2: soup, or
+  the model's reasoning written out ("[Thinking Process: 1. **Analyze the Request:** …
+  <channel|>The Eiffel Tower …"), thinking being off. Chats opened after it came back were fine.
+  `AudioPositionProbeTest -e photo reload` crashed the chat model in OpenCL (`clEnqueueMapBuffer`)
+  at the same point twice. With the photo model's vision on the CPU (`-e vision cpu`), 6 of 6
+  replies from 3,901 to 4,375 tokens were right. Loading the two models at once broke nothing,
+  6 of 6 (`-e photo concurrent`). Nor did closing them with no conversation open.
+
+  So the photo model's vision is now on the GPU only while the chat model isn't loaded, and it
+  leaves the GPU before the chat model loads (`GalleryEmbedder.leaveGpu`, `LlmService.holdsGpu`).
+  Indexing while the app is in use runs at the CPU's speed, as on main. Afterwards, in the app, a
+  chat carried over 2.7 minutes in the background gave right replies up to 4,415 tokens.
+
+  **The check stays, as a safety net.** Every round's reply streams provisionally until its
+  first ten words are known to be words, twenty if two of the ten are odd. A word is odd if it
+  has a capital inside a long word, letters run into digits, two scripts in one word, symbols
+  between letters, or 21 Latin letters in a row; more than three in ten makes it soup. A reply
+  that opens "Thinking Process:" or carries a `<channel|>` marker counts as soup too. On the
+  stored replies, all 8 soup ones were caught by their sixth to eighth word, and none of the 67
+  real ones or the 294 paragraphs of these docs.
+
+  Soup is taken back unspoken and the model stopped. The runtime ends the stopped reply as
+  "CANCELLED", which ends that reply, not the turn. The engine then loads again
+  (`ConversationManager.recoverFromGarble`, about 20 s with the re-read) and the turn is sent once
+  more; in a replay with made-up soup, the right answer came about 32 s after the question.
+  - Soup a second time says so plainly (`TurnRunner.GARBLED_AGAIN`).
+  - Soup after a tool acted isn't sent again, so nothing is done twice.
+  - Each catch is a `garbled` line in `model-events.csv`, with its round and token count.
 - **A rule in the instructions:** the model acts only through its tools, never says it did
   something unless the tool succeeded just now, and says plainly when none can do what is asked
   (Teams or Slack, bookings, payments, posts, reading the inbox).
@@ -692,6 +737,11 @@ as what it is. Memory lives alongside: `sessions` (one foreground period within 
 with an FTS4 keyword index, `forgotten` tombstones, `tasks`, `events`, and `chunks` (with their
 own FTS4 index) for the archive. Nothing in it is included in backup or device-to-device transfer.
 
+Two more files hold what isn't the user's own words, so a migration there can't put chats or
+memory at risk and each can be wiped whole: `away.db` (the brief's notifications, two days) and
+`inbox.db` (`inbox/InboxDatabase`: messages kept for `check_inbox`, with an FTS4 index on title,
+sender and text; kept as long as chats, `historyRetentionDays`). `gallery.db` is the photo index.
+
 ## Images and voice
 
 Both are gated on what the model file itself reports via `ModelInfo.from(modelPath).inputModalities()`
@@ -775,16 +825,22 @@ it. The WAV is still what the chat plays back.
   directly with each photo's vector. Memory search uses its text side too, on the same engine (see
   Memory search). `ModelFormat.Kind.GALLERY` refuses a file without both the text and the vision
   encoder.
-- **Index.** `gallery.db`, a Room database of its own: one row per MediaStore photo, with its
-  date, its `DATE_MODIFIED` (an edited photo is redone) and a 256-byte int8 vector. Everything in
-  it can be rebuilt from the photos, so it never needs a migration of `assistant.db`; a schema
-  change simply drops it. Each photo goes to the model as a 512 px JPEG from the system's
-  thumbnail cache, at 70 vision tokens.
-- **When it indexes.** While the Photos screen is open; while the app stays in front on phones
-  with more than 8 GB (smaller ones stop when the screen closes); and in the nightly job on the
-  charger, after memory's own work. Newest photos first, in batches of 8 through the
-  `ModelScheduler` at `GALLERY_INDEX`, the lowest priority but one, so a chat turn stops it
-  between photos.
+- **Index.** `gallery.db`, a Room database of its own: one row per MediaStore photo or video,
+  with its date, its `DATE_MODIFIED` (an edited photo is redone) and a 256-byte int8 vector; a
+  video has a vector for each of up to 20 moments instead (`frames`). It is kept apart from
+  `assistant.db`, and since faces and the names given to them can't be rebuilt, it migrates like
+  any database (version 7 now) rather than being dropped. Each photo goes to the model as a
+  512 px JPEG from the system's thumbnail cache, at 70 vision tokens.
+- **When it indexes.** As soon as the photo model is here and photos may be read, while the app
+  is in front (`AppContainer.indexPhotosIfReady`: when the model arrives, and 10 s after coming to
+  the front, once the chat model's warm-up is done); while the Photos screen is open; and in the
+  nightly job on the charger, after memory's own work. Phones of 8 GB or less don't start it
+  while the chat model is loaded. Photos first, newest first, then videos, in batches of 8
+  through the `ModelScheduler` at `GALLERY_INDEX`, the lowest priority but one, so a chat turn
+  stops it between photos. Each batch is read inside its slot, so a batch cut short isn't
+  embedded twice, and a video's moments are saved as they're done (the video is marked
+  `~model` until then, and not searched), so a stopped video carries on where it stopped. At
+  thermal status MODERATE it waits until the phone is back to LIGHT.
 - **Search.** The query gets the model's search prompt, then an exact scan over every vector
   (`PhotoRanking`). A query matches only if its best photo scores at least 0.72; then every photo
   within 0.035 of that best is listed, best first. Calibrated on the phone's own 2,428 photos
@@ -798,9 +854,25 @@ it. The WAV is still what the chat plays back.
 - **Measured on the OnePlus** (`GalleryEvalTest`, 16 Wikipedia lead images, 18 queries): the
   right picture first for 16 of 16; load 1.4 s; a query 51 ms; a photo 224 ms with the vision
   encoder on the GPU against 474 ms on four CPU threads (six or eight were no faster), and 560 MB
-  of process memory against 812 MB. So vision runs on the GPU, falling back to the CPU. At that
-  rate 10,000 photos take about 37 minutes, which is why most of a large library is indexed at
-  night.
+  of process memory against 812 MB. So vision runs on the GPU, falling back to the CPU, but only
+  while the chat model isn't loaded. Beside it, vision is on the CPU (see Token soup).
+- **Indexing speed** (2026-11-14, `IndexSpeedTest`, the phone's own 2,577 photos and 318 videos
+  into a database in memory, 90 s passes; only timings and counts reported):
+
+  | | Before (CPU vision, faces after everything) | Now |
+  |---|---|---|
+  | Embed, per photo | 495 ms | 202 ms (GPU) |
+  | Faces, per photo | 211 ms | 31 ms |
+  | In 90 s | 52 photos + 116 video moments, no faces | 416 photos, faces in all of them |
+
+  Faces had slowed to 211 ms because YuNet's 640×640 input was filled one `putFloat` at a time
+  inside `FaceFinder.find`: 187 ms of it, interpreted (the runtime never compiled that loop in
+  the big method). Filled as one array in a small function of its own and copied in at once, it
+  takes about 2 ms (`FaceSpeedProbeTest`); the detector itself takes 25 ms and each face 10–20.
+  Each photo's faces are now found while it's embedded, on the CPU beside the GPU's work (220 ms
+  per photo with faces, against 276 ms one after the other). Six threads for the photo model's
+  CPU side were no faster than four. Flat out, the phone went from cool to MODERATE in about
+  three minutes and cooled in one or two.
 - **In a chat.** `find_photos` (see the tool list) searches the same index from any chat or the
   power-button panel. The model only gets counts back (`{"ok":true,"found":117}`); the photos go in
   the reply's chip as MediaStore ids (`PhotoSet`, stored in the TOOL row like any chip), so no
@@ -823,7 +895,10 @@ it. The WAV is still what the chat plays back.
   checked against OpenCV's own FaceDetectorYN and FaceRecognizerSF: the same 34 faces on 18
   public photos, boxes and landmarks to the pixel, prints at cosine 0.996+ on the Mac and 0.960+
   on the phone (`FaceEvalTest`; the difference is resampling). The phone's 2,430 photos took 138
-  s: 2,199 faces in 900 photos. Faces are stored in `gallery.db` (version 2, the index's first
+  s: 2,199 faces in 900 photos. Each photo's faces are found as it is indexed (`FaceIndex.lookAt`),
+  grouped every 500 new faces and at the end of a pass, even a stopped one, so people show up
+  while it runs; photos indexed before Find people was on are looked at afterwards, and contacts'
+  photos name groups after each pass that found faces. Faces are stored in `gallery.db` (version 2, the index's first
   real migration, since names can't be rebuilt). `FaceGrouping` places them: faces the user
   confirmed stay; others join the named person whose three closest faces they match at 0.55 or
   more on average; the rest form unnamed groups by the same closest-faces rule at 0.65. Faces
@@ -911,9 +986,15 @@ it. The WAV is still what the chat plays back.
   chat read it. The PAN came out the same 6 times in 6 over three wordings, the licence number 6
   in 6, and the Aadhaar number 2 in 2, passing its check digit. Neither the card number nor a
   passport number was made up. The SSLC questions got the CGPA, and the maths one said its
-  photo was the plus-two certificate. Each turn took 12–22 s. The photo model's vision now runs on the CPU:
-  loaded on the GPU, it broke the chat model's vision for any image ("TensorBuffer must have all
-  static dimensions"), found photos and photos sent in a chat alike.
+  photo was the plus-two certificate. Each turn took 12–22 s. The photo model's vision then ran
+  on the CPU: on LiteRT-LM 0.18.1, loaded on the GPU, it broke the chat model's vision for any
+  image ("TensorBuffer must have all static dimensions"), found photos and photos sent in a chat
+  alike. On 0.19.1 the chat model reads images beside it in every order tried
+  (`GpuVisionProbeTest`, 2026-11-14), so it is on the GPU again while the chat model isn't
+  loaded. Closed on the GPU beside an open chat conversation, it broke that conversation (Token
+  soup), so beside the chat model it stays on the CPU. GPU vectors match the CPU ones already
+  stored at cosine 0.98 or more, each nearest its own CPU twin (24 of 24), so the index wasn't
+  redone.
 - **Dates.** `find_photos` takes `when` in the user's words: "last December", "2023", "this
   year", "3 weeks ago", "since March", "25 Dec 2023". `PhotoPeriod` turns it into a stretch of the
   past (a month with no year is the latest one begun; "N years ago" is that calendar year), and
@@ -974,6 +1055,77 @@ it. The WAV is still what the chat plays back.
   with photos fully shared Android grants both with no dialog (videos share the photos'
   permission group). Android grants "selected photos only" alongside full access too, so it counts
   for videos only when photos themselves are partly shared. Photos are read, never changed, moved or sent anywhere.
+
+## Files and documents
+
+Files are found by **name only**; nothing is indexed (the user, 2026-11-13: "just index the file
+names, no need to index the doc"). `files/FileFinder` asks MediaStore for names like the words
+asked, plus a short walk of the folders documents arrive in that MediaStore misses (WhatsApp's:
+6 of 74 PDFs on the user's phone), ranked by `files/FileNames` (word starts, one-letter slips in
+long words, recency). Needs All files access, asked on the first-launch page.
+
+A document is read only when asked about (`read_file` with a question, or attached in the chat).
+`files/DocumentText` takes the text from Android's PDF renderer (API 35+, or the SDK extension
+before it) or a small scanner for Word, Excel, PowerPoint and OpenDocument zips; a PDF of page
+pictures is drawn and read by the vision model. So is a PDF of up to three pages with under 150
+letters a page, because Android's own PDF writer leaves words out of the text layer: a receipt an
+app wrote had two of its six lines there and no total. Its text is kept for a model that can't
+see, and for ID numbers. The reader names the question's language ("in English") instead of
+asking for "the language of the question": asked in English about a spreadsheet, it once
+answered in Spanish. `files/DocumentReader` answers in its own short
+conversations after closing the chat's (`ModelAccess.withModelFree`): one pass up to ~5,500
+tokens, the best-matching ~1,200-token parts for a question on a longer one, or a note per ~5,000-token part
+and a combined summary (at most 8 parts, saying how much was read). Its answer is the reply and
+ends the turn, as `find_photos`' photo reading does.
+
+**Attached documents** (`AttachmentKind.DOCUMENT`) never reach the model as files. A question
+about one, a summary or nothing said goes to the reader alone (`ToolLoop.readAttached`); a
+request to act on it ("remind me to pay this bill") gets the reader's notes on it into the
+message, and the chat model acts with its tools. Both are stored as `read_file` calls, so a later
+question in the chat finds the attached copy by name, without All files access.
+
+"What's my PAN / Aadhaar / licence / passport number?" reads documents named after that card
+first (`FileTools.idNumber`), taking a number only with its shape and check digit
+(`PhotoReader.Field.valueIn`), and names files locked with a password.
+
+`DocumentChatEvalTest` (`-e eval documentchat`) and `DocumentReadingEvalTest` (`-e eval documents`)
+run made-up documents through the app's sender and the reader. On the phone, 14 Nov 2026, they
+scored 5/5 and 7/7. A Word or Excel answer took about 1 s and a page picture about 2 s; the first
+read took 14 s, most of it loading the model.
+
+## Messages
+
+With Settings › Messages › Keep messages for search on (off by default), `away/MessageListener`
+keeps the message lines of chat, SMS and email notifications in `inbox.db` (`inbox/Inbox`), and
+while the app is the default assistant with READ_SMS, `inbox/SmsSync` reads the SMS inbox from an
+`_id` watermark (on foreground, through a ContentObserver, and nightly). The SMS app's own
+notifications are skipped then, so nothing is kept twice. `NotificationLines.clean` drops
+one-time codes and masks ID numbers, as for the brief; `inbox/PromoFilter` leaves out ads (TRAI
+`-P` senders, promotion channels, or two or more ad signs with no transaction word). The nightly
+job deletes messages older than chats are kept, before anything that can end it early.
+
+`check_inbox(from, query, app, when)` searches the words with FTS (falling back to that person's
+or app's latest, and saying so) and returns at most six lines of at most 240 characters, marked
+as other people's words. It is a utility tool (`ChunkPolicy.UTILITY_TOOLS`), so nothing in it
+becomes a fact about the user, and it doesn't run on the lock screen. `InboxChatEvalTest`
+(`-e eval inboxchat`) asks about two made-up messages through the app and deletes them after:
+3/3 on the phone, 14 Nov 2026, with 507 messages kept (482 of them SMS).
+
+**What the two tools cost.** Each is declared only while its access is on (All files access for
+`read_file`, Keep messages for `check_inbox`). Together they add 354 tokens to every chat's
+preface: 122 and 125 for the declarations and 107 for their rules (`RoutingEvalTest -e costs
+true`, 14 Nov 2026, after both texts were cut down from 529). With all 22 tools, the instructions
+are 1,355 tokens and the declarations 2,430; without these two, 1,248 and 2,183. On the 8K
+profile a chat is compacted once its prompt plus one envelope would pass the 5,200 ceiling. A
+new chat in the app opened at 3,947 tokens, down from 4,122 before the cut. That preface leaves about 950 tokens of chat before compaction, where
+main's ~3,600 left 1,300. The ceiling can't rise to make up for it: the budget test keeps 5% of
+the window free above the reply and tool rounds, and that allows only 84 more tokens.
+
+Routing at temperature 1.0 (`-e tools main` leaves the two out): 109/114 with them, every file
+and message case right; 101/105 without. The six cases that differed or missed, asked three
+times each: 7/18 with them, 4/18 without. "I live in Bengaluru" (a bracketed note instead of
+`save_fact`), "I should call my mom more often" (`add_task`), "what does a sunset look like from
+space?" (`web_lookup`) and the "5 kilometer before Munnar" reminder miss either way.
 
 ## Hidden details
 
@@ -1143,7 +1295,9 @@ So the model answers in under a second; the waiting was loading it and reading t
 - **Where each turn's time goes** is written to `files/turn-timings.csv` (one row per turn: waits,
   engine load, opening and why, compaction, recall, first token, first word, each round's prefill
   and decode, each tool's time) and `files/model-events.csv` (engine loads, conversations opened,
-  adopted and closed, with reasons). Neither holds any words of a turn.
+  adopted and closed, with reasons; the app leaving and coming back, memory trims, the photo
+  model and the natural voice loading and going, garbled replies). Neither holds any words of a
+  turn.
 
 Typed chat turns before and after these changes, LiteRT-LM 0.18.1 to 0.19.1 with prediction off
 for chats (`AssistLatencyEvalTest`, 13 Nov 2026, time to the first word):

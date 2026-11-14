@@ -148,6 +148,7 @@ class AppContainer(context: Context) {
     /** Coming to the foreground warms the engines, so they are usually ready by the first send. */
     val appForeground: AppForeground = AppForeground(
         onForeground = {
+            com.local.assistant.memory.prompt.TurnTimings.event("app_back")
             backgroundJobs.onForeground()
             speaker.setAway(false)
             if (settings.modelPath != null) llmService.warmUp()
@@ -159,12 +160,22 @@ class AppContainer(context: Context) {
             resumeDownloads()
             // Fences dropped while location was off, or waiting for location all the time.
             appScope.launch { runCatching { PlaceReminderReceiver.watchAll(this@AppContainer) }.onFailure { Log.w("AppContainer", "Watching place reminders failed", it) } }
+            // Photos taken meanwhile, or the first index carrying on, once the warm-up is done.
+            indexPhotosIfReady(afterMs = FOREGROUND_INDEX_DELAY_MS)
+            // SMS that came meanwhile, and the inbox from before once SMS access is allowed.
+            smsSync.syncSoon(delayMs = FOREGROUND_INDEX_DELAY_MS)
         },
         onBackground = {
+            // In the model's events: a bad reply on 14 Nov 2026 came after the app had been away.
+            com.local.assistant.memory.prompt.TurnTimings.event("app_away")
             backgroundJobs.onBackground()
             sensitiveLock.lock()
-            // Out of sight, the photos wait for the charger at night.
-            appScope.launch { galleryIndex.pause() }
+            // Out of sight, the photos wait for the charger at night, unless a big first index
+            // is carrying on with its notice up.
+            if (!com.local.assistant.gallery.IndexService.running) {
+                synchronized(this) { autoIndex?.cancel() }
+                appScope.launch { galleryIndex.pause() }
+            }
             // What only the app in use needs goes back, so the home screen has less to take back:
             // the natural voice once it falls quiet, memory search once its backlog is done.
             speaker.setAway(true)
@@ -201,7 +212,11 @@ class AppContainer(context: Context) {
     val galleryModelManager = ModelManager(context, GalleryModel.FILE, settings::galleryModelPath, appScope, wanted = wantedDownloads)
 
     /** One engine for photo search and memory search (see [GalleryEmbedder]). */
-    val photoModel = GalleryEmbedder(modelFile = { galleryModelManager.installed.value?.file }, cacheDir = context.cacheDir)
+    val photoModel: GalleryEmbedder = GalleryEmbedder(
+        modelFile = { galleryModelManager.installed.value?.file },
+        cacheDir = context.cacheDir,
+        gpuAllowed = { !llmService.holdsGpu },
+    )
 
     /** An embedding model the user imported from storage, used by memory search instead of the photo model. */
     val embedderManager = ModelManager(
@@ -263,7 +278,7 @@ class AppContainer(context: Context) {
         logScores = (context.applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE) != 0,
     )
 
-    val llmService = LlmService(context, settings, appScope)
+    val llmService: LlmService = LlmService(context, settings, appScope, beforeLoad = { photoModel.leaveGpu() })
 
     val llmBackend: LlmBackend = LiteRtLmBackend(llmService, settings)
 
@@ -308,7 +323,47 @@ class AppContainer(context: Context) {
         faces = faceIndex,
         places = placeList,
         onDocuments = { photoThumbnails.documents.value = it },
+        afterFaces = { contactNames.update() },
+        heat = ::thermalStatus,
     )
+
+    /** `PowerManager.THERMAL_STATUS_*`, or none before Android 10. */
+    fun thermalStatus(): Int =
+        if (android.os.Build.VERSION.SDK_INT >= 29) appContext.getSystemService(android.os.PowerManager::class.java)?.currentThermalStatus ?: 0 else 0
+
+    private var autoIndex: kotlinx.coroutines.Job? = null
+
+    /**
+     * Indexes the photos, and with Find people their faces, without waiting for the Photos
+     * screen: as soon as the photo model is here and photos may be read, while the app is in
+     * front. [afterMs] lets the chat model's warm-up go first on coming to the front. Phones of
+     * 8 GB or less do it only while the chat model isn't loaded (first setup, while it downloads);
+     * otherwise on the charger at night and while Photos is open, as before.
+     */
+    fun indexPhotosIfReady(afterMs: Long = 0) {
+        if (!photoSearchReady()) return
+        synchronized(this) {
+            autoIndex?.cancel()
+            autoIndex = appScope.launch {
+                kotlinx.coroutines.delay(afterMs)
+                // A load under way finishes first (a minute at most), so the first reply isn't slowed.
+                kotlinx.coroutines.withTimeoutOrNull(60_000L) { llmService.state.first { it !is LlmService.State.Loading } }
+                if (!appForeground.isForeground) return@launch
+                if (isSmallDevice && llmService.state.value is LlmService.State.Ready) return@launch
+                galleryIndex.start()
+                // A big backlog (a new install, Find people just turned on) carries on after the
+                // app is closed, with a notice; started now, while the app is in front, as
+                // Android requires.
+                if (com.local.assistant.gallery.IndexService.running) return@launch
+                val status = kotlinx.coroutines.withTimeoutOrNull(30_000L) { galleryIndex.status.first { it.total > 0 } } ?: return@launch
+                faceIndex.refreshStatus()
+                val facesLeft = if (faceIndex.isOn) faceIndex.status.value.photosLeft else 0
+                if (maxOf(status.remaining, facesLeft) >= com.local.assistant.gallery.IndexService.BACKLOG && appForeground.isForeground) {
+                    com.local.assistant.gallery.IndexService.start(appContext)
+                }
+            }
+        }
+    }
 
     init {
         // Which photos to keep hidden, from the index, before any is shown.
@@ -360,10 +415,12 @@ class AppContainer(context: Context) {
         scheduler = modelScheduler,
         scope = appScope,
         estimator = tokenEstimator,
-        tools = { ToolCatalog.declarations(web = webSearch.enabled, photos = photoSearchReady(), health = healthTools.available()) },
+        tools = { ToolCatalog.declarations(web = webSearch.enabled, photos = photoSearchReady(), health = healthTools.available(), files = fileSearchReady(), inbox = inboxReady()) },
         webSearch = { webSearch.enabled },
         photoSearch = ::photoSearchReady,
         healthData = healthTools::available,
+        fileSearch = ::fileSearchReady,
+        inbox = ::inboxReady,
         retriever = retriever,
         photos = PhotoRecall(galleryIndex, photoLibrary, ready = ::photoSearchReady, cacheDir = context.cacheDir),
         summarizer = summarizer,
@@ -491,6 +548,54 @@ class AppContainer(context: Context) {
     /** A photo question answered from the found photo in a short conversation of its own. */
     private val photoReader = PhotoReader(llmBackend, conversations)
 
+    /** Files on the phone by name: read_file, declared once All files access is given. */
+    val fileFinder = com.local.assistant.files.FileFinder(context)
+
+    /** A document's question or summary, answered in short conversations of its own. */
+    val documentReader = com.local.assistant.files.DocumentReader(llmBackend, conversations)
+
+    fun fileSearchReady(): Boolean = com.local.assistant.files.FileAccess.granted(appContext)
+
+    private val fileTools = com.local.assistant.files.FileTools(
+        find = { asked, type, period -> fileFinder.find(asked, type, period) },
+        folders = { asked -> fileFinder.folders(asked) },
+        read = { found -> kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { com.local.assistant.files.DocumentFiles.read(context, found) } },
+        reader = documentReader,
+        now = ZonedDateTime::now,
+        ready = ::fileSearchReady,
+        attached = { chatId ->
+            chatRepository.messagesFor(chatId)
+                .filter { it.attachmentKind == com.local.assistant.data.db.AttachmentKind.DOCUMENT && it.attachmentPath?.let(::File)?.isFile == true }
+                .map { com.local.assistant.memory.tools.AttachedDocument(it.attachmentPath!!, com.local.assistant.media.AttachmentStore.documentName(it.attachmentPath)) }
+        },
+    )
+
+    /** Messages that came to the phone, kept for search (check_inbox) as long as chats are. */
+    val inbox: com.local.assistant.inbox.Inbox = com.local.assistant.inbox.Inbox(
+        dao = com.local.assistant.inbox.InboxDatabase.build(context).dao(),
+        scope = appScope,
+        keeping = { settings.keepMessages },
+        ignoredApps = { settings.inboxIgnoredApps },
+        retentionDays = { settings.historyRetentionDays },
+        smsApp = { smsSync.smsApp() },
+        readsSmsInbox = { smsSync.allowed() },
+    )
+
+    /** The SMS inbox read into [inbox], while the app is the phone's assistant. */
+    val smsSync: com.local.assistant.inbox.SmsSync = com.local.assistant.inbox.SmsSync(
+        context = context,
+        inbox = inbox,
+        scope = appScope,
+        keeping = { settings.keepMessages },
+        isAssistant = { com.local.assistant.assist.AssistantRole.isDefault(context) },
+        retentionDays = { settings.historyRetentionDays },
+        lastId = { settings.smsReadUpTo },
+        setLastId = { settings.smsReadUpTo = it },
+    )
+
+    /** check_inbox is offered: messages are kept, and notification access is allowed or SMS are read. */
+    fun inboxReady(): Boolean = settings.keepMessages && (com.local.assistant.away.MessageListener.allowed(appContext) || smsSync.allowed())
+
     val toolExecutor = ToolExecutor(
         store = memoryRepository,
         reminders = reminderScheduler,
@@ -532,10 +637,13 @@ class AppContainer(context: Context) {
             },
             mayRead = { context.getSystemService(android.app.KeyguardManager::class.java)?.isKeyguardLocked != true },
             reader = { path, question -> if ((llmService.capabilities.value?.visionTokensPerImage ?: 0) > 0) photoReader.answer(path, question) else null },
+            documents = { field -> fileTools.idNumber(field) },
         ),
         health = healthTools,
         places = placeFinder,
         notes = userNotes,
+        files = fileTools,
+        inbox = com.local.assistant.inbox.InboxTools(inbox, now = ZonedDateTime::now, ready = ::inboxReady),
     )
 
     private val toolLoop = ToolLoop(
@@ -543,7 +651,7 @@ class AppContainer(context: Context) {
         maxRounds = MemoryBudget.SIXTEEN_K.maxToolRounds,
         isOverflow = llmBackend::isContextOverflow,
         isUnreadable = llmBackend::isUnreadableToolCall,
-        repair = ToolCallRepair(ToolCatalog.declarations(web = true, photos = true, health = true))::repair,
+        repair = ToolCallRepair(ToolCatalog.declarations(web = true, photos = true, health = true, files = true, inbox = true))::repair,
         onNumberFixed = { wrote, source -> Log.i("ReplyGrounding", "Reply wrote ${LogText.of(wrote)}; the source has ${LogText.of(source)}") },
         groundNumbers = { !llmService.exactDigits },
         seesImages = { (llmService.capabilities.value?.visionTokensPerImage ?: 0) > 0 },
@@ -603,6 +711,10 @@ class AppContainer(context: Context) {
         },
         pruneSavedImages = savedImages::prune,
         finishPastReminders = { memoryControls.finishPastReminders() },
+        tidyInbox = {
+            smsSync.sync()
+            inbox.purge()
+        },
     )
 
     /**
@@ -715,7 +827,8 @@ class AppContainer(context: Context) {
 
     fun resumeDownloads(): Boolean {
         val voices = voicePacks.filter { it.shouldResume() || it.isBusy }
-        val models = listOf(modelManager, galleryModelManager).filter { it.shouldResume() || it.isBusy }
+        // The photo model first: a tenth the size, and photos can be indexed while the chat model downloads.
+        val models = listOf(galleryModelManager, modelManager).filter { it.shouldResume() || it.isBusy }
         if (voices.isEmpty() && models.isEmpty()) return false
         if (resuming?.isActive == true) return true
         resuming = appScope.launch {
@@ -838,8 +951,14 @@ class AppContainer(context: Context) {
         com.local.assistant.model.BackgroundDownloads.watch(appContext, appScope, downloads(), resume = ::resumeDownloads, pending = ::downloadsPending)
         appScope.launch {
             dropOldEmbedder()
-            // Memory search starts once the photo model is here (downloaded later, or already).
-            galleryModelManager.installed.collect { if (it != null) embeddingQueue.kick() }
+            // Memory search starts once the photo model is here (downloaded later, or already),
+            // and so does indexing the photos.
+            galleryModelManager.installed.collect {
+                if (it != null) {
+                    embeddingQueue.kick()
+                    indexPhotosIfReady()
+                }
+            }
         }
         backgroundJobs.scheduleNightly()
         // Exchanges from before the archive existed, or missed by a crash, then their vectors.
@@ -863,6 +982,9 @@ class AppContainer(context: Context) {
 
         /** At or below this, the photo model's memory goes back as soon as the Photos screen closes. */
         const val SMALL_DEVICE_BYTES = 8L * 1024 * 1024 * 1024
+
+        /** After coming to the front, how long photo indexing waits: the chat model warms up first. */
+        const val FOREGROUND_INDEX_DELAY_MS = 10_000L
 
         /** EmbeddingGemma 300M's key, from before the photo model did memory search too. */
         const val OLD_EMBEDDER_KEY = "embeddinggemma-300m-wi8"
@@ -928,6 +1050,7 @@ class AssistantApplication : Application() {
      */
     override fun onTrimMemory(level: Int) {
         super.onTrimMemory(level)
+        com.local.assistant.memory.prompt.TurnTimings.event("trim_memory", detail = "level $level")
         val background = level >= ComponentCallbacks2.TRIM_MEMORY_BACKGROUND
         // Thumbnails are quick to read again; the model is not.
         if (background) container.photoThumbnails.clear()

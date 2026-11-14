@@ -145,6 +145,8 @@ class Consolidation(
     private val pruneSavedImages: suspend () -> Int = { 0 },
     /** Marks reminders whose time has passed done, or moves repeating ones on; returns how many. */
     private val finishPastReminders: suspend () -> Int = { 0 },
+    /** Reads new SMS and deletes kept messages past the retention period; returns how many went. */
+    private val tidyInbox: suspend () -> Int = { 0 },
     private val clock: () -> Long = System::currentTimeMillis,
 ) {
 
@@ -152,6 +154,11 @@ class Consolidation(
     suspend fun run(deadline: Long): Boolean {
         val started = clock()
         try {
+            // First: the steps below return early on a busy night, and messages past the
+            // retention period mustn't stay because of that.
+            runCatching { tidyInbox() }
+                .onSuccess { if (it > 0) Log.i(TAG, "Deleted $it kept messages past the retention period") }
+                .onFailure { Log.w(TAG, "Tidying the kept messages failed", it) }
             embeddings.drainNow()
             sessions.endQuietSessions()
             if (sessions.summarisePending(deadline, loadModel = true) > 0) return false

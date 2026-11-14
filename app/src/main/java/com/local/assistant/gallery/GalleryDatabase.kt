@@ -67,6 +67,12 @@ data class PhotoEntity(
 
     companion object {
         const val FAILED = "!"
+
+        /**
+         * A video part done by [modelId]: its frames so far are kept, it's still waiting, and it
+         * isn't searched until done. Anything else on a waiting video means starting it again.
+         */
+        fun partial(modelId: String) = "~$modelId"
     }
 }
 
@@ -203,8 +209,11 @@ interface PhotoDao {
     @Query("DELETE FROM photos WHERE mediaId IN (:ids)")
     suspend fun delete(ids: List<Long>)
 
-    /** Newest first, so the photos people look for most are searchable soonest. */
-    @Query("SELECT * FROM photos WHERE modelId IS NULL OR modelId NOT IN (:modelId, '!') ORDER BY dateTaken DESC LIMIT :limit")
+    /**
+     * Photos before videos, each newest first, so the photos people look for most are searchable
+     * soonest: a video is up to twenty images, and they used to hold the photos up.
+     */
+    @Query("SELECT * FROM photos WHERE modelId IS NULL OR modelId NOT IN (:modelId, '!') ORDER BY (durationMs IS NOT NULL), dateTaken DESC LIMIT :limit")
     suspend fun pending(modelId: String, limit: Int): List<PhotoEntity>
 
     @Query("SELECT COUNT(*) FROM photos WHERE modelId IS NULL OR modelId NOT IN (:modelId, '!')")
@@ -222,19 +231,26 @@ interface PhotoDao {
     @Query("SELECT mediaId FROM photos ORDER BY dateTaken DESC LIMIT :limit")
     suspend fun newest(limit: Int): List<Long>
 
-    /** A video's frames, made again: the old ones out, the new ones in, and the video marked done. */
+    /**
+     * A video about to be made from the start: its old frames out, and marked [partial] (still
+     * waiting, never searched), so the frames saved from here on are kept if it's interrupted.
+     */
     @androidx.room.Transaction
-    suspend fun setFrames(mediaId: Long, frames: List<FrameEntity>, modelId: String) {
+    suspend fun startVideo(mediaId: Long, partial: String) {
         deleteFrames(mediaId)
-        if (frames.isNotEmpty()) insertFrames(frames)
-        setEmbedding(mediaId, null, modelId)
+        setEmbedding(mediaId, null, partial)
     }
 
     @Query("DELETE FROM frames WHERE mediaId = :mediaId")
     suspend fun deleteFrames(mediaId: Long)
 
+    /** One moment of a video, saved as soon as it's embedded. */
     @Insert(onConflict = OnConflictStrategy.REPLACE)
-    suspend fun insertFrames(frames: List<FrameEntity>)
+    suspend fun insertFrame(frame: FrameEntity)
+
+    /** The moments of a video already saved. */
+    @Query("SELECT atMs FROM frames WHERE mediaId = :mediaId")
+    suspend fun frameTimes(mediaId: Long): List<Long>
 
     /** Frames whose video is gone or is being made again, for when foreign keys weren't enforced. */
     @Query("DELETE FROM frames WHERE mediaId NOT IN (SELECT mediaId FROM photos WHERE durationMs IS NOT NULL)")

@@ -84,6 +84,10 @@ class ConversationManager(
     private val photoSearch: () -> Boolean = { false },
     /** Whether health_data is among [tools], likewise. */
     private val healthData: () -> Boolean = { false },
+    /** Whether read_file is among [tools], likewise. */
+    private val fileSearch: () -> Boolean = { false },
+    /** Whether check_inbox is among [tools], likewise. */
+    private val inbox: () -> Boolean = { false },
     /** Per-turn recall of facts and archived exchanges; none when null. */
     private val retriever: Retriever? = null,
     /** Per-turn photos from the gallery a question may be about; none when null. */
@@ -306,6 +310,9 @@ class ConversationManager(
         // is known before it is (all of the history, unless some has to be shed to fit).
         val windowStartId = reusable?.windowStartId ?: (history.firstOrNull()?.id ?: ((history.lastOrNull()?.id ?: 0L) + 1))
         val attachedBefore = reusable?.attachedPhotos?.toSet().orEmpty()
+        // About the messages that came in, with check_inbox there to read them: chat screenshots
+        // only look like the question ("do you have any latest messages", 14 Nov 2026).
+        val aboutMessages = inbox() && QueryText.asksAboutMessages(userText)
         val (opened, recall, photos) = coroutineScope {
             val recalled = if (locked || command) {
                 null
@@ -314,7 +321,7 @@ class ConversationManager(
                     val started = SystemClock.elapsedRealtime()
                     // The photo search runs beside memory's: its own model, on the CPU. About the
                     // screen: what's on it, not something in the gallery.
-                    val search = async { if (screen) RecalledPhotos.NONE else photosFor(userText, attachedBefore) }
+                    val search = async { if (screen || aboutMessages) RecalledPhotos.NONE else photosFor(userText, attachedBefore) }
                     (recall(chatId, userText, windowStartId, budget) to search.await())
                         .also { timing?.recallMs = SystemClock.elapsedRealtime() - started }
                 }
@@ -542,6 +549,18 @@ class ConversationManager(
         seed++
         Log.w(TAG, "Unreadable tool call; retrying with seed $seed")
         live?.takeIf { it.chatId == chatId }?.let { close(it, "reseeded") }
+    }
+
+    /**
+     * The reply came out as token soup ([com.local.assistant.memory.tools.GarbledText]). On 14 Nov
+     * 2026 an engine that did it once did it in every chat after, until the app was restarted, so
+     * the engine goes as well: the next turn loads it again and rebuilds the chat from what is
+     * stored.
+     */
+    suspend fun recoverFromGarble(chatId: Long) = mutex.withLock {
+        Log.w(TAG, "Garbled reply in chat $chatId; loading the model again")
+        live?.let { close(it, "garbled") }
+        backend.release()
     }
 
     /**
@@ -1048,6 +1067,8 @@ class ConversationManager(
         webSearch = webSearch(),
         photoSearch = photoSearch(),
         healthData = healthData(),
+        fileSearch = fileSearch(),
+        inbox = inbox(),
     )
 
     /** Stored turns before [beforeId], minus any that a rolling summary already covers. */
