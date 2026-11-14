@@ -69,10 +69,12 @@ you've moved over (nothing carries across between them).
     Sensitive permissions and APIs). Texts are in [console-answers.md](console-answers.md):
     - Health Connect: one reason per data type.
     - Photo and video permissions.
-    - Foreground service: Location and Microphone, each with a video link (step 12).
+    - Foreground service: Location, Microphone and Data sync, each with a video link (step 12).
     - Background location: text plus a video link (step 12).
+    - All files access: "Search (on device)", text plus a video link (step 12).
+    - SMS: the default digital assistant exception, text plus a video link (step 12).
     - Full-screen intent: Alarm.
-12. **Record the three videos** (steps in section C), upload each to YouTube as **Unlisted**,
+12. **Record the videos** (steps in section C), upload each to YouTube as **Unlisted**,
     and paste the links into the forms in step 11.
 13. **Closed testing, 14 days.** A personal developer account made after 13 November 2023 has to
     run a closed test with at least **12 testers who stay opted in for 14 days in a row** before
@@ -90,7 +92,7 @@ you've moved over (nothing carries across between them).
     The first review can take up to a week. Answer any policy email from Play within the time it
     gives.
 
-## C. The three videos
+## C. The videos
 
 Record each on the phone with `docs/play-store/videos/record.sh <name>` (up to 3 minutes each)
 while doing the steps. First turn on Do Not Disturb and clear the notification shade, so no one's
@@ -108,6 +110,15 @@ messages show. Use the Play-installed app (or the `.dev` one; its name on screen
 3. **microphone** (foreground service: microphone): Settings → Calling the assistant → turn on
    "Hey Luna" → allow the microphone → pull down the shade to show "Say “Hey Luna” to talk"
    with its "Stop listening" button → close the shade, say "Hey Luna", and ask something.
+4. **data-sync** (foreground service: data sync): on a fresh install (or one with many photos not
+   yet indexed), allow Photos on the first-launch page → leave the app → pull down the shade to
+   show "Indexing photos and faces · N left" with its progress.
+5. **all-files**: the first-launch page's Files card → "Allow access to files" → Android's "Allow
+   access to manage all files" → back in a chat, "find my resume pdf", then "summarise it". Use
+   a made-up document.
+6. **sms**: Settings → Messages → turn on "Keep messages for search" → "Make it your assistant" →
+   pick Local Assistant → back, "Allow SMS" → Android's SMS prompt → in a chat, "did the bank SMS
+   me today?". Use a phone whose SMS are fine to show, or blur them.
 
 ## D. Later versions
 

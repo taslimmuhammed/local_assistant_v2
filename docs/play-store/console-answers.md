@@ -64,7 +64,8 @@ else and the developer never sees it. Data read and kept only on the phone is no
 transfer rather than sharing.
 
 Not collected (read and kept on the phone only): precise location, contacts, photos and videos,
-audio, messages (notifications), health and fitness, calendar (the app's own reminders), files.
+audio, messages (notifications and SMS kept for search), health and fitness, calendar (the app's
+own reminders), files and documents.
 
 ## Health apps declaration
 
@@ -105,10 +106,44 @@ READ_MEDIA_VIDEO:
 |---|---|---|
 | Location | Place reminders | While a place reminder is set and the app is not the phone's assistant, a foreground service with a visible notification asks Android for location fixes so the reminder rings on arrival with the screen off. It stops when the last place reminder is done. |
 | Microphone | Wake word | When the user turns on "Hey Luna" (off by default), a foreground service with a "Listening" notification and a Stop button listens for the phrase on the phone. Audio is never stored or sent. |
+| Data sync | First photo index | After the user allows photo access, the photos and faces are indexed on the phone by an on-device model so they can be searched in chat. When a large backlog is left as the user leaves the app, a foreground service with an "Indexing photos and faces · N left" notification and progress keeps it going. It stops when done, when the phone gets warm, below 20% battery off the charger, or at Android's daily limit; nothing is sent anywhere. |
 
 Video: one screen recording per type, showing the notification while the feature runs. The data
-sync type that LiteRT's Play delivery library brought in is removed from the manifest (the app
-has no asset packs, so it never ran), so only these two are declared.
+sync service declared is the app's own (gallery/IndexService); the one LiteRT's Play delivery
+library brought in stays removed from the manifest (the app has no asset packs).
+
+## All files access (MANAGE_EXTERNAL_STORAGE)
+
+Use: **Search (on device)**.
+
+> The user asks the assistant in chat for a file by its name or kind ("find my rental agreement",
+> "my resume PDF", "the spreadsheet from last week") and asks what it says ("summarise my lease",
+> "what's the deposit in the rental agreement?"). Files are anywhere on shared storage, including
+> app folders such as WhatsApp's documents, in every format (PDF, Word, Excel, slides, text), and
+> the user doesn't know or pick where they are, so the storage access framework's picker and the
+> media permissions can't do this. Names are looked up when asked; a document is opened only when
+> the user asks about it; nothing leaves the phone. Access is asked for on the first-launch page
+> with this explanation, and the app works without it.
+
+Video: the first-launch page's Files card and Android's "Allow access to manage all files" screen,
+then "find my resume pdf" and "summarise it" in the chat. If Play declines, the fallback is
+documents picked by the user (already built: attach a document in the chat), and file search
+limited to folders the user picks (not built).
+
+## SMS (READ_SMS)
+
+Declare under the **default digital assistant** exception: the app is the phone's assistant (the
+VoiceInteractionService and the assist role), and READ_SMS is asked only while it holds that role.
+
+> When the user turns on "Keep messages for search" and makes Local Assistant their digital
+> assistant, it reads the SMS inbox so they can ask "did the bank message me today?" or "what did
+> the landlord text about the rent?". SMS are kept on the phone, as long as chats are; ads and
+> one-time codes are left out; nothing is sent anywhere. Without the role the app never asks, and
+> keeps only messages that arrive in notifications.
+
+Video: Settings, Messages, "Make it your assistant", Android's assistant picker, "Allow SMS", then
+the question in the chat. Risk: Play may count this as outside the assistant exception; then
+remove READ_SMS from the release build and keep the notification capture.
 
 ## Background location
 

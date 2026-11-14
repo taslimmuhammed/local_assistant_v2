@@ -1,6 +1,6 @@
 # Local Assistant: privacy policy
 
-Effective 10 November 2026. Developer: **Taslim Muhammed Moosa**, contact:
+Effective 14 November 2026. Developer: **Taslim Muhammed Moosa**, contact:
 **developertaslim@gmail.com**.
 
 Local Assistant is an AI assistant that runs on your phone. The AI model, your chats and what the
@@ -30,10 +30,22 @@ on the phone. None of it is sent to the developer or anyone else.
   what is in them, by place, and by the people in them (faces are matched against your own
   contacts' photos, on the phone). Where a photo was taken is matched against a list of place
   names stored in the app. You can share only some photos with the app if your Android version
-  allows it.
+  allows it. The photos are indexed on the phone once you allow access; while the first index
+  runs with the app closed, a notification says so.
+- **Files.** If you allow All files access, the app finds a file by its name when you ask for one
+  ("my resume PDF"). Names are looked up when you ask, not collected or stored. A document is
+  opened and read only when you ask what it says, or when you attach one to a message; what it
+  says is used for that answer. An attached document is kept with its chat, and deleted with it.
+  If you ask for an ID number such as your PAN, documents named after that card are read for it.
 - **Notifications.** If you turn on "While you were away" (off by default) and give the app
   notification access, it reads incoming notifications to summarise what you missed. These are
   kept for two days on the phone and then deleted. A reply is sent only after you confirm it.
+- **Messages.** If you turn on "Keep messages for search" (off by default), messages that arrive
+  in notifications from chat, SMS and email apps are kept on the phone so you can ask what someone
+  sent you. If you also make Local Assistant your phone's digital assistant and allow SMS, it
+  reads your SMS inbox too, including texts from before. Ads and one-time codes are left out, and
+  ID and card numbers are hidden before anything is kept. Messages are kept as long as your chats
+  are, can be deleted in Settings, Messages, and are never treated as facts about you.
 - **What is on your screen.** When you open the assistant over another app, Android can give it
   a screenshot of that screen so you can ask about it. The screenshot is used for that question
   and discarded when the assistant opens again. It is never taken on the lock screen. You can
@@ -71,12 +83,13 @@ address it came from, as with any web request.
 
 ## Your choices
 
-- Every permission is asked for when a feature first needs it, and can be withdrawn in Android's
-  settings at any time.
+- Photos, files and messages are offered on a page when the app first opens, each one skippable;
+  every other permission is asked for when a feature first needs it. Any of them can be withdrawn
+  in Android's settings at any time.
 - Chats and what the assistant remembers can be deleted in the app. Clearing the app's storage in
   Android's settings, or uninstalling it, deletes everything it stored.
-- The wake word, "While you were away", photo search, health data, web search and the natural
-  voice are all off until you turn them on.
+- The wake word, "While you were away", keeping messages, photo search, file search, health data,
+  web search and the natural voice are all off until you turn them on.
 
 ## Children
 
