@@ -84,6 +84,8 @@ class ToolExecutor(
     private val places: PlaceFinder? = null,
     /** The user's notes and lists, for edit_note; none when not wired in. */
     private val notes: NoteStore = NoNotes,
+    /** read_file: files on the phone by name, read when asked about; null without All files access wired. */
+    private val files: com.local.assistant.files.FileTools? = null,
 ) {
 
     data class Outcome(
@@ -205,6 +207,8 @@ class ToolExecutor(
                 call.name == ToolCatalog.CALCULATE && key == "expression" -> NumberGrounding.groundExpression(value, userText)
                 // "list 3" is the id from "Notes and lists:", not a number the user said.
                 call.name == ToolCatalog.EDIT_NOTE && key == "note" -> value
+                // A file's name as the earlier result listed it ("Invoice_10234"), not the user's numbers.
+                call.name == ToolCatalog.READ_FILE && key == "name" -> value
                 // Who to call or message: a name spelled as the user spelled it.
                 call.name == ToolCatalog.CALL && key == "who" || call.name == ToolCatalog.SEND_MESSAGE && key == "to" ->
                     ContactMatcher.asSaid(NumberGrounding.ground(value, userText), userText)
@@ -239,6 +243,13 @@ class ToolExecutor(
                 .find(args.text("query"), args.text("person"), args.text("when"), args.text("place"), question)
             val result = if (userText.isBlank()) withRemembered(done.result, args) else done.result
             return Applied(result, done.chip, image = done.image, reply = done.reply)
+        }
+        if (call.name == ToolCatalog.READ_FILE) {
+            // As for photos: the user's own question when they asked one, the model's otherwise.
+            val question = com.local.assistant.files.FileTools.questionIn(userText) ?: args.text("question")
+            val done = (files ?: throw ToolError("Finding files isn't available in this app."))
+                .read(args.text("name"), args.text("type"), args.text("when"), question, context.onStep)
+            return Applied(done.result, done.chip, reply = done.reply)
         }
         val tools = device ?: throw ToolError("That isn't available in this app.")
         val done = when (call.name) {

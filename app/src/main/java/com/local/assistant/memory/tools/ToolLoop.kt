@@ -6,9 +6,13 @@ import com.local.assistant.llm.GenStats
 import com.local.assistant.llm.PromptAttachment
 import com.local.assistant.llm.ToolCall
 import com.local.assistant.llm.ToolResult
+import kotlinx.coroutines.async
+import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.FlowCollector
 import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.selects.select
 
 /** What one turn produced, as it happens. */
 sealed interface LoopEvent {
@@ -406,7 +410,7 @@ class ToolLoop(
                 } else {
                     emit(LoopEvent.Step(ToolSteps.of(call, context.userText)))
                     val running = android.os.SystemClock.elapsedRealtime()
-                    val outcome = executor.execute(call, context)
+                    val outcome = executeShowingSteps(call, context)
                     timing?.tool(call.name, android.os.SystemClock.elapsedRealtime() - running)
                     mark("${call.name} ran")
                     ran(call, outcome)
@@ -447,6 +451,25 @@ class ToolLoop(
                 session.sendToolResults(results)
             }
         }
+    }
+
+    /**
+     * [call] run, with the steps it reports on the way ([ToolContext.onStep]: "Reading part 2 of
+     * 5") shown as it reports them. Only the latest is kept while one waits to be shown.
+     */
+    private suspend fun FlowCollector<LoopEvent>.executeShowingSteps(call: ToolCall, context: ToolContext): ToolExecutor.Outcome = coroutineScope {
+        val steps = Channel<String>(Channel.CONFLATED)
+        val running = async { executor.execute(call, context.copy(onStep = { steps.trySend(it) })) }
+        var done = false
+        while (!done) {
+            // A step waiting goes first: a call that never had to wait still shows where it got to.
+            select<Unit> {
+                steps.onReceive { emit(LoopEvent.Step(it)) }
+                running.onAwait { done = true }
+            }
+        }
+        steps.close()
+        running.await()
     }
 
     /** See [ToolExecutor.showRelatedPhotos]. */

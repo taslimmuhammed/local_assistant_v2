@@ -36,9 +36,33 @@ data class MemoryChip(
     val place: String? = null,
     /** The note or list edit_note made or changed, shown as it is now under the chip; null once deleted. */
     val noteId: Long? = null,
+    /** read_file: the files or folders it found, drawn as rows that open them. */
+    val files: FileSet? = null,
 ) {
-    enum class Kind { FACT, TASK, EVENT, FORGET, ALARM, IMAGE, CALL, MESSAGE, TIMER, APP, SETTING, WEB, PHOTOS, SCREENSHOT, HEALTH, NOTE }
+    enum class Kind { FACT, TASK, EVENT, FORGET, ALARM, IMAGE, CALL, MESSAGE, TIMER, APP, SETTING, WEB, PHOTOS, SCREENSHOT, HEALTH, NOTE, FILES }
 }
+
+/** Files or folders on the phone that answer [query], best first; [read] is the one a reply was read from. */
+data class FileSet(val query: String, val files: List<FileRef>, val read: String? = null)
+
+/**
+ * A file (or with [folder], a folder) on the phone, as found: opened from where it is when tapped,
+ * so a chip from last month opens the file as it is now. [path] is from the storage root's top
+ * (`/storage/emulated/0/Download/x.pdf`); for a folder, its path from the root (`Download/Bank/`).
+ */
+data class FileRef(
+    val name: String,
+    /** Its folder from the storage root, `Download/Bank/`. */
+    val where: String,
+    val path: String?,
+    val mediaId: Long? = null,
+    val sizeBytes: Long = 0,
+    val modifiedMs: Long = 0,
+    val mime: String? = null,
+    val folder: Boolean = false,
+    /** For a folder: how many files are in it. */
+    val count: Int = 0,
+)
 
 /**
  * The phone's photos and videos that answer [query], by MediaStore id, best match first. For a
@@ -113,6 +137,8 @@ data class ToolContext(
      * asked ("when I reach avilora" after "remind me to buy chicken"), so its words are theirs too.
      */
     val earlierText: String = "",
+    /** How far a long call has got ("Reading part 2 of 5"), shown while it runs ([ToolLoop]). */
+    val onStep: (String) -> Unit = {},
 )
 
 /** Persists tool calls as TOOL rows in the chat. */

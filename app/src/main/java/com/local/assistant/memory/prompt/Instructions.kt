@@ -11,7 +11,7 @@ import com.local.assistant.wake.WakeWord
  */
 object Instructions {
 
-    const val VERSION = 9
+    const val VERSION = 10
 
     /**
      * What the model is told it is when the persona doesn't say: an assistant, named after the wake
@@ -28,13 +28,15 @@ object Instructions {
         webSearch: Boolean = false,
         photoSearch: Boolean = false,
         healthData: Boolean = false,
+        fileSearch: Boolean = false,
+        inbox: Boolean = false,
     ): String = buildString {
         append(identity(persona))
         append("\n\n")
         append(MEMORY_RULES)
         if (withTools) {
             append("\n\n")
-            append(ToolCatalog.rules(webSearch, photoSearch, healthData))
+            append(ToolCatalog.rules(webSearch, photoSearch, healthData, fileSearch, inbox))
         }
     }
 

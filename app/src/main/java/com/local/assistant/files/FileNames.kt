@@ -70,6 +70,10 @@ object FileNames {
             .distinct()
             .toList()
 
+    /** The kind of file [name] says it is ("my resume pdf"), when it says one. */
+    fun typeIn(name: String?): Type? =
+        name?.let { WORD.findAll(it.lowercase(Locale.ROOT)).map { m -> m.value.trim('\'') }.firstNotNullOfOrNull { word -> TYPE_WORDS[word]?.takeIf { t -> t != Type.ANY } } }
+
     /**
      * The parts a file name is written in: `TaslimResume_v2-final.docx` gives `taslim`, `resume`,
      * `v`, `2`, `final`. Split at anything not a letter or digit, at a lower-to-upper case change,

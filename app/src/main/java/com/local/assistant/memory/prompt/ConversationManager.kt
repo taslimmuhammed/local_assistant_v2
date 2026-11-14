@@ -84,6 +84,10 @@ class ConversationManager(
     private val photoSearch: () -> Boolean = { false },
     /** Whether health_data is among [tools], likewise. */
     private val healthData: () -> Boolean = { false },
+    /** Whether read_file is among [tools], likewise. */
+    private val fileSearch: () -> Boolean = { false },
+    /** Whether check_inbox is among [tools], likewise. */
+    private val inbox: () -> Boolean = { false },
     /** Per-turn recall of facts and archived exchanges; none when null. */
     private val retriever: Retriever? = null,
     /** Per-turn photos from the gallery a question may be about; none when null. */
@@ -1000,6 +1004,8 @@ class ConversationManager(
         webSearch = webSearch(),
         photoSearch = photoSearch(),
         healthData = healthData(),
+        fileSearch = fileSearch(),
+        inbox = inbox(),
     )
 
     /** Stored turns before [beforeId], minus any that a rolling summary already covers. */

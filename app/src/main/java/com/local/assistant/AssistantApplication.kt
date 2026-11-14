@@ -406,10 +406,11 @@ class AppContainer(context: Context) {
         scheduler = modelScheduler,
         scope = appScope,
         estimator = tokenEstimator,
-        tools = { ToolCatalog.declarations(web = webSearch.enabled, photos = photoSearchReady(), health = healthTools.available()) },
+        tools = { ToolCatalog.declarations(web = webSearch.enabled, photos = photoSearchReady(), health = healthTools.available(), files = fileSearchReady()) },
         webSearch = { webSearch.enabled },
         photoSearch = ::photoSearchReady,
         healthData = healthTools::available,
+        fileSearch = ::fileSearchReady,
         retriever = retriever,
         photos = PhotoRecall(galleryIndex, photoLibrary, ready = ::photoSearchReady, cacheDir = context.cacheDir),
         summarizer = summarizer,
@@ -537,6 +538,23 @@ class AppContainer(context: Context) {
     /** A photo question answered from the found photo in a short conversation of its own. */
     private val photoReader = PhotoReader(llmBackend, conversations)
 
+    /** Files on the phone by name: read_file, declared once All files access is given. */
+    val fileFinder = com.local.assistant.files.FileFinder(context)
+
+    /** A document's question or summary, answered in short conversations of its own. */
+    val documentReader = com.local.assistant.files.DocumentReader(llmBackend, conversations)
+
+    fun fileSearchReady(): Boolean = com.local.assistant.files.FileAccess.granted(appContext)
+
+    private val fileTools = com.local.assistant.files.FileTools(
+        find = { asked, type, period -> fileFinder.find(asked, type, period) },
+        folders = { asked -> fileFinder.folders(asked) },
+        read = { found -> kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { com.local.assistant.files.DocumentFiles.read(context, found) } },
+        reader = documentReader,
+        now = ZonedDateTime::now,
+        ready = ::fileSearchReady,
+    )
+
     val toolExecutor = ToolExecutor(
         store = memoryRepository,
         reminders = reminderScheduler,
@@ -582,6 +600,7 @@ class AppContainer(context: Context) {
         health = healthTools,
         places = placeFinder,
         notes = userNotes,
+        files = fileTools,
     )
 
     private val toolLoop = ToolLoop(
@@ -589,7 +608,7 @@ class AppContainer(context: Context) {
         maxRounds = MemoryBudget.SIXTEEN_K.maxToolRounds,
         isOverflow = llmBackend::isContextOverflow,
         isUnreadable = llmBackend::isUnreadableToolCall,
-        repair = ToolCallRepair(ToolCatalog.declarations(web = true, photos = true, health = true))::repair,
+        repair = ToolCallRepair(ToolCatalog.declarations(web = true, photos = true, health = true, files = true, inbox = true))::repair,
         onNumberFixed = { wrote, source -> Log.i("ReplyGrounding", "Reply wrote ${LogText.of(wrote)}; the source has ${LogText.of(source)}") },
         groundNumbers = { !llmService.exactDigits },
         seesImages = { (llmService.capabilities.value?.visionTokensPerImage ?: 0) > 0 },

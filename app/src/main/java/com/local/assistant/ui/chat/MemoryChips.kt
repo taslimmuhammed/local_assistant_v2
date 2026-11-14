@@ -105,6 +105,11 @@ fun MemoryChips(
                 PhotoResults(photos)
                 return@forEach
             }
+            val files = item.chip.files
+            if (item.chip.kind == MemoryChip.Kind.FILES && files != null) {
+                FileResults(files)
+                return@forEach
+            }
             val reminder = item.taskId?.takeIf { !item.undone && onOpenReminder != null }?.let(placeReminders::get)
             val place = reminder?.place
             // As it is now: renamed, its circle changed or a pin dropped, since the reply.

@@ -35,6 +35,11 @@ object ToolCatalog {
     const val HEALTH = "health_data"
     /** Notes and lists. Not "save_note" or "update_note": beside save_fact and update_task the names could blend. */
     const val EDIT_NOTE = "edit_note"
+    /**
+     * Files on the phone by name, read when asked about. Not "find_files" or "search_files":
+     * beside find_photos and search_memory the names could blend, as web_search and search_memory did.
+     */
+    const val READ_FILE = "read_file"
 
     /**
      * Not a tool the model calls: the TOOL row that keeps the photos shown under a reply because
@@ -76,21 +81,47 @@ object ToolCatalog {
     val LOCKED = setOf(ADD_TASK, ADD_EVENT, SET_ALARM, SET_TIMER, PHONE_SETTING, CALCULATE, WEB_SEARCH)
 
     /** Tools that don't touch memory, run outside its transaction: they wait on apps, dialogs, the network or the photo model. */
-    val OUTSIDE_MEMORY = DEVICE + WEB_SEARCH + FIND_PHOTOS + HEALTH
+    val OUTSIDE_MEMORY = DEVICE + WEB_SEARCH + FIND_PHOTOS + HEALTH + READ_FILE
 
     /**
      * Every tool the model is given; web search only once the user has set it up, photo search
-     * only once its model is installed and the app may see the photos, and health data only on a
-     * phone with Health Connect (asking for access the first time it's used).
+     * only once its model is installed and the app may see the photos, health data only on a
+     * phone with Health Connect (asking for access the first time it's used), and files only with
+     * All files access.
      */
-    fun declarations(web: Boolean, photos: Boolean = false, health: Boolean = false): List<String> =
-        declarations + listOfNotNull(WEB_DECLARATION.takeIf { web }, PHOTOS_DECLARATION.takeIf { photos }, HEALTH_DECLARATION.takeIf { health })
+    fun declarations(web: Boolean, photos: Boolean = false, health: Boolean = false, files: Boolean = false, inbox: Boolean = false): List<String> =
+        declarations + listOfNotNull(
+            WEB_DECLARATION.takeIf { web },
+            PHOTOS_DECLARATION.takeIf { photos },
+            HEALTH_DECLARATION.takeIf { health },
+            FILES_DECLARATION.takeIf { files },
+        )
 
     /** How to use the tools, appended to the instructions (section A) when tools are declared. */
-    fun rules(web: Boolean, photos: Boolean = false, health: Boolean = false): String = RULES
+    fun rules(web: Boolean, photos: Boolean = false, health: Boolean = false, files: Boolean = false, inbox: Boolean = false): String = RULES
         .replace(WEB_SLOT, if (web) WEB_RULE + "\n" else "")
         .replace(PHOTOS_SLOT, if (photos) PHOTOS_RULE + "\n" else "")
         .replace(HEALTH_SLOT, if (health) HEALTH_RULE + (if (web) HEALTH_OFFLINE else "") + "\n" else "")
+        .replace(FILES_SLOT, if (files) FILES_RULE + "\n" else "")
+        .replace(INBOX_CANT_SLOT, if (inbox) "" else INBOX_CANT)
+
+    private val FILES_DECLARATION = function(
+        READ_FILE,
+        "Use when the user wants a file or folder on this phone by its name or kind (a PDF, Word document, spreadsheet, slides, a downloaded or WhatsApp file, a folder), or asks what one says or to summarise it. name: words from its name as said (rental agreement, resume); leave it out for their latest of a kind. type: pdf, word, spreadsheet, slides, text, audio, folder or any. when: when it was saved, in the user's words. question: only when they ask what it says or to summarise it: what they asked.",
+        required = emptyList(),
+        "name" to "string",
+        "type" to "string",
+        "when" to "string",
+        "question" to "string",
+    )
+
+    private const val FILES_RULE =
+        "- A file or folder on this phone by name or kind (\"my resume PDF\", \"the rental agreement\", \"spreadsheets from last week\", \"my Bank folder\") → read_file; add question when they ask what it says or for a summary (\"summarise my lease\", \"what's the deposit in my rental agreement\"). The app shows the files under your reply: say in one short sentence what it found, by name. Cards and IDs they keep as photos (licence, PAN, Aadhaar, passport) stay with find_photos."
+    private const val FILES_SLOT = "{files}\n"
+
+    /** What can't be done without the inbox: said only while there isn't one. */
+    private const val INBOX_CANT = ", reading their inbox"
+    private const val INBOX_CANT_SLOT = "{cant_inbox}"
 
     private val HEALTH_DECLARATION = function(
         HEALTH,
@@ -282,8 +313,9 @@ object ToolCatalog {
         {web}
         {photos}
         {health}
+        {files}
         After a tool succeeds, confirm in one short sentence. If it returns ok:false, ask the user for what is missing.
-        You act only through these tools. Never say you did something (sent, called, booked, set, saved) unless its tool succeeded just now. If none of them can do what is asked (Teams or Slack, bookings, payments, posts, reading their inbox), say plainly that you can't, and offer what you can.
+        You act only through these tools. Never say you did something (sent, called, booked, set, saved) unless its tool succeeded just now. If none of them can do what is asked (Teams or Slack, bookings, payments, posts{cant_inbox}), say plainly that you can't, and offer what you can.
     """.trimIndent()
 
     private fun function(
