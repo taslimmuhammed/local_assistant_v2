@@ -24,12 +24,21 @@
          button — so neither CALL_PHONE nor SEND_SMS is needed. -->
     <uses-permission android:name="android.permission.READ_CONTACTS" />
 
-    <!-- Photo search: asked when the Photos screen is first opened, and only read. Android 14
-         lets people share just some photos instead of all of them. -->
+    <!-- Photo search: asked on the first-launch page or when the Photos screen is first opened,
+         and only read. Android 14 lets people share just some photos instead of all of them. -->
     <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />
     <uses-permission android:name="android.permission.READ_MEDIA_VIDEO" />
     <uses-permission android:name="android.permission.READ_MEDIA_VISUAL_USER_SELECTED" />
     <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" android:maxSdkVersion="32" />
+    <!-- File search: files found by name and read on the phone when the user asks about one
+         (Play's "Search (on device)" use). Given on Android's All files access page, offered on
+         the first-launch page. Nothing is written or sent anywhere. -->
+    <uses-permission
+        android:name="android.permission.MANAGE_EXTERNAL_STORAGE"
+        tools:ignore="ScopedStorage" />
+    <!-- The SMS inbox, kept for search like notifications: read only while the app is the
+         phone's digital assistant (Play's default assistant exception), and never sent. -->
+    <uses-permission android:name="android.permission.READ_SMS" />
     <!-- "Photos in Munnar": where photos were taken. Android removes it from what the app reads
          unless this is granted; asked on the Photos screen. Matched against a place list in the
          APK, so no location leaves the phone. -->
@@ -77,10 +86,10 @@
     <uses-permission android:name="android.permission.RUN_USER_INITIATED_JOBS" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
 
-    <!-- LiteRT brings in Play's AI and asset pack delivery, whose unpacking service runs as a data
-         sync foreground service. The app has no packs, so the service never runs; left in, Play
-         asks for a declaration and a video of it. -->
-    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" tools:node="remove" />
+    <!-- The first big photo index carrying on after the app is closed, with a notice
+         (gallery/IndexService): local processing of the user's own photos, a data sync
+         foreground service. LiteRT's asset pack service, the other user, stays removed below. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
 
     <queries>
         <intent>
@@ -269,6 +278,11 @@
         <service
             android:name=".model.DownloadService"
             android:exported="false" />
+        <!-- Photos and faces indexed after the app is closed, while a big backlog is left. -->
+        <service
+            android:name=".gallery.IndexService"
+            android:exported="false"
+            android:foregroundServiceType="dataSync" />
 
         <receiver android:name=".reminders.ReminderReceiver" android:exported="false" />
         <receiver android:name=".reminders.ReminderActionReceiver" android:exported="false" />

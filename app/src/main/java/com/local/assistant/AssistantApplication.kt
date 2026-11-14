@@ -165,9 +165,12 @@ class AppContainer(context: Context) {
         onBackground = {
             backgroundJobs.onBackground()
             sensitiveLock.lock()
-            // Out of sight, the photos wait for the charger at night.
-            synchronized(this) { autoIndex?.cancel() }
-            appScope.launch { galleryIndex.pause() }
+            // Out of sight, the photos wait for the charger at night, unless a big first index
+            // is carrying on with its notice up.
+            if (!com.local.assistant.gallery.IndexService.running) {
+                synchronized(this) { autoIndex?.cancel() }
+                appScope.launch { galleryIndex.pause() }
+            }
             // What only the app in use needs goes back, so the home screen has less to take back:
             // the natural voice once it falls quiet, memory search once its backlog is done.
             speaker.setAway(true)
@@ -339,6 +342,16 @@ class AppContainer(context: Context) {
                 if (!appForeground.isForeground) return@launch
                 if (isSmallDevice && llmService.state.value is LlmService.State.Ready) return@launch
                 galleryIndex.start()
+                // A big backlog (a new install, Find people just turned on) carries on after the
+                // app is closed, with a notice; started now, while the app is in front, as
+                // Android requires.
+                if (com.local.assistant.gallery.IndexService.running) return@launch
+                val status = kotlinx.coroutines.withTimeoutOrNull(30_000L) { galleryIndex.status.first { it.total > 0 } } ?: return@launch
+                faceIndex.refreshStatus()
+                val facesLeft = if (faceIndex.isOn) faceIndex.status.value.photosLeft else 0
+                if (maxOf(status.remaining, facesLeft) >= com.local.assistant.gallery.IndexService.BACKLOG && appForeground.isForeground) {
+                    com.local.assistant.gallery.IndexService.start(appContext)
+                }
             }
         }
     }
@@ -748,7 +761,8 @@ class AppContainer(context: Context) {
 
     fun resumeDownloads(): Boolean {
         val voices = voicePacks.filter { it.shouldResume() || it.isBusy }
-        val models = listOf(modelManager, galleryModelManager).filter { it.shouldResume() || it.isBusy }
+        // The photo model first: a tenth the size, and photos can be indexed while the chat model downloads.
+        val models = listOf(galleryModelManager, modelManager).filter { it.shouldResume() || it.isBusy }
         if (voices.isEmpty() && models.isEmpty()) return false
         if (resuming?.isActive == true) return true
         resuming = appScope.launch {

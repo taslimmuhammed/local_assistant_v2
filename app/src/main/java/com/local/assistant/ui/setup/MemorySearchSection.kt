@@ -172,8 +172,8 @@ fun MemorySearchSection(controls: MemorySearchControls) {
                     shape = RoundedCornerShape(12.dp),
                 ) { Text("Load your own from device storage") }
                 Text(
-                    text = "The same model searches your photos. It downloads by itself after the chat " +
-                        "model, with no account. Changing model re-indexes past conversations.",
+                    text = "The same model searches your photos. It downloads by itself once photos are " +
+                        "allowed, or after the chat model, with no account. Changing model re-indexes past conversations.",
                     style = MaterialTheme.typography.bodyMedium,
                     color = AppColors.TextSecondary,
                     modifier = Modifier.padding(top = 8.dp),

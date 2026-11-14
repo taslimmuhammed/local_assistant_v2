@@ -127,6 +127,7 @@ private fun AppRoot(
     var tourSeen by remember { mutableStateOf(container.settings.tourSeen) }
     var profileAsked by remember { mutableStateOf(container.settings.profileAsked) }
     var webSearchAsked by remember { mutableStateOf(container.settings.webSearchAsked || container.webSearch.enabled) }
+    var accessAsked by remember { mutableStateOf(container.settings.accessAsked) }
 
     // A model installed in this run (the first download, or an import) is loaded, and the first
     // chat's prompt read, before the chat opens: otherwise the first message waits ~15 s. A model
@@ -201,6 +202,12 @@ private fun AppRoot(
                 webSearchAsked = true
             },
         )
+        return
+    }
+
+    // Then photos, files and messages, each optional. Asked once, existing installs too.
+    if (!accessAsked) {
+        com.local.assistant.ui.setup.AccessScreen(container = container, onDone = { accessAsked = true })
         return
     }
 
