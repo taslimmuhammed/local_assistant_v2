@@ -308,6 +308,9 @@ class ConversationManager(
         // is known before it is (all of the history, unless some has to be shed to fit).
         val windowStartId = reusable?.windowStartId ?: (history.firstOrNull()?.id ?: ((history.lastOrNull()?.id ?: 0L) + 1))
         val attachedBefore = reusable?.attachedPhotos?.toSet().orEmpty()
+        // About the messages that came in, with check_inbox there to read them: chat screenshots
+        // only look like the question ("do you have any latest messages", 14 Nov 2026).
+        val aboutMessages = inbox() && QueryText.asksAboutMessages(userText)
         val (opened, recall, photos) = coroutineScope {
             val recalled = if (locked || command) {
                 null
@@ -316,7 +319,7 @@ class ConversationManager(
                     val started = SystemClock.elapsedRealtime()
                     // The photo search runs beside memory's: its own model, on the CPU. About the
                     // screen: what's on it, not something in the gallery.
-                    val search = async { if (screen) RecalledPhotos.NONE else photosFor(userText, attachedBefore) }
+                    val search = async { if (screen || aboutMessages) RecalledPhotos.NONE else photosFor(userText, attachedBefore) }
                     (recall(chatId, userText, windowStartId, budget) to search.await())
                         .also { timing?.recallMs = SystemClock.elapsedRealtime() - started }
                 }

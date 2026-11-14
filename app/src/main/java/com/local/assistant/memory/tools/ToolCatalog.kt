@@ -71,6 +71,13 @@ object ToolCatalog {
     /** Tools whose answer a request may go on to use: "what's 18% of 2450? remind me to pay that much". */
     val LOOKUPS = setOf(CALCULATE, WEB_SEARCH, SEARCH_MEMORY, GET_UPCOMING, HEALTH)
 
+    /**
+     * Tools that answer from the user's messages or files: photos that only look like the question
+     * don't go under such an answer. "Do you have any latest messages" got a card of chat
+     * screenshots after check_inbox's answer, twice in one day (14 Nov 2026).
+     */
+    val ANSWERS_FROM_ELSEWHERE = setOf(CHECK_INBOX, READ_FILE)
+
     /** Tools that carry words a lookup's answer could go into: a reminder's title, a message. */
     val TAKES_ANSWERS = setOf(ADD_TASK, ADD_EVENT, SEND_MESSAGE, SAVE_FACT, EDIT_NOTE)
 

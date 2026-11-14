@@ -89,6 +89,16 @@ object QueryText {
     }
 
     /**
+     * "Do you have any latest messages", "what did Rahul text me", "any SMS from the bank": about
+     * the messages that came in, which check_inbox reads. Not with photos or screenshots named:
+     * "photos Rahul sent on WhatsApp" is a photo search.
+     */
+    fun asksAboutMessages(text: String): Boolean {
+        val words = words(text.lowercase(Locale.ROOT))
+        return words.any { it in MESSAGE_WORDS } && words.none { it in PHOTO_WORDS || it in SCREENSHOT_WORDS }
+    }
+
+    /**
      * "Summarise this", "take a screenshot", "share this page with Anjali", "what's on my
      * screen": about the screen the assistant was opened over, so its screenshot goes with the
      * message. Generous on purpose: a screenshot sent for nothing costs a second, while one held
@@ -112,6 +122,12 @@ object QueryText {
 
     private val PHOTO_WORDS = setOf("photo", "photos", "pic", "pics", "picture", "pictures", "video", "videos", "selfie", "selfies")
     private val SEE_WORDS = setOf("show", "find", "get", "fetch", "pull", "see", "give", "search")
+    /** Not "text", which is as often the words on a poster or a page. */
+    private val MESSAGE_WORDS = setOf(
+        "message", "messages", "msg", "msgs", "texts", "texted", "sms", "smses", "inbox",
+        "whatsapp", "telegram", "dm", "dms",
+    )
+    private val SCREENSHOT_WORDS = setOf("screenshot", "screenshots", "screen")
 
     /** Lower-cased words worth searching for, in order, without repeats. */
     fun terms(text: String): List<String> =

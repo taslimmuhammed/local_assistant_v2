@@ -201,8 +201,10 @@ class TurnRunner(
                             // Photos the message itself matched, under the reply, unless a photo
                             // search already put its own there, or the turn did something (an
                             // alarm, a call): a command, however put. "Set alarm at 4:30" heard as
-                            // "sarlamat 4:30 p.m. today" got the card (2 Nov 2026).
-                            if (!photosShown && !acted && turn.relatedPhotos.isNotEmpty()) {
+                            // "sarlamat 4:30 p.m. today" got the card (2 Nov 2026). Nor under an
+                            // answer from the user's messages or files.
+                            val elsewhere = event.tools.any { it in ToolCatalog.ANSWERS_FROM_ELSEWHERE }
+                            if (!photosShown && !acted && !elsewhere && turn.relatedPhotos.isNotEmpty()) {
                                 val (recordId, chip) = tools.showRelatedPhotos(chatId, turn.relatedPhotos)
                                 emit(TurnEvent.Memory(recordId, chip))
                             }

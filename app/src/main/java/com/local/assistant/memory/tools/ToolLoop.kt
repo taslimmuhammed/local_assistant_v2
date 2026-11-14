@@ -36,13 +36,15 @@ sealed interface LoopEvent {
     /**
      * [toolRounds] is how many rounds of tool calls the turn took; 0 for a plain reply.
      * [staleConversation]: the turn was finished without the runtime (a repaired call), so the
-     * live conversation no longer matches what is stored and has to be rebuilt.
+     * live conversation no longer matches what is stored and has to be rebuilt. [tools]: the
+     * names of the tools that ran.
      */
     data class Done(
         val stats: GenStats?,
         val changedPrefix: Boolean,
         val toolRounds: Int,
         val staleConversation: Boolean = false,
+        val tools: Set<String> = emptySet(),
     ) : LoopEvent
 
     /** The first send was refused as too long for the window, before anything was said. */
@@ -173,7 +175,9 @@ class ToolLoop(
         // Whether something was done this turn, and whether any call failed: see the end.
         var acted = false
         var failed = false
+        val tools = mutableSetOf<String>()
         fun ran(call: ToolCall, outcome: ToolExecutor.Outcome) {
+            tools += call.name
             if (call.name == ToolCatalog.HEALTH) readHealth = true
             if (!outcome.ok) failed = true else if (call.name in ToolCatalog.ACTS) acted = true
         }
@@ -338,7 +342,7 @@ class ToolLoop(
                 val fixed = repair(cause)?.takeIf { it.name in ToolCatalog.ACTS }
                 if (fixed != null && context.locked && fixed.name !in ToolCatalog.LOCKED) {
                     emit(LoopEvent.NeedsUnlock)
-                    emit(LoopEvent.Done(null, changedPrefix = false, toolRounds = 0, staleConversation = true))
+                    emit(LoopEvent.Done(null, changedPrefix = false, toolRounds = 0, staleConversation = true, tools = tools.toSet()))
                     return@flow
                 }
                 val outcome = fixed?.let { executor.execute(it, context) }
@@ -348,7 +352,7 @@ class ToolLoop(
                 }
                 if (outcome.chip != null && outcome.recordId != null) emit(LoopEvent.Memory(outcome.recordId, outcome.chip, fixed.name))
                 emit(LoopEvent.Text(REPAIRED_REPLY))
-                emit(LoopEvent.Done(null, outcome.changedPrefix, toolRounds = 1, staleConversation = true))
+                emit(LoopEvent.Done(null, outcome.changedPrefix, toolRounds = 1, staleConversation = true, tools = tools + fixed.name))
                 return@flow
             }
             val opening = held
@@ -432,7 +436,7 @@ class ToolLoop(
                     // Asked again and still nothing: better a plain line than an empty bubble.
                     show(NO_REPLY)
                 }
-                emit(LoopEvent.Done(stats, changedPrefix, rounds, staleConversation = checked || leftOver || nudged))
+                emit(LoopEvent.Done(stats, changedPrefix, rounds, staleConversation = checked || leftOver || nudged, tools = tools.toSet()))
                 return@flow
             }
 
@@ -440,7 +444,7 @@ class ToolLoop(
             // turn before anything runs: what the user asked goes again once they unlock.
             if (context.locked && calls.any { it.name !in ToolCatalog.LOCKED }) {
                 emit(LoopEvent.NeedsUnlock)
-                emit(LoopEvent.Done(stats, changedPrefix, rounds, staleConversation = true))
+                emit(LoopEvent.Done(stats, changedPrefix, rounds, staleConversation = true, tools = tools.toSet()))
                 return@flow
             }
 
@@ -486,7 +490,7 @@ class ToolLoop(
             // which closed this one: the reply is that answer, and the chat is rebuilt next turn.
             if (written.isNotEmpty()) {
                 emit(LoopEvent.Text((if (spoke) "\n" else "") + written.joinToString("\n")))
-                emit(LoopEvent.Done(stats, changedPrefix, rounds, staleConversation = true))
+                emit(LoopEvent.Done(stats, changedPrefix, rounds, staleConversation = true, tools = tools.toSet()))
                 return@flow
             }
             // Only sums, all worked out: the reply is the result itself, written here. The model
@@ -494,7 +498,7 @@ class ToolLoop(
             // (see NumberGrounding). The runtime never hears the results, so rebuild next turn.
             if (sums.isNotEmpty() && sums.size == calls.size) {
                 emit(LoopEvent.Text((if (spoke) "\n" else "") + sums.joinToString("\n")))
-                emit(LoopEvent.Done(stats, changedPrefix, rounds, staleConversation = true))
+                emit(LoopEvent.Done(stats, changedPrefix, rounds, staleConversation = true, tools = tools.toSet()))
                 return@flow
             }
             // A picture to look at (a found photo to read a question from) can't go in a tool
@@ -545,7 +549,7 @@ class ToolLoop(
         val outcome = executeShowingSteps(call, context)
         if (outcome.chip != null && outcome.recordId != null) emit(LoopEvent.Memory(outcome.recordId, outcome.chip, call.name))
         emit(LoopEvent.Text(outcome.reply ?: com.local.assistant.files.DocumentReader.couldNotReadNow(document.name)))
-        emit(LoopEvent.Done(null, changedPrefix = false, toolRounds = 1, staleConversation = true))
+        emit(LoopEvent.Done(null, changedPrefix = false, toolRounds = 1, staleConversation = true, tools = setOf(call.name)))
     }
 
     /**

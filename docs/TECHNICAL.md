@@ -227,6 +227,13 @@ and to leave them unmentioned if they aren't about it (`PromptAssembler.renderPh
   call…) gets no card, however it was put; "set alarm at 4:30" written down as "sarlamat 4:30
   p.m. today" got one before. Greetings ("good morning Luna", "hi, how are you?",
   `QueryText.isSmallTalk`) aren't searched for photos at all; memory still is.
+- **Not with messages or files.** "Do you have any latest messages" got a card of chat
+  screenshots under check_inbox's answer, twice on 14 Nov 2026. While messages are kept, a
+  question that names them ("messages", "texted", "SMS", "WhatsApp"…, with no photo or screenshot
+  named: `QueryText.asksAboutMessages`) isn't searched for photos, and a turn that ran check_inbox
+  or read_file (`ToolCatalog.ANSWERS_FROM_ELSEWHERE`, from `LoopEvent.Done.tools`) gets no card
+  however it was put. In VoiceChatReplayTest the two "latest messages" turns had the card before
+  and none after, in two runs.
 - **Only a clear match goes to the model.** A whole question scores differently from a short search: of 30
   general questions on the test phone's 2,685 photos ("what is the capital of France?", "tell me a
   joke") the best photo scored up to 0.777, so the search's own floor (0.72) would have sent

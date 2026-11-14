@@ -89,6 +89,16 @@ class CheckInboxRoutingTest {
     }
 
     @Test
+    fun `the turn's end says the inbox was read, so no related photos go under it`() {
+        val session = ScriptedSession(ArrayDeque(listOf(ScriptedSession.calls(call("when" to "today")), ScriptedSession.says("Amma asked about the cake."))))
+        val context = ToolContext(chatId = 1, userMessageId = 10, userText = "do you have any latest messages")
+        val events = runBlocking { loop.run(session, "envelope", emptyList(), context).toList() }
+        val done = events.last() as LoopEvent.Done
+        assertEquals(setOf(ToolCatalog.CHECK_INBOX), done.tools)
+        assertTrue(done.tools.any { it in ToolCatalog.ANSWERS_FROM_ELSEWHERE })
+    }
+
+    @Test
     fun `nothing from them on it, so their latest, and the note says so`() {
         val result = result(call("from" to "Amma", "query" to "flight"), "did amma message about the flight?")
         assertEquals(listOf("Sat 14 Nov, 08:00 · WhatsApp · Amma: Can you get the cake?"), result["messages"])
