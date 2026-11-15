@@ -168,6 +168,17 @@ Before each turn, `Retriever` recalls, across all chats:
    dated, as `[Memory (3 Sep 2026): …]`, and the instructions say newer beats older and facts beat
    both.
 
+**While the message is typed.** Once typing pauses for 400 ms, what's typed so far is embedded
+(`ConversationManager.typing(draft)` → `Retriever.prepareQuery`), opening the embedding model
+first if it was let go. Sent as it stood, the message's recall finds its vector waiting: the
+retriever keeps the last one, and the photo model keeps its last text vector too, so photo search
+reuses it. Nothing is embedded ahead for what recall skips: small talk and commands. On the phone
+(`MemoryEvalTest -e eval memory`, `recallTiming`, 14 Nov 2026) embedding a message took ~55 ms
+once the model was warm, so memory recall took 73 ms with a new message and 16–18 ms with its
+vector waiting, and photo search 64–105 ms against 10–27 ms. It matters most when the embedding
+model had been let go: opening it took 340–470 ms and its first embedding 535 ms, ~1 s that now
+passes while the user is still typing.
+
 Vectors are the embedder's first 256 dimensions (Matryoshka), L2-normalised and stored as int8 —
 256 bytes a chunk. `chunks.embedding` is the source of truth; the search index is derived and
 rebuilt whenever it might disagree. That index is [sqlite-vec](https://github.com/asg017/sqlite-vec)
@@ -546,6 +557,39 @@ Gemma writes a tool call as `call:<name>{…}`, and the runtime could not parse 
   It also converts units (`Units.kt`): "5 miles in km", "98.6 f to c", "1200 sq ft in sq m",
   "2 cups in ml" — length, weight, volume, area (acres, hectares, cents), speed, time, data and
   temperature.
+
+**Instant commands.** A message that is nothing but an alarm at a time, a timer, or a switch —
+"set an alarm for 6:30 tomorrow", "10 minute timer", "turn on the flashlight", "put my phone on
+silent", "volume up", "turn off wifi" — is carried out without the model
+(`memory/tools/InstantCommands`). For these the model only ever wrote the one call and a line
+saying it was done, which took 2–3 s on the phone before the first word. The call is the one the
+model would make, run by `ToolExecutor` like any other (the same checks, chip and undo), and the
+reply is the model's usual line ("Alarm set for 6:30 AM tomorrow."). The grammar takes the whole
+message or nothing: a name for the alarm, a repeat, a place, a second request, a question or a
+time that can't be ("25:00") all go to the model as before, so it never decides what a message
+means, only spares the model the plainest ones. If the call fails (a time already passed, no clock
+app), the model is asked after all, and its own call of it gets the same answer from the
+executor's dedupe. The live conversation never saw the exchange: rather than being read again for
+it (~10 s), it is told with the next message, in a bracketed line before the user's words
+(`ConversationManager.answeredWithoutModel` → `EnvelopeInputs.doneByApp`); the chat's stored rows
+carry it into any later rebuild. A new chat's first message takes the conversation made ready for
+it, as a sent one would. On the phone (`InstantCommandEvalTest -e eval instant`, three runs, 14–15
+Nov 2026) "turn on the flashlight" and "turn off the flashlight" were answered in 23–161 ms, and
+the next question carried on in the same conversation (0.56–0.95 s to its first word). Asked
+"is the flashlight on or off now?", the model answered that it didn't know, all three times,
+while the line said the app had done it "without you". Worded as part of the chat ("Earlier in
+this chat: … That is how things now stand, unless they say otherwise."), it answered "Flashlight
+is off." (15 Nov, one run).
+
+**Shorter tool text, tried and taken back.** On 13 Nov 2026 the tool descriptions and rules were
+cut by 951 characters, keeping every line a misroute once needed: the instructions with every tool
+went from 3,431 to 3,224 tokens (`ToolResponseProbeTest -e probe tooltokens`), ~0.3–0.5 s less to
+read for each new chat. Honesty held (22 and 21 of 24 routed against 22), but routing didn't: the
+same build with each text, the same phone, the 105 cases of the tools main had before files and
+messages (`RoutingEvalTest -e tools basic`, 15 Nov), gave 99 and 101 of 105 (temperature 1.0 and
+0.7) with the old text against 94 and 97 with the short one. All nine cases that differed went from
+right to wrong, four of them photo requests ("what's my dentist's name?" went to find_photos,
+"find photos of Amma at the beach" lost its query). The old text is back.
 
 ### Saying it did what it didn't
 
@@ -1302,24 +1346,64 @@ So the model answers in under a second; the waiting was loading it and reading t
 Typed chat turns before and after these changes, LiteRT-LM 0.18.1 to 0.19.1 with prediction off
 for chats (`AssistLatencyEvalTest`, 13 Nov 2026, time to the first word):
 
-| Situation | Before | After |
-|---|---|---|
-| New chat with a tool call (`get_upcoming`), model loaded | 21.5 s | 7.8 s (0.4 s after the result) |
-| Follow-up in the same chat | 1.3 s | 0.5 s |
-| Blank chat on screen for 6 s, then a question | not measured | 1.2 s |
-| Conversation prepared beforehand | 2.1 s | 1.3 s |
-| New chat typed straight away, model loaded | 7.8 s | 6.8 s |
-| Model not loaded, new chat | 25.6 s | 21.4 s |
+| Situation | Before | After | Prediction on, results as a message (14–15 Nov) |
+|---|---|---|---|
+| New chat with a tool call (`get_upcoming`), model loaded | 21.5 s | 7.8 s (0.4 s after the result) | 7.9 s, 8.4 s |
+| Follow-up in the same chat | 1.3 s | 0.5 s | 0.53 s, 0.54 s |
+| Blank chat on screen for 6 s, then a question | not measured | 1.2 s | not run |
+| Conversation prepared beforehand | 2.1 s | 1.3 s | 0.58 s, 0.55 s |
+| New chat typed straight away, model loaded | 7.8 s | 6.8 s | 6.8 s, 6.9 s |
+| Model not loaded, new chat | 25.6 s | 21.4 s | 18.8 s, 15.2 s |
+
+The last column is two runs from the phone's own "Night evals" page (thermal status 0–1), with
+the shorter tool text (since taken back: "Shorter tool text, tried and taken back") and prediction on. A new chat is still ~6.8 s:
+almost all of it reading the ~3,300-token instructions and tools. A follow-up straight after the tool turn once took 9.8 s (and
+0.57 s in the other run), as the conversation was read again; not seen elsewhere.
 
 **Multi-token prediction and tool results.** With multi-token prediction on, the runtime reads a
-tool's result at 3–4 tokens a second: the 50-token result of `get_upcoming` took 12–15 s before
-the reply's first word, on LiteRT-LM 0.18.1 and 0.19.1 alike, with the mode ON or ADAPTIVE. The
-same result sent as a user message took 0.5 s, and with prediction off for the conversation
-0.46 s (`ToolResponseProbeTest`, 13 Nov 2026). Prediction speeds up writing, 22 tokens a second
-against 15, so conversations that can get tool results (the chat's) open with it off
-(`SpeculativeDecodingConfig(OFF)` in `LiteRtLmBackend.openChat`) and the others keep the
-engine's. On 0.18.1 the repetition penalty also cut writing to 7 tokens a second with prediction
+result sent in its own tool-response turn at 3–4 tokens a second: the 50-token result of
+`get_upcoming` took 12–20 s before the reply's first word in 4 runs of 6, on LiteRT-LM 0.18.1 and
+0.19.1 alike, with the mode ON or ADAPTIVE. The same result sent as a user message took 0.5–0.75 s
+every time (`ToolResponseProbeTest`, 13 Nov 2026). So results go back that way, marked as not the
+user's words (`ToolReplay.asMessage`: "[Tool results, not the user's words]", one line per call),
+live and when a stored chat is replayed, and chats keep the engine's prediction. It writes ~21
+tokens a second against ~14 without: with the two interleaved on the phone (`-e probe mtpopen`,
+14 Nov), a 70-word answer took 3.8 s against 5.8 s, opening the instructions and tools took no
+longer (5.6 s against 7.6 s), and no reply after a result came back empty (0 of 6, against 2 of 6
+without). On 0.18.1 the repetition penalty also cut writing to 7 tokens a second with prediction
 on and 8.5 with it off; on 0.19.1 it costs almost nothing (21 and 14).
+
+**What a model load spends.** 5.6–6.0 s on a cool phone (`ToolResponseProbeTest -e probe
+loadlog`, 15 Nov 2026, the runtime's own log): ~1.3 s opening the file, ~4 s preparing the
+decoder's weights for the GPU, ~0.8 s setting up its GPU programs from the program cache
+(`*_mldrift_program_cache.bin`, 68.5 MB, read on every load), and the rest for the vision and
+audio parts. The weight cache beside it stays 336 bytes: the runtime opens it read-only, and its
+own message says the weights "are re-prepared on every load" then. LiteRT-LM 0.19.1 has no
+setting for it, so those 4 s go only by not loading at all: preparing on intent, and the
+process kept by the system's binding of the assistant service.
+
+**One conversation at a time, still.** `Conversation.clone()` copies a conversation in 2 ms for
+~28 MB, and the copy answers at once (first word ~0.4 s, writing ~34 tokens a second). But going
+back to the original while the copy was open took 8–13 s before its first word, writing at
+3.5–5 tokens a second, and with both closed the app held ~1 GB more than before (PSS 1,248 →
+2,306 MB and 1,878 → 3,125 MB in two runs; `-e probe clone`, 14–15 Nov 2026). So no prepared
+copy of the instructions is kept to start new chats from.
+
+**Timing on the phone needs a cool phone.** Through a long run of evals on the charger the phone
+reached thermal status 3 (severe, `dumpsys thermalservice`), and every stage slowed together:
+prompt reading from ~370 to ~250 tokens a second, writing from 21 to 8. A latency run in that state
+looked 1.5× slower everywhere. Speeds are compared within one interleaved probe, or after the
+phone has cooled to status 1 or less.
+
+**A plan written as the reply (open).** With results sent as a message, "take a screenshot,
+share it on WhatsApp to Anjali with a summary, and set an alarm at 6:30" sometimes gets, after
+the screenshot's result, the model's plan as its reply: "The user wants me to perform three
+actions: 1. Take a screenshot …". 2 of 5, 2 of 3 and 2 of 3 times in three runs
+(`MultiStepEvalTest -e only 6`, 14–15 Nov 2026, which now counts such replies as "planned"); in
+the last two runs the model stopped there, without sharing or setting the alarm. Words after the
+results' header (`-e resultsnote`: "now carry on with their request: make any calls still
+needed, then answer them in a sentence or two, and do not write out a plan") didn't help: still 2
+plans in 20 screenshot turns, and fewer cases right (15 against 18 of 20). Not used.
 
 **An empty reply after tool results.** Through the app's backend on 0.19.1, with a 4,166-token
 prompt, the model once wrote nothing after a lookup's result, both times it was tried. When a
@@ -1758,8 +1842,11 @@ the main model, so they don't change this.
 **The fix.** `llm/ModelPrecision` sets the text decoder's `prefer_activation_type` to "fp32" in the
 model file's header before the engine loads it. LiteRT-LM 0.17.1 reads the preference from the
 header (`runtime/util/litert_lm_loader.cc`) and offers no API for it. (0.18 added
-`EngineConfig.activationDataType`; the header patch stays until that setting has been checked on
-the phone with `digitPrecision`.) "fp16" and "fp32" are the
+`EngineConfig.activationDataType`. On 0.19.1, asked for FLOAT16 there over the fp32 header
+(`MemoryEvalTest#activationModes`, 14 Nov 2026), the prompt was read 1.2–1.6× faster (711 against
+589 tokens a second at 1,882 tokens, 724 against 443 at 3,312), but 14 of 16 numbers came back
+right at 1,882 tokens and none at 3,312, against 16 of 16 with the header's fp32. So the header
+patch stays.) "fp16" and "fp32" are the
 same length, so it is a 2-byte write in place, and nothing else in the 3.6 GB file moves. The
 vision encoder keeps its fp16. The runtime keys its GPU program cache on the file's mtime, so it
 rebuilds the fp32 programs once. A file it can't read, or one that asks for something else, is

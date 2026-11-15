@@ -777,7 +777,10 @@ class ConversationManager(
      * Returns at once: the conversation may be busy being made ready, and the reply shouldn't wait.
      */
     fun answeredWithoutModel(chatId: Long, userMessageId: Long, locked: Boolean, said: String, call: String, result: String, reply: String) {
-        val line = "[Done by the app before this message, without you: the user said \"$said\"; $call returned $result; the app told them \"$reply\"]"
+        // "Without you" in this line made the model disown it: asked "is the flashlight on or off
+        // now?" after the app turned it off, it said it didn't know, 3 runs of 3 (14–15 Nov 2026).
+        val line = "[Earlier in this chat: the user said \"$said\", $call ran for them and returned $result, and they were told \"$reply\". " +
+            "That is how things now stand, unless they say otherwise.]"
         // Undispatched: in the mutex's queue before finishTurn, which follows the stored reply.
         scope.launch(start = kotlinx.coroutines.CoroutineStart.UNDISPATCHED) {
             mutex.withLock {

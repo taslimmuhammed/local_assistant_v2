@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Debug builds only: the "Night evals" icon, which runs the phone evals without a computer. -->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <queries>
+        <!-- The test APK, whose classes the night run loads. -->
+        <package android:name="com.taslim.localassistant.dev.test" />
+    </queries>
+
+    <application>
+        <!-- Its own task, so it stays on screen beside the app's own, and its own icon. -->
+        <activity
+            android:name="com.local.assistant.debug.NightEvalsActivity"
+            android:exported="true"
+            android:label="Night evals"
+            android:taskAffinity="com.local.assistant.nightevals"
+            android:theme="@android:style/Theme.DeviceDefault.NoActionBar">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+    </application>
+</manifest>

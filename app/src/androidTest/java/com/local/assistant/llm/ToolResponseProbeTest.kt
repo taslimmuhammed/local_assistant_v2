@@ -314,6 +314,93 @@ class ToolResponseProbeTest {
         }
     }
 
+    /**
+     * What a copy of a conversation costs (`Conversation.clone()`, LiteRT-LM 0.19): the app's
+     * instructions and tools read once, then copied. Memory before and after, how long the copy
+     * takes, and how fast each answers while the other is open; then memory once the copy closes.
+     * A second conversation cost ~1.1 GB and read 5–6× slower on 0.17.1, so this is the gate for
+     * keeping a copy of the one made ready for a new chat.
+     */
+    @Test
+    fun cloneCost() = runBlocking<Unit> {
+        assumeTrue("opt-in: -e probe clone", InstrumentationRegistry.getArguments().getString("probe") == "clone")
+        val llm = container.llmService
+        check(container.llmBackend.ensureReady()) { "no model" }
+        report("--- clone ${java.util.Date()}")
+        fun memory(): String {
+            val info = android.os.Debug.MemoryInfo().also(android.os.Debug::getMemoryInfo)
+            return "PSS ${info.totalPss / 1024} MB, graphics ${(info.getMemoryStat("summary.graphics")?.toIntOrNull() ?: 0) / 1024} MB"
+        }
+        val instructions = Instructions.render(container.settings.systemPrompt, withTools = true)
+        val tools = ToolCatalog.declarations(web = false)
+        val penalty = RepetitionPenaltyConfig(repetitionPenalty = 1.1f, windowSize = 256)
+        report("before: ${memory()}")
+        val started = SystemClock.elapsedRealtime()
+        val original = llm.createConversation(
+            ConversationConfig(
+                systemInstruction = Contents.of(instructions),
+                tools = tools.map { tool(Declared(it)) },
+                automaticToolCalling = false,
+                prefillPrefaceOnInit = true,
+                maxOutputToken = 200,
+                thinkingConfig = ThinkingConfig(enableThinking = false),
+            ),
+        )
+        var copy: Conversation? = null
+        try {
+            report("opened in ${SystemClock.elapsedRealtime() - started} ms, ${original.getTokenCount()} tokens: ${memory()}")
+            val alone = timedRaw(original, Message.user(Contents.of("What's the capital of Kerala?")), penalty)
+            report("original alone: first word ${alone.firstMs} ms, done ${alone.doneMs} ms, ${alone.bench}")
+            val copying = SystemClock.elapsedRealtime()
+            copy = runCatching { original.clone() }.onFailure { report("clone failed: $it") }.getOrNull() ?: return@runBlocking
+            report("copied in ${SystemClock.elapsedRealtime() - copying} ms, ${copy.getTokenCount()} tokens: ${memory()}")
+            val onCopy = timedRaw(copy, Message.user(Contents.of(LONG_QUESTION)), penalty)
+            report("copy, original open: first word ${onCopy.firstMs} ms, done ${onCopy.doneMs} ms, ${onCopy.bench}")
+            val onOriginal = timedRaw(original, Message.user(Contents.of(LONG_QUESTION)), penalty)
+            report("original, copy open: first word ${onOriginal.firstMs} ms, done ${onOriginal.doneMs} ms, ${onOriginal.bench}; ${memory()}")
+            // The copy kept the turn it was made after, and not the original's later one.
+            report("tokens now: original ${original.getTokenCount()}, copy ${copy.getTokenCount()}")
+        } finally {
+            copy?.let { runCatching { it.close() } }
+            report("copy closed: ${memory()}")
+            original.close()
+            llm.conversationClosed(original)
+            report("both closed: ${memory()}")
+        }
+    }
+
+    /**
+     * A model load with the runtime's own log turned up, to see why its GPU weight cache stays at
+     * a few hundred bytes (the weights converted again at every load, 8–10 s of it): read the log
+     * for "weight cache" afterwards. Two loads, so the second one could use what the first wrote.
+     */
+    @Test
+    fun loadWithRuntimeLog() = runBlocking<Unit> {
+        assumeTrue("opt-in: -e probe loadlog", InstrumentationRegistry.getArguments().getString("probe") == "loadlog")
+        val llm = container.llmService
+        report("--- load with the runtime's log ${java.util.Date()}")
+        try {
+            com.google.ai.edge.litertlm.Engine.setNativeMinLogSeverity(com.google.ai.edge.litertlm.LogSeverity.VERBOSE)
+            repeat(2) { load ->
+                container.conversations.withModelFree { llm.unload() }
+                val started = SystemClock.elapsedRealtime()
+                check(container.llmBackend.ensureReady()) { "no model" }
+                val caches = context.cacheDir.listFiles { f -> "mldrift" in f.name || "xnnpack" in f.name }.orEmpty()
+                    .filter { it.name.startsWith("gemma") }.joinToString { "${it.name.substringAfter(".litertlm")} ${it.length() / 1024} KB" }
+                report("load #${load + 1}: ${SystemClock.elapsedRealtime() - started} ms; caches: $caches")
+            }
+            // The runtime's lines about its caches and weights, kept with the timings.
+            // Run from the app's "Night evals" (no adb, no UiAutomation), the app reads its own log.
+            val lines = InstrumentationRegistry.getInstrumentation().uiAutomation?.executeShellCommand("logcat -d -t 6000")
+                ?.let { android.os.ParcelFileDescriptor.AutoCloseInputStream(it).bufferedReader().readLines() }
+                ?: Runtime.getRuntime().exec(arrayOf("logcat", "-d", "-t", "6000")).inputStream.bufferedReader().readLines()
+            val about = Regex("(?i)weight|cache|serializ|re-prepar|read-only|mldrift|delegate|kernel")
+            lines.filter { about.containsMatchIn(it) && "InstantEval" !in it }.distinctBy { it.substringAfter(": ") }.takeLast(120).forEach { report("log: $it") }
+        } finally {
+            com.google.ai.edge.litertlm.Engine.setNativeMinLogSeverity(com.google.ai.edge.litertlm.LogSeverity.WARNING)
+        }
+    }
+
     private fun batteryTemp(): String {
         val intent = context.registerReceiver(null, android.content.IntentFilter(android.content.Intent.ACTION_BATTERY_CHANGED))
         return "%.1f".format((intent?.getIntExtra(android.os.BatteryManager.EXTRA_TEMPERATURE, 0) ?: 0) / 10.0)

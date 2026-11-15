@@ -139,9 +139,15 @@ class MultiStepEvalTest {
                 tally += "case $index: $passed/$samples"
             }
             report("summary", tally.joinToString("; "))
+            report("planned", "$planned of $replies replies opened with the model's plan (\"The user wants me to …\")")
         }
         screen.delete()
     }
+
+    // Replies that are the model's plan written out, seen after a screenshot's result (15 Nov 2026).
+    private var replies = 0
+    private var planned = 0
+    private val PLAN = Regex("^(The user (wants|is asking|asked|has asked)|I need to|I will need to)", RegexOption.IGNORE_CASE)
 
     private fun run(engine: Engine, index: Int, case: Case, seed: Int, screen: File): Boolean {
         val system = Instructions.render(PERSONA, withTools = true, webSearch = true, photoSearch = true)
@@ -189,11 +195,13 @@ class MultiStepEvalTest {
                         }
                         call.name to result
                     }
-                    // As the app hands them back (ToolReplay.asMessage); "-e results tool" for the runtime's tool turn.
+                    // As the app hands them back (ToolReplay.asMessage); "-e results tool" for the runtime's tool turn,
+                    // "-e resultsnote <words>" to try words after the results' bracketed header.
                     message = if (InstrumentationRegistry.getArguments().getString("results") == "tool") {
                         Message.tool(Contents.of(results.map { (name, result) -> Content.ToolResponse(name, result) }))
                     } else {
-                        Message.user(Contents.of(ToolReplay.asMessage(results.map { (name, result) -> ToolResult(name, gson.toJson(result)) })))
+                        val note = InstrumentationRegistry.getArguments().getString("resultsnote")
+                        Message.user(Contents.of(ToolReplay.asMessage(results.map { (name, result) -> ToolResult(name, gson.toJson(result)) }, note)))
                     }
                 }
             }
@@ -202,6 +210,8 @@ class MultiStepEvalTest {
         val missing = case.needs.groupingBy { it }.eachCount().filter { (name, count) -> names.count { it == name } < count }.keys
         val forbidden = names.filter { it in case.never }
         val reply = said.toString().trim()
+        replies++
+        if (PLAN.containsMatchIn(reply)) planned++
         val shown = ActionClaims.handedOff(reply, ready)
         val ok = failure == null && missing.isEmpty() && forbidden.isEmpty() && (case.check?.invoke(calls, shown) ?: true)
         report(
