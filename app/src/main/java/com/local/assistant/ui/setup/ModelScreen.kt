@@ -208,12 +208,16 @@ internal fun TransferSection(transfer: Transfer, onCancel: () -> Unit) {
                 modifier = Modifier.padding(top = 12.dp),
             )
         }
-        OutlinedButton(
-            onClick = onCancel,
-            modifier = Modifier.padding(top = 20.dp),
-            shape = RoundedCornerShape(12.dp),
-        ) {
-            Text("Cancel")
+        // All of it is here while it's checked. A download keeps what arrived: Pause, and the
+        // next Download carries on from there.
+        if (!transfer.checking) {
+            OutlinedButton(
+                onClick = onCancel,
+                modifier = Modifier.padding(top = 20.dp),
+                shape = RoundedCornerShape(12.dp),
+            ) {
+                Text(if (transfer.kind == TransferKind.DOWNLOAD) "Pause" else "Cancel")
+            }
         }
     }
 }

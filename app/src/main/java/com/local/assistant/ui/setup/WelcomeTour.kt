@@ -375,12 +375,17 @@ private fun PageDots(count: Int, current: Int, onPick: (Int) -> Unit, modifier: 
 
 /** The way on: a dark pill, the app's main button, that swells under the finger. */
 @Composable
-private fun NextButton(text: String, onClick: () -> Unit) {
+internal fun NextButton(
+    text: String,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    icon: ImageVector? = Icons.AutoMirrored.Outlined.ArrowForward,
+) {
     val press = remember { MutableInteractionSource() }
     val pressed by press.collectIsPressedAsState()
     val scale by animateFloatAsState(if (pressed) 0.95f else 1f, spring(dampingRatio = 0.5f, stiffness = Spring.StiffnessMedium), label = "press")
     Row(
-        Modifier
+        modifier
             .graphicsLayer {
                 scaleX = scale
                 scaleY = scale
@@ -398,14 +403,16 @@ private fun NextButton(text: String, onClick: () -> Unit) {
         AnimatedContent(text, transitionSpec = { fadeIn() togetherWith fadeOut() }, label = "next") { words ->
             Text(words, style = MaterialTheme.typography.titleSmall, color = Color.White)
         }
-        Spacer(Modifier.width(8.dp))
-        Icon(Icons.AutoMirrored.Outlined.ArrowForward, contentDescription = null, tint = Color.White, modifier = Modifier.size(18.dp))
+        if (icon != null) {
+            Spacer(Modifier.width(8.dp))
+            Icon(icon, contentDescription = null, tint = Color.White, modifier = Modifier.size(18.dp))
+        }
     }
 }
 
 /** Fades [content] in and lifts it into place [beat] beats after its page comes up. */
 @Composable
-private fun Rise(playing: Boolean, beat: Int, modifier: Modifier = Modifier, content: @Composable BoxScope.() -> Unit) {
+internal fun Rise(playing: Boolean, beat: Int, modifier: Modifier = Modifier, content: @Composable BoxScope.() -> Unit) {
     val progress = remember { Animatable(0f) }
     LaunchedEffect(playing) {
         if (!playing || progress.value > 0f) return@LaunchedEffect
@@ -423,7 +430,7 @@ private fun Rise(playing: Boolean, beat: Int, modifier: Modifier = Modifier, con
 
 /** An icon on a tinted disc, the starter tiles' bead. */
 @Composable
-private fun Bead(icon: ImageVector, accent: Color, size: Dp) {
+internal fun Bead(icon: ImageVector, accent: Color, size: Dp) {
     Box(Modifier.size(size).clip(CircleShape).background(accent.copy(alpha = 0.16f)), contentAlignment = Alignment.Center) {
         Icon(icon, contentDescription = null, tint = accent, modifier = Modifier.size(size * 0.56f))
     }
@@ -802,7 +809,7 @@ private fun PrivacyScene(playing: Boolean) {
 
 /** The user's own words: the dark bubble. */
 @Composable
-private fun Mine(text: String) {
+internal fun Mine(text: String) {
     Text(
         text,
         style = SceneText,
@@ -817,7 +824,7 @@ private fun Mine(text: String) {
 
 /** What was done, as the chip under an answer shows it, with its one action. */
 @Composable
-private fun Chip(text: String, action: String, icon: ImageVector, accent: Color) {
+internal fun Chip(text: String, action: String, icon: ImageVector, accent: Color) {
     Row(
         Modifier.glass(RoundedCornerShape(14.dp), Glass.Raised).padding(horizontal = 10.dp, vertical = 7.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -832,7 +839,7 @@ private fun Chip(text: String, action: String, icon: ImageVector, accent: Color)
 
 /** A small glass pill of words, with an icon before them if there is one. */
 @Composable
-private fun SceneChip(text: String, icon: ImageVector? = null) {
+internal fun SceneChip(text: String, icon: ImageVector? = null) {
     Row(
         Modifier.glass(GlassShapes.Pill, Glass.Raised).padding(horizontal = 10.dp, vertical = 6.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -976,7 +983,7 @@ private val TourPages = listOf(
 
 /** On a first run the last page says what comes next, so the wait for the download isn't a surprise. */
 private val FIRST_RUN_NEXT =
-    "Next: a few optional details about you, then the model download " +
+    "Next: a few optional details about you, what it may use on the phone and why, then the model download " +
         "(%.1f GB, best on Wi-Fi).".format(Locale.US, ModelCatalog.SIZE_BYTES / 1e9)
 
 private val PhotoTones = listOf(
@@ -1007,10 +1014,10 @@ private val SCENE_HEIGHT = 272.dp
 private val MIN_SCENE = 188.dp
 private val SCENE_PADDING = 16.dp
 private val PAGE_PADDING = 12.dp
-private val SceneShape = RoundedCornerShape(28.dp)
+internal val SceneShape = RoundedCornerShape(28.dp)
 private val PanelShape = RoundedCornerShape(22.dp)
-private val TitleStyle = TextStyle(fontSize = 26.sp, lineHeight = 31.sp, fontWeight = FontWeight.SemiBold, letterSpacing = (-0.5).sp)
-private val BodyStyle = TextStyle(fontSize = 15.sp, lineHeight = 21.sp)
-private val SceneText = TextStyle(fontSize = 14.sp, lineHeight = 19.sp)
-private val SceneSmall = TextStyle(fontSize = 12.sp, lineHeight = 16.sp)
+internal val TitleStyle = TextStyle(fontSize = 26.sp, lineHeight = 31.sp, fontWeight = FontWeight.SemiBold, letterSpacing = (-0.5).sp)
+internal val BodyStyle = TextStyle(fontSize = 15.sp, lineHeight = 21.sp)
+internal val SceneText = TextStyle(fontSize = 14.sp, lineHeight = 19.sp)
+internal val SceneSmall = TextStyle(fontSize = 12.sp, lineHeight = 16.sp)
 private val SceneTiny = TextStyle(fontSize = 10.sp, lineHeight = 12.sp)

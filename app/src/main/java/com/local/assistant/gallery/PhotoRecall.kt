@@ -28,7 +28,16 @@ class PhotoRecall(
 
     override suspend fun photosFor(text: String, max: Int, inConversation: Set<Long>): RecalledPhotos {
         if (!ready() || QueryText.isTrivial(text) || QueryText.isSmallTalk(text)) return RecalledPhotos.NONE
-        val best = index.bestPhotos(text.take(MAX_QUERY), COMPARED) ?: return RecalledPhotos.NONE
+        val looked = index.bestPhotos(text.take(MAX_QUERY), LOOKED_AT) ?: return RecalledPhotos.NONE
+        // Screenshots of this app are its own chats, already in memory search, and the words on
+        // them score close to any question put in words: on 15 Nov 2026 "Good afternoon! How's
+        // your day going?" and "generate code for an ice cream shop website in HTML" were sent
+        // and shown chat screenshots. So they're left out unless the question is about
+        // screenshots. Other screenshots stay: the push to prod certificate is one.
+        val own = if (QueryText.namesScreenshots(text)) emptySet() else withContext(Dispatchers.IO) {
+            library.screenshots(looked.map { it.mediaId }).filterValues { it }.keys
+        }
+        val best = looked.filter { it.mediaId !in own }.take(COMPARED)
         val top = best.firstOrNull()?.similarity ?: return RecalledPhotos.NONE
         // Shown more readily than sent ([SHOWN_FROM]): the answer may be in one the model wasn't
         // sent, or one the user recognises. As close to the best as search lists them.
@@ -59,14 +68,20 @@ class PhotoRecall(
         /** How many photos the best is measured against: the 10th is the [STANDS_OUT] reference. */
         const val COMPARED = 10
 
+        /** How many are looked through for [COMPARED] that aren't screenshots. */
+        const val LOOKED_AT = 40
+
         /**
          * The best photo's score from which the closest photos are shown under the reply (the
          * "Related photos" card): lower than what sends them to the model ([CLOSE]), so they show
          * more often. Raise it for fewer cards, lower it for more. On the phone's photos (30 Oct
          * 2026), at 0.75 the card showed for 11 of 16 questions the photos answer and 2 of 30
          * general ones; at 0.74 for 12 and 4; at 0.72 (the search's own floor) for 15 and 6.
+         * Lowered to 0.73 at the user's ask ("photocard in most but not all", 15 Nov 2026), with
+         * this app's screenshots left out: 13 of 16 and 4 of 33 general (0.75: 10 and 2; 0.74:
+         * 11 and 3; 0.72: 14 and 7). Not 0.72, the search's floor, where general ones climb fast.
          */
-        const val SHOWN_FROM = 0.75f
+        const val SHOWN_FROM = 0.73f
 
         /** A best photo this close to the question goes, however close the next ones are. */
         const val CLOSE = 0.80f

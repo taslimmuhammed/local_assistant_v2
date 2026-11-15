@@ -821,6 +821,23 @@ class AppContainer(context: Context) {
      * the order the first setup fetches them. As the app comes to the front, and as Android runs
      * the download job again (see BackgroundDownloads). True when there's one to pick up.
      */
+    /**
+     * Pause: in setup, on the download's notification, or Stop in Task Manager. Every download
+     * stops where it is, still wanted, with what has arrived kept, and nothing is picked up by
+     * itself (as the app comes to the front, or Android runs the job again) until one is started
+     * again, which carries on the rest too ([resumeDownloads]).
+     */
+    fun pauseDownloads() {
+        wantedDownloads.pause(true)
+        resuming?.cancel()
+        listOf(modelManager, galleryModelManager, embedderManager).forEach { it.pause() }
+        voicePacks.forEach { it.pause() }
+        Log.i("AppContainer", "Downloads paused")
+    }
+
+    /** Downloading is paused ([pauseDownloads]). */
+    val downloadsPaused: kotlinx.coroutines.flow.StateFlow<Boolean> get() = wantedDownloads.paused
+
     /** A download started and not finished, which [resumeDownloads] would pick up. */
     fun downloadsPending(): Boolean =
         listOf(modelManager, galleryModelManager).any { it.shouldResume() } || voicePacks.any { it.shouldResume() }
@@ -948,7 +965,7 @@ class AppContainer(context: Context) {
             if (kills >= com.local.assistant.assist.ProcessExits.WORTH_A_NOTICE && !settings.toldAboutPhoneKills && keepsModel) phoneKills.value = kills
         }
         fetchPhotoModelAfterFirstModel()
-        com.local.assistant.model.BackgroundDownloads.watch(appContext, appScope, downloads(), resume = ::resumeDownloads, pending = ::downloadsPending)
+        com.local.assistant.model.BackgroundDownloads.watch(appContext, appScope, downloads(), resume = ::resumeDownloads, pending = ::downloadsPending, pause = ::pauseDownloads)
         appScope.launch {
             dropOldEmbedder()
             // Memory search starts once the photo model is here (downloaded later, or already),

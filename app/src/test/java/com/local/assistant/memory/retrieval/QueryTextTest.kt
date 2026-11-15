@@ -22,9 +22,9 @@ class QueryTextTest {
 
     @Test
     fun greetingsAreSmallTalkHoweverLong() {
-        listOf("good morning Luna", "Hi, how are you doing today?", "hey luna what's up", "good evening everyone", "have a nice day", "gm", "namaste, kaise ho")
+        listOf("good morning Luna", "Hi, how are you doing today?", "hey luna what's up", "good evening everyone", "have a nice day", "gm", "namaste, kaise ho", "Good afternoon! How's your day going?", "how was your day?")
             .forEach { assertTrue("'$it' should be small talk", QueryText.isSmallTalk(it)) }
-        listOf("good morning, what's the weather today?", "how are the photos from Munnar", "good morning set an alarm for 6", "what is today", "")
+        listOf("good morning, what's the weather today?", "how are the photos from Munnar", "good morning set an alarm for 6", "what is today", "how was the trip to Goa?", "what's your name?", "")
             .forEach { assertFalse("'$it' should not be small talk", QueryText.isSmallTalk(it)) }
     }
 
@@ -75,6 +75,7 @@ class QueryTextTest {
             "cancel my 6 am alarm", "delete the reminder about the gym", "play some music",
             "navigate to the airport", "remember that my locker code is in the drawer", "forget my old address",
             "could you create a reminder for my passport renewal",
+            "remind me when I reach near Wipro gate", "remind me when I'm near Lulu mall", "remind me once we get home",
         )) {
             assertTrue(command, QueryText.isCommand(command))
         }
@@ -84,6 +85,7 @@ class QueryTextTest {
             "what time is my alarm set for?", "do you remember my wife's birthday?", "show me my driving licence",
             "how do I set an alarm on this phone?", "who should I call about the leak?", "what's on my shopping list?",
             "tell me a joke", "is the flashlight on?", "when is my next meeting?",
+            "remind me when I went to Goa last", "remind me when I reached Kochi that day",
         )) {
             assertFalse(question, QueryText.isCommand(question))
         }

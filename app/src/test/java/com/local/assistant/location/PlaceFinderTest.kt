@@ -39,14 +39,11 @@ class PlaceFinderTest {
     }
 
     @Test
-    fun `near DMart is the nearest few branches`() {
+    fun `near DMart is its nearest branch, one circle`() {
         val found = find("near DMart")
 
         assertEquals("DMart", found.place.name)
-        assertEquals(
-            listOf("Hoodi Main Road", "Ramamurthinagar Main Road", "Varthur Road", "Hennuru - Bagaluru Road", "Temple Trees Rd"),
-            found.place.spots.map { it.label },
-        )
+        assertEquals(listOf("Hoodi Main Road"), found.place.spots.map { it.label })
         assertTrue(found.place.spots.all { it.radiusM == PlaceSearch.MIN_RADIUS_M })
         assertEquals(760.0, found.nearestM!!, 10.0)
         assertTrue(found.canRing)
@@ -236,7 +233,7 @@ class PlaceFinderTest {
 
         assertEquals(listOf("watch"), location.asked)
         assertFalse(found.canRing)
-        assertEquals(5, found.place.spots.size)
+        assertEquals(1, found.place.spots.size)
     }
 
     @Test

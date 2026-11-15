@@ -79,7 +79,7 @@ class VoicePackInstaller(
      * A download to pick up again: started and not finished, by the app being killed or the
      * connection dropping, or all fetched but not yet unpacked.
      */
-    fun shouldResume(): Boolean = !isBusy && _installed.value == null &&
+    fun shouldResume(): Boolean = !isBusy && _installed.value == null && wanted?.paused?.value != true &&
         (wanted?.wanted(key) == true || archive.length() == pack.archiveBytes)
 
     /** Marks the voice as wanted without starting it: it follows the models (see AppContainer). */
@@ -92,11 +92,16 @@ class VoicePackInstaller(
         job?.join()
     }
 
+    /** Starts the download, or carries it on from what is here; it ends a pause ([WantedDownloads.paused]). */
     fun download() {
         if (isBusy || _installed.value != null) return
+        wanted?.pause(false)
         wanted?.want(key)
         _error.value = null
+        // One stopped a moment ago may still be writing its last read into the same archive.
+        val stopping = job
         job = scope.launch(Dispatchers.IO) {
+            stopping?.join()
             val self = coroutineContext[Job]
             try {
                 fetch(self)
@@ -108,6 +113,8 @@ class VoicePackInstaller(
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
+                // Stopped mid-read: the connection's own error then is no failure.
+                ensureActive()
                 wanted?.failed(key, e)
                 _error.value = e.message ?: "The voice did not download"
             } finally {
@@ -120,6 +127,11 @@ class VoicePackInstaller(
     /** Stops a download, keeping what has arrived for next time. */
     fun cancel() {
         wanted?.drop(key)
+        job?.cancel()
+    }
+
+    /** Stops a download where it is, still wanted, to carry on when downloading starts again. */
+    fun pause() {
         job?.cancel()
     }
 

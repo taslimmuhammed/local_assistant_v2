@@ -16,6 +16,7 @@ import android.util.Log
 import android.util.Size
 import androidx.core.content.ContextCompat
 import java.io.ByteArrayOutputStream
+import java.util.Locale
 import java.util.concurrent.ConcurrentHashMap
 
 /** One photo or video as MediaStore lists it; [durationMs] only for a video. */
@@ -253,6 +254,37 @@ class PhotoLibrary(private val context: Context) {
     }
 
     /**
+     * Which of [mediaIds] are screenshots, each with whether it is one of this app: in a
+     * "Screenshots" folder, or named "Screenshot…" as phones name them. Read from MediaStore,
+     * which has the folder and name; the index keeps neither.
+     */
+    fun screenshots(mediaIds: Collection<Long>): Map<Long, Boolean> {
+        if (mediaIds.isEmpty() || access() == Access.NONE) return emptyMap()
+        val found = HashMap<Long, Boolean>()
+        for (chunk in mediaIds.chunked(SQL_BATCH)) {
+            resolver.query(
+                MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
+                arrayOf(MediaStore.Images.Media._ID, MediaStore.Images.Media.BUCKET_DISPLAY_NAME, MediaStore.Images.Media.DISPLAY_NAME),
+                "${MediaStore.Images.Media._ID} IN (${chunk.joinToString(",")})",
+                null,
+                null,
+            )?.use { cursor ->
+                while (cursor.moveToNext()) {
+                    val folder = cursor.getString(1).orEmpty()
+                    val name = cursor.getString(2).orEmpty()
+                    if (folder.equals("Screenshots", ignoreCase = true) || name.startsWith("Screenshot", ignoreCase = true)) {
+                        found[cursor.getLong(0)] = screenshotOf(name, ownPackages)
+                    }
+                }
+            }
+        }
+        return found
+    }
+
+    /** This app under every name it has had, so screenshots of earlier installs count too. */
+    private val ownPackages: List<String> = (OWN_PACKAGES + context.packageName).distinct()
+
+    /**
      * When each of [mediaIds] was taken (milliseconds), from MediaStore: DATE_TAKEN, or DATE_ADDED
      * where that is missing (screenshots, downloads). Photos deleted since are left out.
      */
@@ -333,10 +365,30 @@ class PhotoLibrary(private val context: Context) {
             if (it.moveToFirst()) it.getInt(0) else 0
         } ?: 0
 
-    private companion object {
-        const val TAG = "PhotoLibrary"
-        const val JPEG_QUALITY = 90
-        const val SQL_BATCH = 500
+    companion object {
+        private const val TAG = "PhotoLibrary"
+        private const val JPEG_QUALITY = 90
+        private const val SQL_BATCH = 500
+
+        /** The app's package names: the first install's, the Play one, and its debug and demo builds. */
+        val OWN_PACKAGES = listOf("com.local.assistant", "com.taslim.localassistant", "com.taslim.localassistant.dev", "com.taslim.localassistant.demo")
+
+        /** Its name as Samsung and Pixel put it in a screenshot's file name. */
+        val OWN_LABELS = listOf("local assistant", "localassistant")
+    }
+}
+
+/**
+ * Whether a screenshot's file [name] says it was taken over one of [packages] (this app). Phones
+ * name the app in front: OnePlus, Oppo and Realme by the MD5 of its package
+ * ("Screenshot_2026-11-02-…_98c170de….jpg" is com.local.assistant), Xiaomi by the package itself,
+ * Samsung and Pixel by its label.
+ */
+internal fun screenshotOf(name: String, packages: List<String>): Boolean {
+    val lower = name.lowercase(Locale.ROOT)
+    if (PhotoLibrary.OWN_LABELS.any { it in lower.replace('_', ' ').replace('-', ' ') }) return true
+    return packages.any { pkg ->
+        pkg in lower || java.security.MessageDigest.getInstance("MD5").digest(pkg.toByteArray()).joinToString("") { "%02x".format(it) } in lower
     }
 }
 

@@ -56,9 +56,8 @@ data class PlaceFinding(
  * - a town ("when I reach Munnar"): the town list in the APK (`gallery/places`).
  * - a shop, a chain or an address: only a map knows those, so they're looked up online ([search],
  *   OpenStreetMap), sending the name and a box around the user's area (rounded, ~5 km) or the
- *   town they named, never the reminder or their exact location. A chain is its nearest few
- *   branches: "near DMart" means whichever one they pass. A town the APK's list lacks is the
- *   town alone, not also the taluk named after it.
+ *   town they named, never the reminder or their exact location. A chain is its nearest branch.
+ *   A town the APK's list lacks is the town alone, not also the taluk named after it.
  *
  * Anything it can't place comes back as a [ToolError] asking the user, never a guess.
  */
@@ -102,14 +101,13 @@ class PlaceFinder(
                 } else {
                     val area = words.area?.let { places?.town(it) }
                     val from = area?.let { GeoPoint(it.lat, it.lon) } ?: here.need()
-                    val found = lookUp(words.what, from)
-                    if (found.isEmpty()) {
+                    val spot = pick(lookUp(words.what, from), from) ?: run {
                         val near = area?.name ?: "the user"
                         throw ToolError(
                             "I couldn't find '${words.what}' near $near. Nothing was saved. Ask the user for its address or the area it's in (\"${words.what} in <area>\").",
                         )
                     }
-                    TaskPlace(words.what, pick(found, from).map { PlaceSpot(it.point.lat, it.point.lon, it.radiusM, it.label) })
+                    TaskPlace(words.what, listOf(PlaceSpot(spot.point.lat, spot.point.lon, spot.radiusM, spot.label)))
                 }
             }
         }
@@ -164,40 +162,31 @@ class PlaceFinder(
     }
 
     companion object {
-        /** The most spots one reminder watches: a chain's nearest few branches. */
-        const val MAX_SPOTS = 5
-
         /** Degrees either side of the user: a city (~33 km across), then a region (~110 km). */
         private val SPANS = listOf(0.15, 0.5)
-
-        /** Two results this close are the same shop mapped twice (its outline and its pin). */
-        private const val SAME_SPOT_M = 100.0
 
         private const val NO_FIX =
             "The phone couldn't tell where it is just now (location may be off). Nothing was saved. Ask the user to turn location on, or to say which area or town the place is in."
 
         /**
-         * The places to ring at, of what the search found ([from] is where "near" is measured
-         * from). Several shops with the best match's name are a chain: its nearest [MAX_SPOTS].
-         * Otherwise the best match alone ("Lulu" is LuLu Mall, not every building named after it).
-         * A town is one place: OpenStreetMap also has the taluk or municipality named after it,
+         * The one place to ring at, of what the search found ([from] is where "near" is measured
+         * from). Several shops with the best match's name are a chain: its nearest branch.
+         * Otherwise the best match ("Lulu" is LuLu Mall, not every building named after it). A
+         * town is one place: OpenStreetMap also has the taluk or municipality named after it,
          * whose middle can be far from the town (Thamarassery taluk's is 9 km into the hills), so
          * the town itself is where it rings.
+         *
+         * One circle, never several (the user, 16 Nov 2026: "near Wipro gate" drew three, two
+         * "Wipro Avenue" and a road, and "St. John's Hospital" two hospitals 15 km apart). Older
+         * reminders with several keep them, and the map's "Ring only here" cuts them to one.
          */
-        fun pick(found: List<FoundPlace>, from: GeoPoint): List<FoundPlace> {
-            val top = found.firstOrNull() ?: return emptyList()
+        fun pick(found: List<FoundPlace>, from: GeoPoint): FoundPlace? {
+            val top = found.firstOrNull() ?: return null
             val named = found.filter { key(it.name) == key(top.name) }
             if (top.kind != FoundPlace.Kind.SPOT) {
-                return listOf(named.firstOrNull { it.kind == FoundPlace.Kind.SETTLEMENT } ?: top)
+                return named.firstOrNull { it.kind == FoundPlace.Kind.SETTLEMENT } ?: top
             }
-            val chain = named.filter { it.kind == FoundPlace.Kind.SPOT }
-            if (chain.size < 2) return listOf(top)
-            val chosen = mutableListOf<FoundPlace>()
-            for (place in chain.sortedBy { it.point.metresTo(from) }) {
-                if (chosen.none { it.point.metresTo(place.point) < SAME_SPOT_M }) chosen += place
-                if (chosen.size == MAX_SPOTS) break
-            }
-            return chosen
+            return named.filter { it.kind == FoundPlace.Kind.SPOT }.minByOrNull { it.point.metresTo(from) } ?: top
         }
 
         /** Arriving in a town: the edge of a small one, further out for a city. */

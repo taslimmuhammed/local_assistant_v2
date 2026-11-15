@@ -8,6 +8,12 @@
     </queries>
 
     <application>
+        <!-- The first-run pages with made-up states, opened from adb; not in the launcher. -->
+        <activity
+            android:name="com.local.assistant.debug.SetupPreviewActivity"
+            android:exported="true"
+            android:theme="@style/Theme.LocalAssistant" />
+
         <!-- Its own task, so it stays on screen beside the app's own, and its own icon. -->
         <activity
             android:name="com.local.assistant.debug.NightEvalsActivity"

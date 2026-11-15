@@ -278,6 +278,8 @@
         <service
             android:name=".model.DownloadService"
             android:exported="false" />
+        <!-- The download notification's Pause. -->
+        <receiver android:name=".model.PauseDownloadsReceiver" android:exported="false" />
         <!-- Photos and faces indexed after the app is closed, while a big backlog is left. -->
         <service
             android:name=".gallery.IndexService"

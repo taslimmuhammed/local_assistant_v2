@@ -36,7 +36,9 @@ import com.local.assistant.ui.chat.ChatViewModel
 import com.local.assistant.ui.settings.SettingsScreen
 import com.local.assistant.ui.settings.SettingsSection
 import com.local.assistant.ui.setup.ModelScreen
-import com.local.assistant.ui.setup.PreparingScreen
+import com.local.assistant.ui.setup.PermissionTour
+import com.local.assistant.ui.setup.SetupNote
+import com.local.assistant.ui.setup.SetupScreen
 import com.local.assistant.ui.setup.WelcomeTour
 import com.local.assistant.ui.web.WebSearchScreen
 import com.local.assistant.ui.web.WebSearchViewModel
@@ -124,6 +126,7 @@ private fun AppRoot(
     var showWebSearchScreen by remember { mutableStateOf(false) }
     var showPhotosScreen by remember { mutableStateOf(false) }
     var showTour by remember { mutableStateOf(false) }
+    var showSetupScreen by remember { mutableStateOf(false) }
     var tourSeen by remember { mutableStateOf(container.settings.tourSeen) }
     var profileAsked by remember { mutableStateOf(container.settings.profileAsked) }
     var webSearchAsked by remember { mutableStateOf(container.settings.webSearchAsked || container.webSearch.enabled) }
@@ -134,6 +137,8 @@ private fun AppRoot(
     // that was already there at launch loads in the background, as before.
     var hadModel by rememberSaveable { mutableStateOf(installed != null) }
     var preparing by rememberSaveable { mutableStateOf(false) }
+    // A first setup stays on its page, the rest going on, until the user moves on to the chat.
+    var setupDone by rememberSaveable { mutableStateOf(installed != null) }
     LaunchedEffect(installed != null) {
         if (installed != null && !hadModel) {
             preparing = true
@@ -158,6 +163,7 @@ private fun AppRoot(
         showWebSearchScreen = false
         showPhotosScreen = false
         showTour = false
+        showSetupScreen = false
     }
     // The lock-screen notice: straight to Settings, where talking on the lock screen is turned on.
     LaunchedEffect(settingsToOpen) {
@@ -205,28 +211,33 @@ private fun AppRoot(
         return
     }
 
-    // Then photos, files and messages, each optional. Asked once, existing installs too.
+    // Then each permission, with why it's asked, each optional. Asked once, existing installs too.
     if (!accessAsked) {
-        com.local.assistant.ui.setup.AccessScreen(container = container, onDone = { accessAsked = true })
+        PermissionTour(container = container, onDone = { accessAsked = true })
         return
     }
 
-    if (preparing) {
-        PreparingScreen(container.llmService)
+    // With no model there is nothing to chat with, so setup is the whole app: the download, the
+    // first load, and the indexing after, until "Start chatting".
+    if (installed == null || preparing || !setupDone) {
+        SetupScreen(container = container, preparing = preparing, onStart = { setupDone = true })
         return
     }
 
-    // With no model there is nothing to chat with, so the model screen is the whole app.
-    if (installed == null || showModelScreen) {
-        if (installed != null) BackHandler { showModelScreen = false }
+    // Opened from the chat's setup note, while indexing or a download goes on.
+    if (showSetupScreen) {
+        BackHandler { showSetupScreen = false }
+        SetupScreen(container = container, preparing = false, onStart = {}, onBack = { showSetupScreen = false })
+        return
+    }
+
+    // The model page from Settings; with none installed, setup above is shown instead.
+    if (showModelScreen) {
+        BackHandler { showModelScreen = false }
         ModelScreen(
             modelManager = container.modelManager,
             llmService = container.llmService,
-            onBack = if (installed != null) {
-                { showModelScreen = false }
-            } else {
-                null
-            },
+            onBack = { showModelScreen = false },
             memorySearch = remember(container) { container.memorySearchControls() },
         )
         return
@@ -353,6 +364,7 @@ private fun AppRoot(
             notesFromChat = true
             showNotesScreen = true
         },
+        setupNote = { SetupNote(container, onOpen = { showSetupScreen = true }) },
     )
 }
 

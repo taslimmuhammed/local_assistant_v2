@@ -8,9 +8,11 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
@@ -113,14 +115,17 @@ class ModelManager(
      * connection dropping, or all fetched but not yet checked and moved into place.
      */
     fun shouldResume(): Boolean = !isBusy && _installed.value == null && model.downloadUrl != null &&
+        wanted?.paused?.value != true &&
         (wanted?.wanted(model.fileName) == true || partialBytes() == model.sizeBytes)
 
     fun clearError() {
         _error.value = null
     }
 
+    /** Starts the download, or carries it on from what is here; it ends a pause ([WantedDownloads.paused]). */
     fun download() {
         if (isBusy) return
+        wanted?.pause(false)
         wanted?.want(model.fileName)
         start(TransferKind.DOWNLOAD, sourceName = null) { onProgress ->
             downloadInto(destinationFile(), onProgress)
@@ -131,9 +136,18 @@ class ModelManager(
         copyInto(uri, destinationFile(), onProgress)
     }
 
+    /** Stops a transfer and forgets it was wanted; a download's bytes stay for next time. */
     fun cancel() {
         wanted?.drop(model.fileName)
         job?.cancel()
+    }
+
+    /**
+     * Stops a download where it is, still wanted, to carry on from there when downloading starts
+     * again (see [WantedDownloads.paused]). A copy from a file can't be carried on: it is cancelled.
+     */
+    fun pause() {
+        if (_transfer.value?.kind == TransferKind.IMPORT) cancel() else job?.cancel()
     }
 
     /** Returns once a transfer under way has ended, however it ended. */
@@ -153,21 +167,34 @@ class ModelManager(
     private fun start(kind: TransferKind, sourceName: String?, block: suspend ((Long, Long) -> Unit) -> Unit) {
         if (isBusy) return
         _error.value = null
+        // One stopped a moment ago may still be writing its last read into the same part.
+        val stopping = job
         job = scope.launch(Dispatchers.IO) {
+            stopping?.join()
             val throttle = ProgressThrottle { done, total, rate ->
                 _transfer.value = Transfer(kind, done, total, rate)
             }
             try {
                 _transfer.value = Transfer(kind, 0, model.sizeBytes)
-                block { done, total -> throttle.report(done, total) }
+                // The copy is a plain loop that never suspends: without this a Pause or Cancel
+                // let it run to the end, and the model was installed anyway (users, Nov 2026).
+                block { done, total ->
+                    ensureActive()
+                    throttle.report(done, total)
+                }
                 val file = destinationFile()
                 storedPath.set(file.absolutePath)
                 wanted?.drop(model.fileName)
                 onInstalled(kind, sourceName)
                 _installed.value = InstalledModel(file, file.length())
             } catch (e: CancellationException) {
+                // A copy cut short is no start on a download.
+                if (kind == TransferKind.IMPORT) partFile().delete()
                 throw e
             } catch (e: Exception) {
+                // Stopped mid-read: the connection's own error then is no failure.
+                if (!isActive && kind == TransferKind.IMPORT) partFile().delete()
+                ensureActive()
                 if (kind == TransferKind.DOWNLOAD) wanted?.failed(model.fileName, e)
                 _error.value = e.message ?: "Transfer failed"
             } finally {

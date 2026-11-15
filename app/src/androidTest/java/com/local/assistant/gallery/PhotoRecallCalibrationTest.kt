@@ -86,6 +86,11 @@ class PhotoRecallCalibrationTest {
         "when is my next meeting?",
         "what's the weather like today?",
         "recommend a good book on productivity",
+        // Got the "Related photos" card on the phone (15 Nov 2026): the phone's own screenshots.
+        "Good afternoon! How's your day going?",
+        "generate code for an ice cream shop website in HTML",
+        "do you have any latest messages",
+        "set alarm at 8 a.m.",
     )
 
     @Test
@@ -114,16 +119,32 @@ class PhotoRecallCalibrationTest {
                             val z = (best[0].similarity - mean) / sd
                             val tenth = all[9].similarity
                             val sends = PhotoRecall.passes(all.take(PhotoRecall.COMPARED).map { it.similarity })
-                            report("$set | ${if (sends) "SENDS" else "none "} | ${best.joinToString(" ") { "%.3f".format(it.similarity) }} | mean %.3f sd %.3f z %.1f | 1st-10th %.4f | $question".format(mean, sd, z, best[0].similarity - tenth))
+                            // Screenshots (* another app's, # this app's), and the scores without this app's.
+                            val shots = container.photoLibrary.screenshots(all.take(PhotoRecall.LOOKED_AT).map { it.mediaId })
+                            val kept = all.filter { shots[it.mediaId] != true }
+                            val keptSends = PhotoRecall.passes(kept.take(PhotoRecall.COMPARED).map { it.similarity })
+                            fun mark(hit: PhotoHit) = when (shots[hit.mediaId]) { true -> "#"; false -> "*"; null -> "" }
+                            val marked = best.joinToString(" ") { "%.3f%s".format(it.similarity, mark(it)) }
+                            val keptMarked = kept.take(3).joinToString(" ") { "%.3f%s".format(it.similarity, mark(it)) }
+                            val ownInTen = all.take(PhotoRecall.COMPARED).count { shots[it.mediaId] == true }
+                            report(
+                                ("$set | ${if (sends) "SENDS" else "none "} | $marked | mean %.3f sd %.3f z %.1f | 1st-10th %.4f | " +
+                                    "own in 10: $ownInTen | without own: ${if (keptSends) "SENDS" else "none "} $keptMarked, 1st-10th %.4f | $question")
+                                    .format(mean, sd, z, best[0].similarity - tenth, kept[0].similarity - kept[9].similarity),
+                            )
                             continue
                         }
-                        val helps = best.take(2).map { hit ->
+                        // What the app sends: this app's own screenshots left out (`PhotoRecall`).
+                        val own = container.photoLibrary.screenshots(all.take(PhotoRecall.LOOKED_AT).map { it.mediaId }).filterValues { it }.keys
+                        val sent = all.filter { it.mediaId !in own }
+                        val helps = sent.take(2).map { hit ->
                             val bytes = withContext(Dispatchers.IO) { container.photoLibrary.jpeg(hit.mediaId, 1024) } ?: return@map "?"
                             val file = File(context.cacheDir, "recall-calibration.jpg").apply { writeBytes(bytes) }.also(files::add)
                             ask("A photo from my gallery. Does it help answer this question: \"$question\"? Reply with only yes or no.", file.path)
                                 .trim().lowercase().takeWhile { it.isLetter() }
                         }
-                        report("$set | ${best.joinToString(" ") { "%.3f".format(it.similarity) }} | helps ${helps.joinToString("/")} | ${ms} ms | $question")
+                        val sends = PhotoRecall.passes(sent.take(PhotoRecall.COMPARED).map { it.similarity })
+                        report("$set | ${if (sends) "SENDS" else "none "} | ${sent.take(3).joinToString(" ") { "%.3f".format(it.similarity) }} | 1st-10th %.4f | helps ${helps.joinToString("/")} | ${ms} ms | $question".format(sent[0].similarity - sent[9].similarity))
                     }
                 }
             }

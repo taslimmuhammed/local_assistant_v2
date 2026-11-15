@@ -2,6 +2,9 @@ package com.local.assistant.model
 
 import android.content.Context
 import androidx.core.content.edit
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import java.io.IOException
 
 /**
@@ -20,11 +23,30 @@ class WantedDownloads(context: Context) {
 
     fun wanted(key: String): Boolean = prefs.getBoolean(key, false)
 
-    fun any(): Boolean = prefs.all.isNotEmpty()
+    fun any(): Boolean = prefs.all.keys.any { it != PAUSED }
+
+    private val _paused = MutableStateFlow(prefs.getBoolean(PAUSED, false))
+
+    /**
+     * The user paused downloading (a Pause button, the notification's, Stop in Task Manager):
+     * what was under way stays wanted, with what has arrived, but nothing is picked up by itself
+     * until a download is started again, which ends the pause.
+     */
+    val paused: StateFlow<Boolean> = _paused.asStateFlow()
+
+    fun pause(on: Boolean) {
+        if (_paused.value == on) return
+        prefs.edit { if (on) putBoolean(PAUSED, true) else remove(PAUSED) }
+        _paused.value = on
+    }
 
     /** Ended by [failure]: still wanted only if it was the connection, which comes back. */
     fun failed(key: String, failure: Throwable) {
         if (!failure.isConnection()) drop(key)
+    }
+
+    private companion object {
+        const val PAUSED = "paused"
     }
 }
 

@@ -67,6 +67,10 @@ object QueryText {
     private val COMMANDS = listOf(
         // Not "remind me what…": that asks to be told something.
         Regex("^remind me\\b(?!\\s+(what|who|when|where|why|how|which|whether|if|of|about)\\b)"),
+        // But "remind me when I reach Wipro gate" is a reminder: with memory searched for it, an
+        // earlier one's name came along ("Buy meat", 15 Nov 2026).
+        Regex("^remind me (when|once|as soon as|before) (i|we) (reach|get (to|near|home|there|back)|arrive|come (to|near|home|back)|enter|pass)\\b"),
+        Regex("^remind me (when|once|as soon as) (i'm|im|i am|we're|we are) (near|close to|at|in|around)\\b"),
         Regex("^wake me\\b"),
         Regex("^(set|start|create|add|make|schedule|put|book)\\b.{0,40}\\b($THINGS)\\b"),
         Regex("^(cancel|delete|remove|clear|dismiss|snooze|stop|mark|complete|finish|reschedule|postpone|move|change|update|edit|turn off)\\b.{0,40}\\b($THINGS)\\b"),
@@ -97,6 +101,11 @@ object QueryText {
         val words = words(text.lowercase(Locale.ROOT))
         return words.any { it in MESSAGE_WORDS } && words.none { it in PHOTO_WORDS || it in SCREENSHOT_WORDS }
     }
+
+    /** "The screenshot of my train ticket", "screen shot from yesterday": asking about screenshots. */
+    fun namesScreenshots(text: String): Boolean = SCREENSHOT_NAMED.containsMatchIn(text.lowercase(Locale.ROOT))
+
+    private val SCREENSHOT_NAMED = Regex("\\bscreen\\s?shots?\\b|\\bss\\b")
 
     /**
      * "Summarise this", "take a screenshot", "share this page with Anjali", "what's on my
@@ -206,6 +215,8 @@ object QueryText {
         "luna", "morning", "afternoon", "evening", "gm", "gn", "how", "are", "r", "u", "doing", "today",
         "what's", "whats", "up", "sup", "wassup", "there", "all", "everyone", "have", "day", "i'm", "im",
         "am", "well", "too", "and", "also", "dear", "buddy", "namaste", "namaskaram", "kaise", "ho", "haal",
+        // "Good afternoon! How's your day going?" got the photo card (15 Nov 2026).
+        "how's", "hows", "your", "going", "was",
     )
 
     /**

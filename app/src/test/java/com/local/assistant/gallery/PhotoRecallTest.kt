@@ -39,4 +39,19 @@ class PhotoRecallTest {
         assertFalse(PhotoRecall.passes(listOf(0.79f, 0.60f)))
         assertTrue(PhotoRecall.passes(listOf(0.81f)))
     }
+
+    @Test
+    fun `screenshots of this app are told by their file names`() {
+        val own = PhotoLibrary.OWN_PACKAGES
+        // OnePlus names the app in front by the MD5 of its package: com.local.assistant, then the .dev build.
+        assertTrue(screenshotOf("Screenshot_2026-11-02-05-56-49-76_98c170dee60c988df876be1c02e7328a.jpg", own))
+        assertTrue(screenshotOf("Screenshot_2026-11-15-10-00-00-12_d0d878c472c303f66a552db334217781.jpg", own))
+        // Xiaomi by the package, Samsung by the label.
+        assertTrue(screenshotOf("Screenshot_2026-11-04-10-00-00-123_com.taslim.localassistant.jpg", own))
+        assertTrue(screenshotOf("Screenshot_20261104_133908_Local Assistant.jpg", own))
+        // Instagram's, WhatsApp's, and one that names no app: kept.
+        assertFalse(screenshotOf("Screenshot_2026-10-30-22-02-18-95_1c337646f29875672b5a61192b9010f9.jpg", own))
+        assertFalse(screenshotOf("Screenshot_20261104_133908_WhatsApp.jpg", own))
+        assertFalse(screenshotOf("Screenshot_20261104-133908.jpg", own))
+    }
 }

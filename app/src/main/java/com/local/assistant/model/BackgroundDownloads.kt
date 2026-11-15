@@ -9,6 +9,7 @@ import android.app.job.JobInfo
 import android.app.job.JobParameters
 import android.app.job.JobScheduler
 import android.app.job.JobService
+import android.content.BroadcastReceiver
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
@@ -100,9 +101,14 @@ object BackgroundDownloads {
     internal var pending: () -> Boolean = { false }
         private set
 
+    /** Pauses every download: the notification's Pause, or Stop in Task Manager. */
+    internal var pause: () -> Unit = {}
+        private set
+
     /**
      * Watches [downloads] for as long as the app runs, starting the keeper as one begins;
-     * [resume] and [pending] are for the keeper run again after the app was killed.
+     * [resume] and [pending] are for the keeper run again after the app was killed, [pause] for
+     * the user stopping it from the notification or Task Manager.
      */
     fun watch(
         context: Context,
@@ -110,9 +116,11 @@ object BackgroundDownloads {
         downloads: Flow<DownloadState?>,
         resume: () -> Boolean,
         pending: () -> Boolean,
+        pause: () -> Unit,
     ) {
         this.resume = resume
         this.pending = pending
+        this.pause = pause
         val app = context.applicationContext
         scope.launch {
             var running = false
@@ -190,6 +198,18 @@ object BackgroundDownloads {
             .setOnlyAlertOnce(true)
             .setSilent(true)
             .setCategory(NotificationCompat.CATEGORY_PROGRESS)
+            .apply {
+                // Not while it's checked or unpacked: everything is here by then.
+                if (now != null && !now.finishing) {
+                    val pause = PendingIntent.getBroadcast(
+                        context,
+                        0,
+                        Intent(context, PauseDownloadsReceiver::class.java),
+                        PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+                    )
+                    addAction(0, "Pause", pause)
+                }
+            }
             .build()
     }
 
@@ -266,13 +286,25 @@ class DownloadJob : JobService() {
 
     /**
      * Stopped by the system: the network gone (run again once it's back, and the download, ended
-     * by its timeout or carrying on, picked up then), or the user stopping it in Task Manager.
+     * by its timeout or carrying on, picked up then), or the user stopping it in Task Manager,
+     * which pauses the downloads: they ran on in the app without the notification before.
      */
     override fun onStopJob(params: JobParameters): Boolean {
         BackgroundDownloads.keeping = false
         scope?.cancel()
         scope = null
-        return params.stopReason != JobParameters.STOP_REASON_USER && BackgroundDownloads.pending()
+        if (params.stopReason == JobParameters.STOP_REASON_USER) {
+            BackgroundDownloads.pause()
+            return false
+        }
+        return BackgroundDownloads.pending()
+    }
+}
+
+/** The download notification's Pause (see [BackgroundDownloads]); started again in the app. */
+class PauseDownloadsReceiver : BroadcastReceiver() {
+    override fun onReceive(context: Context, intent: Intent) {
+        BackgroundDownloads.pause()
     }
 }
 

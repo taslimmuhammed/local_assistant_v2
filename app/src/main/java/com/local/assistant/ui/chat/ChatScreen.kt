@@ -163,6 +163,8 @@ fun ChatScreen(
     onOpenNotes: () -> Unit = {},
     /** Opens one note on the Notes screen. */
     onOpenNote: (UserNoteEntity) -> Unit = {},
+    /** The first setup's note while it carries on behind the chat (indexing, a download); nothing when done. */
+    setupNote: @Composable () -> Unit = {},
 ) {
     val chats by viewModel.chats.collectAsStateWithLifecycle()
     val activeChatId by viewModel.activeChatId.collectAsStateWithLifecycle()
@@ -428,6 +430,7 @@ fun ChatScreen(
                 if (tidying) QuietBanner("Tidying up…")
                 if (memoryPaused) QuietBanner("Memory is paused: nothing new is remembered")
                 if (busyElsewhere) QuietBanner("Finishing an answer from the assistant…")
+                setupNote()
                 val phoneKills by viewModel.phoneKills.collectAsStateWithLifecycle()
                 phoneKills?.let { kills ->
                     PhoneKillsNotice(
