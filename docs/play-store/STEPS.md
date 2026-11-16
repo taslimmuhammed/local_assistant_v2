@@ -125,3 +125,21 @@ messages show. Use the Play-installed app (or the `.dev` one; its name on screen
 - Raise `versionCode` (and `versionName`) in `app/build.gradle.kts` each time.
 - Build with `./gradlew :app:bundleRelease`, tag the commit, push the tag, upload to the
   internal track, then promote it.
+- What's new in each version, to paste into the release: [release-notes.md](release-notes.md).
+
+### Updating while the 14-day closed test runs
+
+A new version doesn't restart the 14 days. What Play counts is testers: at least 12 opted in
+**continuously** for the 14 days before you apply, whatever version they have. Updates during the
+test help: the production application asks what you changed after testers' feedback.
+
+1. Test and release → Testing → **Closed testing** → the track your testers are on (not a new
+   track) → **Create new release**.
+2. Upload `app/build/outputs/bundle/release/app-release.aab`, paste the notes from
+   [release-notes.md](release-notes.md), Next, **Save and publish** (it goes to review, usually
+   hours to a day or two).
+3. Testers get it as an ordinary update from Play. They don't need to opt in again.
+
+Don't, while the 14 days run: pause or halt the track, remove testers or the testers' Google
+Group, or move testers to a new track. Each can break "continuously". Adding testers is fine (a
+new one counts from the day they opt in).

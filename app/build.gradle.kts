@@ -88,8 +88,8 @@ android {
         applicationId = "com.taslim.localassistant"
         minSdk = 26
         targetSdk = 36
-        versionCode = 5
-        versionName = "0.3.0"
+        versionCode = 8
+        versionName = "0.4.0"
 
         // LiteRT-LM ships native code for these two ABIs only; x86_64 is for emulators, which the
         // demo build leaves out (26 MB).
