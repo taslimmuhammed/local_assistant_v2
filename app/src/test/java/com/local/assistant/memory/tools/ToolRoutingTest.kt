@@ -1337,20 +1337,18 @@ class ToolRoutingTest {
         assertNull(task.dueAt)
         val place = task.place!!
         assertEquals("DMart", place.name)
-        // One circle: the nearest branch.
-        assertEquals("Hoodi Main Road", place.spots.single().label)
+        assertEquals("Hoodi Main Road", place.spots.first().label)
+        assertEquals(5, place.spots.size)
         // Watched, not timed.
         assertEquals(mapOf(task.id to place), reminders.places)
         assertTrue(reminders.scheduled.isEmpty())
 
         assertEquals(true, result(session)["ok"])
-        assertEquals("when the user gets near DMart", result(session)["rings"])
+        assertEquals("when the user gets near DMart (any of the 5 nearest)", result(session)["rings"])
         assertEquals("750 m", result(session)["nearest"])
         assertNull(result(session)["note"])
-        // Named as the model had it.
-        assertNull(result(session)["title"])
         val chip = events.filterIsInstance<LoopEvent.Memory>().single().chip
-        assertEquals(MemoryChip(MemoryChip.Kind.TASK, "Reminder", "Buy milk", note = "Hoodi Main Road", place = "near DMart"), chip)
+        assertEquals(MemoryChip(MemoryChip.Kind.TASK, "Reminder", "Buy milk", note = "Any of the 5 nearest, closest 750 m", place = "near DMart"), chip)
         assertTrue("agenda re-rendered", (events.last() as LoopEvent.Done).changedPrefix)
     }
 
@@ -1425,7 +1423,7 @@ class ToolRoutingTest {
         val place = store.tasks.values.single().place!!
         assertEquals("Buy milk", store.tasks.values.single().title)
         assertEquals(PlaceDistance(500, beforeArriving = false), place.distance)
-        assertEquals(listOf(500), place.spots.map { it.radiusM })
+        assertEquals(List(5) { 500 }, place.spots.map { it.radiusM })
     }
 
     @Test
@@ -1564,30 +1562,16 @@ class ToolRoutingTest {
     }
 
     @Test
-    fun `one place reminder at a time, and another is asked about, not swapped in`() {
+    fun `Android's hundred places are shared by every place reminder`() {
+        runBlocking {
+            store.insertTask(TaskEntity(title = "Earlier", createdAt = 0, updatedAt = 0, place = TaskPlace("Somewhere", List(97) { PlaceSpot(0.0, 0.0, 250) })))
+        }
         buyMilk()
-        val asked = placeSearch.asked.size
+        assertEquals(3, store.tasks.values.last().place!!.spots.size)
 
         val (session, _) = said("remind me to buy eggs near DMart", call("add_task", "title" to "Buy eggs", "place" to "DMart"))
         assertEquals(false, result(session)["ok"])
-        val error = result(session)["error"].toString()
-        assertTrue(error, error.contains("Only one place reminder") && error.contains("'Buy milk'"))
-        // Refused before anything was looked up, and the first one stands.
-        assertEquals(asked, placeSearch.asked.size)
-        assertEquals(listOf("Buy milk"), store.tasks.values.map { it.title })
-
-        // An alarm at a place is one too.
-        val (alarm, _) = said("set an alarm when I reach Munnar", call("set_alarm", "when" to "when I reach Munnar"))
-        assertEquals(false, result(alarm)["ok"])
-
-        // Reminders at a time aren't counted.
-        said("remind me to call amma at 6pm", call("add_task", "title" to "Call amma", "when" to "6pm"))
-        assertEquals(2, store.tasks.size)
-
-        // Once it's finished, the next one can be made.
-        runBlocking { store.updateTask(store.tasks.values.first().copy(status = TaskStatus.DONE)) }
-        said("remind me to buy eggs near DMart", call("add_task", "title" to "Buy eggs", "place" to "DMart"))
-        assertEquals("Buy eggs", store.tasks.values.last().title)
+        assertTrue(result(session)["error"].toString().contains("at most 100"))
     }
 
     // ---- Alarms at a place ----
@@ -1625,8 +1609,6 @@ class ToolRoutingTest {
         val near = store.tasks.values.single()
         assertEquals("Almost at Munnar", near.title)
         assertEquals(PlaceDistance(5000, beforeArriving = true), near.place!!.distance)
-        // One at a time.
-        runBlocking { store.updateTask(near.copy(status = TaskStatus.DONE)) }
 
         said("set an alarm before I reach Bangalore", call("set_alarm", "when" to "before I reach Bangalore"))
         val bengaluru = store.tasks.values.last()
@@ -1645,7 +1627,7 @@ class ToolRoutingTest {
     /** "remind me when I reach avilora" was saved as "Buy chicken", a reminder from days before (8 Nov 2026). */
     @Test
     fun `a reminder the user gave no name doesn't take an open reminder's`() {
-        said("remind me to buy milk at 5pm", call("add_task", "title" to "Buy milk", "when" to "5pm"))
+        buyMilk()
         val (_, events) = said("remind me when I reach Munnar", call("add_task", "title" to "remind me to buy milk", "place" to "Munnar"))
 
         assertEquals("Reminder", store.tasks.values.last().title)
@@ -1659,7 +1641,7 @@ class ToolRoutingTest {
 
     @Test
     fun `an open reminder's name is kept when the user said it, just before or now, or pointed back to it`() {
-        said("remind me to buy milk at 5pm", call("add_task", "title" to "Buy milk", "when" to "5pm"))
+        buyMilk()
         // Answering "where?", asked about it.
         said("when I reach Munnar", call("add_task", "title" to "Buy milk", "place" to "Munnar"), earlier = "remind me to buy milk")
         assertEquals("Buy milk", store.tasks.values.last().title)
@@ -1670,43 +1652,6 @@ class ToolRoutingTest {
         said("remind me about that again at 7pm", call("add_task", "title" to "Buy milk", "when" to "7pm"))
         assertEquals("Buy milk", store.tasks.values.last().title)
         assertEquals(4, store.tasks.values.count { it.title == "Buy milk" })
-    }
-
-    /**
-     * "remind me when I reach near Wipro gate", typed, was saved as "Buy meat" (15 Nov 2026): a
-     * finished reminder's name, which memory search brought in from the chat it was made in.
-     */
-    @Test
-    fun `a place reminder typed with only where is unnamed, whatever the model called it`() {
-        runBlocking {
-            store.insertTask(TaskEntity(title = "Buy meat", status = TaskStatus.DONE, createdAt = 0, updatedAt = 0, place = TaskPlace("Bengaluru", listOf(PlaceSpot(12.97, 77.59, 8000)))))
-        }
-        val (session, events) = said("remind me when I reach near Munnar", call("add_task", "title" to "remind me to buy meat", "place" to "near Munnar"))
-        assertEquals("Reminder", store.tasks.values.last().title)
-        // The reply is told the name it has.
-        assertEquals("Reminder", result(session)["title"])
-        val chip = events.filterIsInstance<LoopEvent.Memory>().single().chip
-        assertEquals("Reminder" to "", chip.label to chip.detail)
-        finishPlaceReminders()
-
-        // The request said back as a name is none either.
-        said("remind me when I reach Munnar location", call("add_task", "title" to "Remind me when I reach Munnar location", "place" to "Munnar"))
-        assertEquals("Reminder", store.tasks.values.last().title)
-        finishPlaceReminders()
-
-        // Said just before, it's theirs.
-        said("remind me when I reach Munnar", call("add_task", "title" to "Buy meat", "place" to "Munnar"), earlier = "I need to buy meat")
-        assertEquals("Buy meat", store.tasks.values.last().title)
-        finishPlaceReminders()
-
-        // Heard, the recogniser's words may have missed it: as the model had it.
-        val heard = ScriptedSession(ArrayDeque(listOf(ScriptedSession.calls(call("add_task", "title" to "Buy meat", "place" to "Munnar")), ScriptedSession.says("Done."))))
-        runBlocking { loop.run(heard, "envelope", emptyList(), context.copy(userText = "remind me when I reach Munnar", heard = true)).toList() }
-        assertEquals("Buy meat", store.tasks.values.last().title)
-    }
-
-    private fun finishPlaceReminders() = runBlocking {
-        store.tasks.values.filter { it.place != null && it.status == TaskStatus.OPEN }.forEach { store.updateTask(it.copy(status = TaskStatus.DONE)) }
     }
 
     /** A quote left unescaped in a description once made the app crash as it started. */

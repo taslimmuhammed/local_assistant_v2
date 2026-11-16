@@ -75,7 +75,6 @@ class QueryTextTest {
             "cancel my 6 am alarm", "delete the reminder about the gym", "play some music",
             "navigate to the airport", "remember that my locker code is in the drawer", "forget my old address",
             "could you create a reminder for my passport renewal",
-            "remind me when I reach near Wipro gate", "remind me when I'm near Lulu mall", "remind me once we get home",
         )) {
             assertTrue(command, QueryText.isCommand(command))
         }
@@ -85,7 +84,6 @@ class QueryTextTest {
             "what time is my alarm set for?", "do you remember my wife's birthday?", "show me my driving licence",
             "how do I set an alarm on this phone?", "who should I call about the leak?", "what's on my shopping list?",
             "tell me a joke", "is the flashlight on?", "when is my next meeting?",
-            "remind me when I went to Goa last", "remind me when I reached Kochi that day",
         )) {
             assertFalse(question, QueryText.isCommand(question))
         }

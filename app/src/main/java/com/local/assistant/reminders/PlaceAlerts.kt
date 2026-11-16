@@ -6,6 +6,9 @@ import com.local.assistant.memory.db.TaskStatus
 /** What decides a place reminder's ringing, apart from Android noticing the arrival. */
 object PlaceAlerts {
 
+    /** Android's own cap: an app may watch at most 100 geofences at once. */
+    const val MAX_FENCES = 100
+
     /**
      * After ringing, how long another arrival at the same reminder stays quiet: a fix wandering
      * back and forth across the edge of the circle, or a second branch on the same drive.

@@ -67,10 +67,6 @@ object QueryText {
     private val COMMANDS = listOf(
         // Not "remind me what…": that asks to be told something.
         Regex("^remind me\\b(?!\\s+(what|who|when|where|why|how|which|whether|if|of|about)\\b)"),
-        // But "remind me when I reach Wipro gate" is a reminder: with memory searched for it, an
-        // earlier one's name came along ("Buy meat", 15 Nov 2026).
-        Regex("^remind me (when|once|as soon as|before) (i|we) (reach|get (to|near|home|there|back)|arrive|come (to|near|home|back)|enter|pass)\\b"),
-        Regex("^remind me (when|once|as soon as) (i'm|im|i am|we're|we are) (near|close to|at|in|around)\\b"),
         Regex("^wake me\\b"),
         Regex("^(set|start|create|add|make|schedule|put|book)\\b.{0,40}\\b($THINGS)\\b"),
         Regex("^(cancel|delete|remove|clear|dismiss|snooze|stop|mark|complete|finish|reschedule|postpone|move|change|update|edit|turn off)\\b.{0,40}\\b($THINGS)\\b"),
